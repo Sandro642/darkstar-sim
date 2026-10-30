@@ -192,6 +192,14 @@ pub fn draw_card(ac: &Aircraft, mi: &Mission, r: Rect) {
         txt(&c.label, x + 44.0, y, 15.0, col);
         y += 19.0;
     }
+    if let Some(adv) = mi.advisory(ac) {
+        y += 2.0;
+        for line in wrap_text(&adv, 14.0, r.w - 24.0) {
+            txt(&line, x, y, 14.0, AMBER);
+            y += 17.0;
+        }
+        y += 4.0;
+    }
     if st.hold > 0.0 {
         let f = (mi.timer / st.hold) as f32;
         draw_rectangle_lines(x, y - 4.0, r.w - 24.0, 10.0, 1.0, DIM);
@@ -331,7 +339,8 @@ pub fn draw_help(r: Rect) {
         ("", WHITE),
         ("Raccourcis : T turbines  I entrees  Y stato  U scram  G train", WHITE),
         ("  B freins  S aerofreins  P AP  O A/THR  N NAV  L ILS  D/K dest.", WHITE),
-        ("  AP actif : fleches = consignes alt (ou assiette)/cap, R/F = vitesse", DIM),
+        ("  AP actif : fleches = consignes alt (ou assiette)/cap", DIM),
+        ("  R/F = manette (coupe l'A/THR) ; vitesse auto : MACH 2.7 / KEAS 300", DIM),
         ("X  reprise en main manuelle (fleches = manche, R/F = manette)", AMBER),
         ("4-9 onglets MOTEURS/THERMIQUE/ESSAIS/DOMAINE/OVERRIDE/CONSOLE", WHITE),
         ("CONSOLE (9 ou bouton MENU du PFD) : ENGINE/APU + FLT CNTRL", WHITE),

@@ -17,8 +17,8 @@ pub struct Step {
 pub const STEPS: &[Step] = &[
     Step { title: "TP-01  PRÉ-VOL / DÉMARRAGE", text: "Entrées d'air turbine ouvertes. Démarrer les turbines (T). Attendre N2 62% (IDLE) et EGT stabilisée.", hold: 0.0 },
     Step { title: "TP-02  DÉCOLLAGE KPMD", text: "Relâcher les freins (B). Plein gaz PC (R). Rotation vers 170 KEAS, assiette 10°, train rentré avant 270 KEAS. Instruction DECOLLAGE 15000 pour le décollage automatique.", hold: 0.0 },
-    Step { title: "TP-03  MONTÉE SUBSONIQUE", text: "Monter au FL350 et accélérer à M0.90. Stabiliser 10 s.", hold: 10.0 },
-    Step { title: "TP-04  PASSAGE SUPERSONIQUE", text: "PC plein. Accélérer à M2.0 au-dessus du FL450 (montée en 'zoom' déconseillée : garder q < 100 kPa).", hold: 3.0 },
+    Step { title: "TP-03  MONTÉE SUBSONIQUE", text: "Monter au FL350 et accélérer à M0.90. Stabiliser 10 s. (Après DECOLLAGE, l'A/THR tient 350 KEAS : suffisant ici.)", hold: 10.0 },
+    Step { title: "TP-04  PASSAGE SUPERSONIQUE", text: "PC plein : pousser la manette à 100 % (R, l'A/THR se coupe) ou instruction MACH 2.7. Accélérer à M2.0 au-dessus du FL450, puis continuer vers M2.5 pour le stato (garder q < 100 kPa).", hold: 3.0 },
     Step { title: "TP-05  ALLUMAGE STATORÉACTEUR", text: "Armer le stato (Y) à M>=2.0. Allumer (Y) à M>=2.5, au-dessus du FL400, q entre 15 et 95 kPa. Mode DUAL.", hold: 0.0 },
     Step { title: "TP-06  TRANSFERT DE POUSSÉE", text: "Couper les turbines (T) puis fermer les entrées d'air turbine (I) AVANT M3.2 (sinon coupure FADEC par surchauffe, ou destruction sous override).", hold: 0.0 },
     Step { title: "TP-07  ACCÉLÉRATION STATO", text: "Accélérer à M4.5 au-dessus de 80 000 ft. Surveiller q et la température de peau.", hold: 5.0 },
@@ -96,6 +96,27 @@ impl Mission {
             ],
             _ => vec![],
         }
+    }
+
+    /// Conseil contextuel : signale une configuration qui empêche d'atteindre l'objectif du point d'essai.
+    pub fn advisory(&self, ac: &Aircraft) -> Option<String> {
+        if !(2..=4).contains(&self.idx) {
+            return None;
+        }
+        if ac.ap.at_on {
+            if let Some(k) = ac.ap.spd_keas {
+                if self.idx >= 3 {
+                    let rho = crate::atmosphere::isa(ac.alt);
+                    let m = k * crate::geo::KT / (rho.rho / crate::atmosphere::RHO0).sqrt() / rho.a;
+                    return Some(format!("A/THR TIENT {k:.0} KEAS (= M{m:.2} ICI) : R pour manette manuelle, ou MACH 2.7"));
+                }
+            } else if ac.ap.mach_tgt < 2.5 && self.idx >= 3 {
+                return Some(format!("A/THR TIENT M{:.2} : instruction MACH 2.7 ou R pour manette manuelle", ac.ap.mach_tgt));
+            }
+        } else if self.idx >= 3 && ac.throttle < 0.95 && ac.d.mach < 2.5 {
+            return Some(format!("MANETTE {:.0}% : PC plein requis (R jusqu'à 100 %)", ac.throttle * 100.0));
+        }
+        None
     }
 
     /// Avance la carte ; renvoie un message quand un point d'essai est validé.

@@ -1396,3 +1396,63 @@ mod tests {
         assert!(!ac.eng.fadec_fault[0]);
     }
 }
+
+#[cfg(test)]
+mod sweep {
+    use super::*;
+
+    #[test]
+    #[ignore]
+    fn turbine_max_mach() {
+        for alt_ft in [35_000.0, 45_000.0, 50_000.0, 55_000.0, 60_000.0, 65_000.0] {
+            for thr in [0.8, 1.0] {
+                let mut ac = Aircraft::new_on_runway(0);
+                ac.on_ground = false;
+                ac.gear_down = false;
+                ac.gear_pos = 0.0;
+                ac.brakes = false;
+                ac.alt = alt_ft * FT;
+                ac.tas = 1.6 * crate::atmosphere::isa(ac.alt).a;
+                ac.set_turbines(TurbState::Running, 0.9);
+                ac.ap.on = true;
+                ac.ap.alt_tgt_ft = alt_ft;
+                ac.ap.hdg_tgt = ac.hdg_deg();
+                ac.throttle = thr;
+                for _ in 0..(600 * 60) {
+                    ac.step(1.0 / 60.0, 0.0, 0.0);
+                }
+                println!("FL{:03.0} thr {:.0}% -> M{:.2}  T={:.0}kN D={:.0}kN a={:.1} egt={:.0} skin={:.0} lim={:.2} q={:.0}k ev={:?}",
+                    alt_ft / 100.0, thr * 100.0, ac.d.mach, ac.d.thrust / 1e3, ac.d.drag / 1e3, ac.d.alpha.to_degrees(), ac.eng.egt, ac.skin_temp - 273.15, ac.fadec_limit, ac.d.q / 1e3, ac.eng.turb);
+            }
+        }
+    }
+
+    /// Procédure carte d'essais : décollage auto puis PC plein jusqu'à l'allumage stato.
+    #[test]
+    fn autotakeoff_then_climb() {
+        let mut ac = Aircraft::new_on_runway(0);
+        ac.set_turbines(TurbState::Running, 0.62);
+        ac.engage_takeoff(15_000.0).unwrap();
+        let dt = 1.0 / 60.0;
+        for k in 0..(1500 * 60) {
+            let c = ac.autoflight().unwrap_or((0.0, 0.0));
+            ac.step(dt, c.0, c.1);
+            if k == 120 * 60 {
+                ac.ap.alt_tgt_ft = 50_000.0;
+            }
+            // TP-04 : manette poussée à 100 % (l'A/THR se coupe), comme indiqué par la carte d'essais
+            if k == 300 * 60 {
+                ac.ap.at_on = false;
+                ac.throttle = 1.0;
+            }
+            if ac.d.mach > 2.05 && ac.eng.ram == RamState::Off {
+                ac.cmd_ram();
+            }
+            if ac.eng.ram == RamState::Armed && ac.ram_ignition_check().is_ok() {
+                ac.cmd_ram();
+            }
+        }
+        println!("A/THR {} -> M{:.2} FL{:.0} manette {:.0}% stato {:?}", ac.ap.at_on, ac.d.mach, ac.alt / FT / 100.0, ac.throttle * 100.0, ac.eng.ram);
+        assert_eq!(ac.eng.ram, RamState::Lit, "le stato doit pouvoir s'allumer en suivant la procédure");
+    }
+}

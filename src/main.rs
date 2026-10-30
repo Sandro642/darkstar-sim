@@ -472,21 +472,19 @@ impl Game {
             }
         }
 
-        // Manette
-        if ac.ap.at_on {
-            let k = if shift { 1.0 } else { 0.1 };
-            let dir = if is_key_pressed(KeyCode::R) { 1.0 } else if is_key_pressed(KeyCode::F) { -1.0 } else { 0.0 };
-            if dir != 0.0 {
-                match ac.ap.spd_keas.as_mut() {
-                    Some(v) => *v = (*v + dir * k * 100.0).clamp(140.0, 800.0),
-                    None => ac.ap.mach_tgt = (ac.ap.mach_tgt + dir * k).clamp(0.3, 12.0),
-                }
-            }
-        } else {
-            if is_key_down(KeyCode::R) {
+        let mut msgs: Vec<(Level, String)> = Vec::new();
+        // Manette : R/F agissent toujours sur la manette ; l'A/THR se désengage (consignes via MACH / KEAS)
+        let thr_up = is_key_down(KeyCode::R);
+        let thr_dn = is_key_down(KeyCode::F);
+        if (thr_up || thr_dn) && ac.ap.at_on && ac.autoland.is_none() {
+            ac.ap.at_on = false;
+            msgs.push((Level::Caution, "A/THR OFF — MANETTE MANUELLE (consigne : instruction MACH ou KEAS)".into()));
+        }
+        if !ac.ap.at_on || ac.autoland.is_none() {
+            if thr_up {
                 ac.throttle = (ac.throttle + 0.35 * real_dt).min(ac.thr_max());
             }
-            if is_key_down(KeyCode::F) {
+            if thr_dn {
                 ac.throttle = (ac.throttle - 0.35 * real_dt).max(0.0);
             }
         }
@@ -512,7 +510,6 @@ impl Game {
         if is_key_pressed(KeyCode::S) {
             ac.speedbrake = !ac.speedbrake;
         }
-        let mut msgs: Vec<(Level, String)> = Vec::new();
         if is_key_pressed(KeyCode::P) {
             if ac.on_ground {
                 msgs.push((Level::Caution, "AP INDISPONIBLE AU SOL".into()));
