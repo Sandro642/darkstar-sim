@@ -1,0 +1,474 @@
+//! PFD au format Darkstar : fenêtre de vision synthétique centrale, échelles sur fond noir.
+
+use crate::aircraft::*;
+use crate::airports::AIRPORTS;
+use crate::geo::*;
+use crate::svs::{dir, View};
+use crate::ui::*;
+use macroquad::prelude::*;
+
+pub struct PfdInfo<'a> {
+    pub alerts: &'a [(Level, String)],
+    pub ra: Option<&'a str>,
+    pub link_name: &'a str,
+    pub latency_ms: f64,
+    pub dest: usize,
+    pub warp: f64,
+    pub time: f64,
+}
+
+const LINE: Color = Color::new(0.92, 0.94, 0.95, 1.0);
+const LABEL: Color = Color::new(0.85, 0.88, 0.9, 1.0);
+
+/// Fenêtre de la vision synthétique dans l'écran PFD.
+pub fn svs_rect(r: Rect) -> Rect {
+    Rect::new((r.x + r.w * 0.15).round(), (r.y + r.h * 0.085).round(), (r.w * 0.70).round(), (r.h * 0.80).round())
+}
+
+pub fn draw_pfd(ac: &Aircraft, v: &View, r: Rect, info: &PfdInfo) {
+    let s = v.rect;
+    draw_rectangle_lines(r.x + 3.0, r.y + 3.0, r.w - 6.0, r.h - 6.0, 2.0, Color::new(0.35, 0.38, 0.42, 1.0));
+    draw_rectangle_lines(s.x - 1.0, s.y - 1.0, s.w + 2.0, s.h + 2.0, 1.0, Color::new(0.5, 0.5, 0.5, 1.0));
+
+    draw_svs_overlay(ac, v, info);
+    draw_speed(ac, r, s);
+    draw_g_bracket(ac.d.nz, r, s);
+    draw_altitude(ac, r, s);
+    draw_vsi(ac.d.vs, r, s);
+    draw_heading(ac, s, info);
+    draw_header(ac, r, s, info);
+
+    if ac.crashed.is_some() {
+        let (cx, cy) = (s.x + s.w / 2.0, s.y + s.h / 2.0);
+        draw_rectangle(s.x, s.y, s.w, s.h, Color::new(0.0, 0.0, 0.0, 0.75));
+        txt_c("LIAISON PERDUE - NO SIGNAL", cx, cy - 20.0, 30.0, RED);
+        txt_c(ac.crashed.as_deref().unwrap_or(""), cx, cy + 14.0, 18.0, AMBER);
+        txt_c("ENTREE : nouvel essai", cx, cy + 46.0, 18.0, WHITE);
+    }
+}
+
+fn draw_svs_overlay(ac: &Aircraft, v: &View, info: &PfdInfo) {
+    let s = v.rect;
+    let d = &ac.d;
+    scissor(Some(s));
+    let hr = Vec3::new(ac.psi.cos() as f32, 0.0, ac.psi.sin() as f32);
+    let big = 100_000.0f32;
+    let (cx, cy) = (s.x + s.w / 2.0, s.y + s.h / 2.0);
+
+    // Ligne d'horizon (assiette nulle)
+    let h0 = dir(ac.psi, 0.0) * big;
+    if let (Some(a), Some(b)) = (v.project(h0 - hr * big * 3.0), v.project(h0 + hr * big * 3.0)) {
+        draw_line(a.x, a.y, b.x, b.y, 2.0, LINE);
+    }
+
+    // Échelle de tangage « 10 •  • 10 »
+    for p in (-90i32..=90).step_by(5) {
+        if p == 0 {
+            continue;
+        }
+        let pr = (p as f64).to_radians();
+        if (pr - ac.theta).abs() > 0.4 {
+            continue;
+        }
+        let c = dir(ac.psi, pr) * big;
+        let at = |k: f32| v.project(c + hr * big * k);
+        if p % 10 == 0 {
+            for side in [-1.0f32, 1.0] {
+                if let Some(dot) = at(side * 0.022) {
+                    draw_circle(dot.x, dot.y, 2.5, LINE);
+                }
+                if let Some(l) = at(side * 0.05) {
+                    txt_c(&format!("{}", p.abs()), l.x, l.y + 6.0, 20.0, LINE);
+                }
+                if p < 0 {
+                    // Tirets inclinés vers l'extérieur pour les assiettes négatives
+                    for k in 0..3 {
+                        let k0 = 0.075 + k as f32 * 0.018;
+                        if let (Some(a), Some(b)) = (at(side * k0), at(side * (k0 + 0.010))) {
+                            let drop = 3.0 + k as f32 * 3.0;
+                            draw_line(a.x, a.y + drop, b.x, b.y + drop + 3.0, 2.0, LINE);
+                        }
+                    }
+                }
+            }
+        } else {
+            for side in [-1.0f32, 1.0] {
+                if let Some(dot) = at(side * 0.022) {
+                    draw_circle(dot.x, dot.y, 1.6, Color::new(1.0, 1.0, 1.0, 0.7));
+                }
+            }
+        }
+    }
+
+    // Marqueur de trajectoire : cercle, ailes et dérive
+    let fpv = if !ac.on_ground && ac.tas > 20.0 { v.project_dir(dir(ac.psi, ac.gamma)) } else { v.project_dir(dir(ac.psi, ac.theta)) };
+    if let Some(f) = fpv {
+        let (sn, co) = (ac.phi.sin() as f32, ac.phi.cos() as f32);
+        let rot = |x: f32, y: f32| vec2(f.x + x * co - y * sn, f.y + x * sn + y * co);
+        for (w, col) in [(4.0, Color::new(0.0, 0.0, 0.0, 0.6)), (2.0, LINE)] {
+            draw_circle_lines(f.x, f.y, 10.0, w, col);
+            for (x0, x1) in [(-46.0, -10.0), (10.0, 46.0)] {
+                let (a, b) = (rot(x0, 0.0), rot(x1, 0.0));
+                draw_line(a.x, a.y, b.x, b.y, w, col);
+            }
+            let (a, b) = (rot(0.0, -10.0), rot(0.0, -22.0));
+            draw_line(a.x, a.y, b.x, b.y, w, col);
+        }
+        // Chevron d'énergie
+        let acc = (d.accel / 9.81 * 60.0).clamp(-40.0, 40.0) as f32;
+        let p = rot(-56.0, -acc);
+        draw_line(p.x - 6.0, p.y - 4.0, p.x, p.y, 2.0, GREEN_S);
+        draw_line(p.x - 6.0, p.y + 4.0, p.x, p.y, 2.0, GREEN_S);
+    }
+    // Axe de visée
+    draw_line(cx - 6.0, cy, cx + 6.0, cy, 1.5, Color::new(1.0, 1.0, 1.0, 0.5));
+    draw_line(cx, cy - 6.0, cx, cy + 6.0, 1.5, Color::new(1.0, 1.0, 1.0, 0.5));
+
+    // Inclinaison : graduations en bas, triangle mobile
+    {
+        let rad = s.h * 0.43;
+        for a in [-45.0f32, -30.0, -20.0, -10.0, 0.0, 10.0, 20.0, 30.0, 45.0] {
+            let t = (90.0 + a).to_radians();
+            let l = if a == 0.0 || a.abs() == 30.0 { 10.0 } else { 6.0 };
+            let (p0, p1) = (vec2(cx + rad * t.cos(), cy + rad * t.sin()), vec2(cx + (rad + l) * t.cos(), cy + (rad + l) * t.sin()));
+            draw_line(p0.x, p0.y, p1.x, p1.y, 1.5, Color::new(1.0, 1.0, 1.0, 0.7));
+        }
+        let t = (90.0 - ac.phi.to_degrees() as f32).to_radians();
+        let tip = vec2(cx + (rad - 2.0) * t.cos(), cy + (rad - 2.0) * t.sin());
+        let n = vec2(t.cos(), t.sin());
+        let tg = vec2(-n.y, n.x);
+        let bc = if ac.phi.abs() > 35f64.to_radians() { AMBER } else { LINE };
+        draw_triangle(tip, tip - n * 13.0 + tg * 7.0, tip - n * 13.0 - tg * 7.0, bc);
+    }
+
+    // ILS
+    if let Some((ai, tla, tlo, thdg, tel)) = ac.approach {
+        let a = &AIRPORTS[ai];
+        let along = along_before(tla, tlo, thdg, ac.lat, ac.lon);
+        let cross = cross_track(tla, tlo, thdg, ac.lat, ac.lon);
+        if along > -a.len && along < 60_000.0 && !ac.on_ground {
+            let loc_dev = (cross / (along + a.len)).atan().to_degrees();
+            let gs_dev = ((ac.alt - tel) / (along + 300.0).max(50.0)).atan().to_degrees() - 3.0;
+            let ly = s.y + s.h - 50.0;
+            for k in [-2.0f32, -1.0, 1.0, 2.0] {
+                draw_circle_lines(cx + k * 36.0, ly, 4.0, 1.5, LINE);
+            }
+            draw_poly(cx + (-loc_dev as f32 / 1.25 * 36.0).clamp(-80.0, 80.0), ly, 4, 8.0, 0.0, MAGENTA_S);
+            let gx = s.x + s.w - 24.0;
+            for k in [-2.0f32, -1.0, 1.0, 2.0] {
+                draw_circle_lines(gx, cy + k * 36.0, 4.0, 1.5, LINE);
+            }
+            draw_poly(gx, cy + (gs_dev as f32 / 0.35 * 36.0).clamp(-80.0, 80.0), 4, 8.0, 0.0, MAGENTA_S);
+            let num = crate::airports::Airport::runway_number(thdg);
+            txt(&format!("ILS {:02} {}  {:.1} NM", num, a.icao, along / NM), s.x + 10.0, s.y + s.h - 28.0, 15.0, MAGENTA_S);
+        }
+    }
+
+    // Radioaltimètre
+    if d.agl < 2500.0 * FT && !ac.on_ground {
+        let ra = d.agl / FT;
+        let c = if ra < 200.0 { AMBER } else { GREEN_S };
+        let s_ra = if ra < 50.0 { format!("{:.0}", ra) } else { format!("{:.0}", (ra / 10.0).round() * 10.0) };
+        txt_c(&s_ra, cx, cy + 80.0, 28.0, c);
+    }
+
+    // Mode TBCC, liaison, enregistrement
+    let m = ac.mode_name();
+    let mc = match m {
+        "SCRAMJET" => MAGENTA_S,
+        "RAMJET" | "DUAL TURB+RAM" => CYAN_S,
+        "TURBINE" => WHITE,
+        _ => AMBER,
+    };
+    txt_r(&format!("TBCC {m}"), s.x + s.w - 8.0, s.y + 18.0, 15.0, mc);
+    let lc = if info.latency_ms > 200.0 { AMBER } else { GREEN_S };
+    txt_r(&format!("LINK {} {:.0}ms  x{:.0}", info.link_name, info.latency_ms, info.warp), s.x + s.w - 8.0, s.y + 34.0, 13.0, lc);
+    if info.time.fract() < 0.5 {
+        draw_circle(s.x + 12.0, s.y + 13.0, 4.0, RED);
+    }
+    txt("REC  FTV-01", s.x + 20.0, s.y + 18.0, 13.0, Color::new(0.9, 0.9, 0.9, 0.8));
+
+    // Alertes
+    if let Some(ra) = info.ra {
+        if (info.time * 3.0).fract() < 0.6 {
+            draw_rectangle(cx - 150.0, cy - 110.0, 300.0, 34.0, Color::new(0.4, 0.0, 0.0, 0.85));
+            txt_c(&format!("TCAS RA : {ra}"), cx, cy - 86.0, 22.0, RED);
+        }
+    }
+    let mut yy = cy + 120.0;
+    for (_, msg) in info.alerts.iter().filter(|(l, _)| *l == Level::Warning).take(3) {
+        if (info.time * 2.0).fract() < 0.7 {
+            let w = txt_w(msg, 22.0) + 24.0;
+            draw_rectangle(cx - w / 2.0, yy - 22.0, w, 30.0, Color::new(0.0, 0.0, 0.0, 0.7));
+            txt_c(msg, cx, yy, 22.0, RED);
+        }
+        yy += 32.0;
+    }
+    scissor(None);
+}
+
+fn draw_header(ac: &Aircraft, r: Rect, s: Rect, info: &PfdInfo) {
+    let y = r.y + 8.0;
+    let gs = ac.tas * ac.gamma.cos() / KT;
+    let x0 = r.x + r.w * 0.06;
+    txt_r("GS", x0, y + 13.0, 14.0, LABEL);
+    txt(&format!("{gs:.0}"), x0 + 8.0, y + 13.0, 16.0, WHITE);
+    txt_r("M", x0, y + 29.0, 14.0, LABEL);
+    let m = if ac.d.mach < 1.0 { format!("{:.2}", ac.d.mach).trim_start_matches('0').to_string() } else { format!("{:.2}", ac.d.mach) };
+    let mc = if ac.d.mach >= 5.0 { MAGENTA_S } else if ac.d.mach >= 1.0 { CYAN_S } else { WHITE };
+    txt(&m, x0 + 8.0, y + 29.0, 16.0, mc);
+    txt("TRUE AIRSPEED", s.x + 12.0, y + 22.0, 14.0, LABEL);
+    txt(&format!("{:.0}", ac.tas / KT), s.x + 128.0, y + 23.0, 22.0, WHITE);
+    txt("Knots", s.x + 200.0, y + 22.0, 14.0, LABEL);
+
+    // Modes pilote automatique
+    let mut parts: Vec<(String, Color)> = Vec::new();
+    if ac.ap.at_on {
+        parts.push((
+            match ac.ap.spd_keas {
+                Some(k) => format!("A/THR {k:.0}KEAS"),
+                None => format!("A/THR M{:.2}", ac.ap.mach_tgt),
+            },
+            GREEN_S,
+        ));
+    }
+    if ac.ap.on {
+        parts.push((
+            match ac.ap.lat {
+                LatMode::Hdg => format!("HDG {:03.0}", ac.ap.hdg_tgt),
+                LatMode::Nav => format!("NAV {}", AIRPORTS[info.dest].icao),
+                LatMode::Loc => "LOC".into(),
+            },
+            GREEN_S,
+        ));
+        parts.push((
+            match ac.ap.vert {
+                VertMode::Alt => "ALT".into(),
+                VertMode::Gs => "G/S".into(),
+                VertMode::Flare => "FLARE".into(),
+            },
+            GREEN_S,
+        ));
+        parts.push(("AP1".into(), GREEN_S));
+    } else {
+        parts.push(("AP OFF".into(), DIM));
+    }
+    if ac.autoland.is_some() {
+        parts.push(("AUTOLAND".into(), MAGENTA_S));
+    }
+    if ac.autotakeoff.is_some() {
+        parts.push(("AUTO T/O".into(), MAGENTA_S));
+    }
+    let mut x = s.x + 290.0;
+    for (t, c) in parts {
+        if x + txt_w(&t, 14.0) > s.x + s.w - 10.0 {
+            break;
+        }
+        txt(&t, x, y + 22.0, 14.0, c);
+        x += txt_w(&t, 14.0) + 14.0;
+    }
+    // Consigne d'altitude
+    if ac.ap.on && ac.ap.vert == VertMode::Alt {
+        txt(&format!("{:.0}", ac.ap.alt_tgt_ft), s.x + s.w + 8.0, y + 22.0, 18.0, MAGENTA_S);
+    }
+}
+
+fn draw_speed(ac: &Aircraft, r: Rect, s: Rect) {
+    let d = &ac.d;
+    let lx = s.x - 18.0;
+    let cy = s.y + s.h / 2.0;
+    let ppk = s.h / 150.0;
+    let spd = d.keas as f32;
+    scissor(Some(Rect::new(r.x, s.y - 4.0, s.x - r.x, s.h + 8.0)));
+    draw_line(lx, s.y, lx, s.y + s.h, 1.5, LINE);
+    let base = (spd / 10.0).floor() as i32 * 10;
+    for k in -9..=9 {
+        let v = base + k * 10;
+        if v < 0 {
+            continue;
+        }
+        let y = cy - (v as f32 - spd) * ppk;
+        let l = if v % 20 == 0 { 9.0 } else { 5.0 };
+        draw_line(lx - l, y, lx, y, 1.5, LINE);
+        if v % 20 == 0 {
+            txt_r(&format!("{:03}", v), lx - 13.0, y + 5.0, 15.0, LABEL);
+        }
+    }
+    // Bandes : limite q (rouge), VLE train (ambre), VR
+    let q_lim = ((2.0 * Q_LIMIT / 1.225).sqrt() / KT) as f32;
+    let yq = cy - (q_lim - spd) * ppk;
+    draw_rectangle(lx, yq - 600.0, 4.0, 600.0, RED);
+    if ac.gear_pos > 0.01 {
+        let yg = cy - (GEAR_VLE as f32 - spd) * ppk;
+        draw_rectangle(lx + 4.0, yg - 600.0, 3.0, 600.0, AMBER);
+    }
+    if ac.on_ground {
+        let y = cy - (170.0 - spd) * ppk;
+        draw_line(lx, y, lx + 10.0, y, 2.0, CYAN_S);
+        txt("R", lx + 12.0, y + 5.0, 14.0, CYAN_S);
+    }
+    if let Some(k) = ac.ap.spd_keas.filter(|_| ac.ap.at_on) {
+        let y = (cy - (k as f32 - spd) * ppk).clamp(s.y, s.y + s.h);
+        draw_triangle(vec2(lx, y), vec2(lx + 9.0, y - 6.0), vec2(lx + 9.0, y + 6.0), MAGENTA_S);
+    }
+    let trend = (d.accel * 10.0 / KT * (crate::atmosphere::isa(ac.alt).rho / 1.225).sqrt()) as f32;
+    if trend.abs() > 2.0 {
+        draw_line(lx + 3.0, cy, lx + 3.0, cy - trend * ppk, 2.0, GREEN_S);
+    }
+    scissor(None);
+    // Fenêtre de lecture
+    let bw = 62.0;
+    let bx = lx - 8.0 - bw;
+    draw_rectangle(bx, cy - 15.0, bw, 30.0, BLACK);
+    draw_rectangle_lines(bx, cy - 15.0, bw, 30.0, 1.5, LINE);
+    draw_triangle(vec2(lx - 1.0, cy), vec2(lx - 9.0, cy - 7.0), vec2(lx - 9.0, cy + 7.0), LINE);
+    txt_r(&format!("{:.0}", spd), bx + bw - 6.0, cy + 9.0, 24.0, WHITE);
+    // Sous l'échelle
+    let y = s.y + s.h + 20.0;
+    let a = d.alpha.to_degrees();
+    let ac_col = if a > 7.0 && ac.eng.scram == ScramState::Lit { AMBER } else { LABEL };
+    txt(&format!("a {a:+.1}°"), r.x + 14.0, y, 16.0, ac_col);
+    txt("EAS", lx - 34.0, y, 15.0, LABEL);
+    let qcol = if d.q > Q_LIMIT { RED } else if d.q > 90_000.0 { AMBER } else { LABEL };
+    txt(&format!("q {:.0} kPa", d.q / 1000.0), r.x + 14.0, y + 18.0, 14.0, qcol);
+    let skin = ac.skin_temp - 273.15;
+    let scol = if skin > SKIN_LIMIT_C { RED } else if skin > SKIN_LIMIT_C - 100.0 { AMBER } else { LABEL };
+    txt(&format!("PEAU {skin:.0}°C"), r.x + 14.0, y + 35.0, 14.0, scol);
+    // Bouton MENU
+    let mx = s.x + 6.0;
+    draw_rectangle(mx, y - 13.0, 70.0, 18.0, Color::new(0.22, 0.24, 0.27, 1.0));
+    txt_c("MENU", mx + 35.0, y + 1.0, 14.0, LABEL);
+}
+
+fn draw_g_bracket(nz: f64, r: Rect, s: Rect) {
+    let x = r.x + 16.0;
+    let top = s.y + s.h * 0.22;
+    let bot = s.y + s.h * 0.72;
+    let gy = |g: f32| top + (3.5 - g) / 6.0 * (bot - top);
+    draw_line(x, top, x, bot, 1.5, LINE);
+    for g in [3.5f32, 1.0, -2.5] {
+        let y = gy(g);
+        draw_line(x, y, x + 6.0, y, 1.5, LINE);
+        txt(&format!("{:+.1}G", g), x + 8.0, y + 5.0, 14.0, LABEL);
+    }
+    let gc = if !(-0.5..=2.5).contains(&nz) { AMBER } else { GREEN_S };
+    let y = gy(nz.clamp(-2.6, 3.6) as f32);
+    draw_triangle(vec2(x, y), vec2(x - 8.0, y - 5.0), vec2(x - 8.0, y + 5.0), gc);
+}
+
+fn draw_altitude(ac: &Aircraft, r: Rect, s: Rect) {
+    let d = &ac.d;
+    let lx = s.x + s.w + 16.0;
+    let cy = s.y + s.h / 2.0;
+    let alt = (ac.alt / FT) as f32;
+    let ppf = s.h / 1000.0;
+    let right = r.x + r.w - 48.0;
+    scissor(Some(Rect::new(s.x + s.w + 2.0, s.y - 4.0, right - s.x - s.w, s.h + 8.0)));
+    draw_line(lx, s.y, lx, s.y + s.h, 1.5, LINE);
+    let base = (alt / 100.0).floor() as i32 * 100;
+    for k in -7..=7 {
+        let a = base + k * 100;
+        let y = cy - (a as f32 - alt) * ppf;
+        let l = if a % 200 == 0 { 9.0 } else { 5.0 };
+        draw_line(lx, y, lx + l, y, 1.5, LINE);
+        if a % 200 == 0 {
+            txt(&format!("{a}"), lx + 14.0, y + 5.0, 15.0, LABEL);
+        }
+    }
+    if ac.ap.on && ac.ap.vert == VertMode::Alt {
+        let y = (cy - (ac.ap.alt_tgt_ft as f32 - alt) * ppf).clamp(s.y, s.y + s.h);
+        draw_rectangle(lx - 6.0, y - 5.0, 6.0, 10.0, MAGENTA_S);
+    }
+    scissor(None);
+    // Sol : hachures jaunes et noires sous l'élévation du terrain
+    let yg = cy - ((d.elev / FT) as f32 - alt) * ppf;
+    let top = yg.max(s.y);
+    let bottom = s.y + s.h;
+    if top < bottom {
+        scissor(Some(Rect::new(lx + 1.0, top, 40.0, bottom - top)));
+        draw_rectangle(lx + 1.0, top, 40.0, bottom - top, BLACK);
+        let mut y0 = top - 40.0;
+        while y0 < bottom + 40.0 {
+            draw_line(lx + 1.0, y0 + 40.0, lx + 41.0, y0, 3.0, Color::new(0.95, 0.75, 0.1, 0.9));
+            y0 += 10.0;
+        }
+        scissor(None);
+    }
+    // Fenêtre de lecture
+    let bw = 72.0;
+    let bx = lx + 6.0;
+    draw_rectangle(bx, cy - 15.0, bw, 30.0, BLACK);
+    draw_rectangle_lines(bx, cy - 15.0, bw, 30.0, 1.5, LINE);
+    draw_triangle(vec2(lx + 1.0, cy), vec2(bx + 1.0, cy - 7.0), vec2(bx + 1.0, cy + 7.0), LINE);
+    txt_r(&format!("{:.0}", alt), bx + bw - 5.0, cy + 9.0, 22.0, WHITE);
+    let y = s.y + s.h + 20.0;
+    txt("GPS ALT", lx, y, 14.0, LABEL);
+    txt(&format!("FL{:03.0}", alt / 100.0), lx, y + 18.0, 14.0, LABEL);
+}
+
+fn draw_vsi(vs: f64, r: Rect, s: Rect) {
+    let x = r.x + r.w - 40.0;
+    let cy = s.y + s.h / 2.0;
+    let half = s.h * 0.48;
+    let marks = [(0.0f32, 0.0f32), (2.0, 0.25), (4.0, 0.45), (10.0, 0.70), (40.0, 0.95)];
+    let pos = |kfpm: f32| {
+        let a = kfpm.abs();
+        let mut f = 1.0;
+        for w in marks.windows(2) {
+            if a <= w[1].0 {
+                f = w[0].1 + (a - w[0].0) / (w[1].0 - w[0].0) * (w[1].1 - w[0].1);
+                break;
+            }
+        }
+        cy - kfpm.signum() * f * half
+    };
+    for (k, _) in marks.iter().skip(1) {
+        for sg in [-1.0f32, 1.0] {
+            let y = pos(sg * k);
+            draw_line(x, y, x + 6.0, y, 1.5, LINE);
+            txt(&format!("{}", *k as i32), x + 9.0, y + 5.0, 13.0, LABEL);
+        }
+    }
+    draw_line(x, cy, x + 4.0, cy, 1.5, LINE);
+    let kfpm = (vs / FT * 60.0 / 1000.0) as f32;
+    let y = pos(kfpm);
+    draw_line(x - 4.0, y, x + 12.0, y, 3.0, GREEN_S);
+    if kfpm.abs() > 0.4 {
+        txt_c(&format!("{:.0}", kfpm * 1000.0), x + 6.0, if kfpm > 0.0 { s.y - 6.0 } else { s.y + s.h + 16.0 }, 13.0, GREEN_S);
+    }
+}
+
+fn draw_heading(ac: &Aircraft, s: Rect, info: &PfdInfo) {
+    let cx = s.x + s.w / 2.0;
+    let y = s.y + s.h + 4.0;
+    let hdg = ac.hdg_deg() as f32;
+    let ppd = s.w / 60.0;
+    let w = s.w * 0.62;
+    scissor(Some(Rect::new(cx - w / 2.0, y - 2.0, w, 30.0)));
+    let base = (hdg / 5.0).floor() as i32 * 5;
+    for k in -8..=8 {
+        let h = base + k * 5;
+        let x = cx + (h as f32 - hdg) * ppd;
+        let l = if h % 10 == 0 { 9.0 } else { 5.0 };
+        draw_line(x, y, x, y + l, 1.5, LINE);
+        if h % 10 == 0 {
+            let lbl = h.rem_euclid(360) / 10;
+            txt_c(&format!("{}", if lbl == 0 { 36 } else { lbl }), x, y + 23.0, 14.0, LABEL);
+        }
+    }
+    if ac.ap.on {
+        let bx = cx + wrap180(ac.ap.hdg_tgt - hdg as f64) as f32 * ppd;
+        draw_rectangle(bx - 4.0, y, 8.0, 6.0, MAGENTA_S);
+    }
+    scissor(None);
+    draw_rectangle(cx - 22.0, y + 9.0, 44.0, 18.0, BLACK);
+    draw_rectangle_lines(cx - 22.0, y + 9.0, 44.0, 18.0, 1.5, MAGENTA_S);
+    txt_c(&format!("{:03.0}", hdg.round() % 360.0), cx, y + 23.0, 15.0, WHITE);
+    // Distance destination
+    let apt = &AIRPORTS[info.dest];
+    let (dist, brg) = dist_brg(ac.lat, ac.lon, apt.lat, apt.lon);
+    let dx = s.x + s.w - 4.0;
+    txt_r(&format!("DIST {:.2} NM", dist / NM), dx, y + 16.0, 15.0, MAGENTA_S);
+    let gs = (ac.tas * ac.gamma.cos()).max(1.0);
+    txt_r(&format!("{} {:03.0}°  ETE {}", apt.icao, brg, crate::mission::fmt_time(dist / gs)), dx, y + 33.0, 13.0, MAGENTA_S);
+}

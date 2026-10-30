@@ -1,0 +1,347 @@
+//! Télémesure thermique : thermocouples répartis sur la cellule et la propulsion.
+
+use crate::aircraft::*;
+use crate::ui::*;
+use macroquad::prelude::*;
+use macroquad::rand::gen_range;
+use std::collections::VecDeque;
+
+#[derive(Clone, Copy, PartialEq)]
+pub enum Kind {
+    Skin(f64),     // fraction de l'échauffement aérodynamique du nez
+    Inlet,
+    Cit,
+    Egt(f64),
+    Oil,
+    RamWall,
+    ScramWall,
+    Nozzle,
+    FuelTank,
+    FuelInj,
+    Avionics,
+    Hydraulic,
+    GearBay,
+    Brakes,
+    Battery,
+}
+
+pub struct Sensor {
+    pub id: &'static str,
+    pub name: &'static str,
+    pub pos: (f32, f32), // position sur la vue en plan (x -1..1, y 0 nez .. 1 tuyère)
+    pub kind: Kind,
+    pub tau: f64,
+    pub caution: f64,
+    pub limit: f64,
+    pub truth: f64,
+    pub value: f64,
+    pub failed: bool,
+    pub hist: VecDeque<f32>,
+    pub rate: f64, // °C/min
+}
+
+pub struct ThermalSys {
+    pub sensors: Vec<Sensor>,
+    sample_t: f64,
+    pub events: Vec<(Level, String)>,
+}
+
+macro_rules! tc {
+    ($id:expr, $n:expr, $x:expr, $y:expr, $k:expr, $tau:expr, $c:expr, $l:expr) => {
+        Sensor { id: $id, name: $n, pos: ($x, $y), kind: $k, tau: $tau, caution: $c, limit: $l, truth: 15.0, value: 15.0, failed: false, hist: VecDeque::new(), rate: 0.0 }
+    };
+}
+
+impl ThermalSys {
+    pub fn new() -> Self {
+        let sensors = vec![
+            tc!("TC-101", "NEZ (POINTE)", 0.0, 0.03, Kind::Skin(1.0), 6.0, 1150.0, 1250.0),
+            tc!("TC-112", "BORD ATTAQUE AILE G", -0.42, 0.70, Kind::Skin(0.90), 10.0, 1050.0, 1150.0),
+            tc!("TC-113", "BORD ATTAQUE AILE D", 0.42, 0.70, Kind::Skin(0.905), 10.0, 1050.0, 1150.0),
+            tc!("TC-121", "LEVRE ENTREE D'AIR", 0.13, 0.42, Kind::Inlet, 8.0, 1100.0, 1200.0),
+            tc!("TC-131", "INTRADOS AVANT", 0.0, 0.30, Kind::Skin(0.70), 25.0, 900.0, 1000.0),
+            tc!("TC-132", "INTRADOS ARRIERE", 0.0, 0.76, Kind::Skin(0.55), 35.0, 800.0, 900.0),
+            tc!("TC-141", "EXTRADOS", -0.26, 0.72, Kind::Skin(0.40), 40.0, 650.0, 750.0),
+            tc!("TC-151", "DERIVE BORD ATTAQUE", 0.20, 0.80, Kind::Skin(0.80), 12.0, 1000.0, 1100.0),
+            tc!("TC-201", "CIT ENTREE COMPRESSEUR", -0.12, 0.52, Kind::Cit, 2.0, 400.0, 430.0),
+            tc!("TC-202", "EGT TURBINE G", -0.13, 0.88, Kind::Egt(8.0), 1.5, 900.0, 1000.0),
+            tc!("TC-203", "EGT TURBINE D", 0.13, 0.88, Kind::Egt(-6.0), 1.5, 900.0, 1000.0),
+            tc!("TC-204", "HUILE TURBINES", 0.0, 0.82, Kind::Oil, 60.0, 160.0, 180.0),
+            tc!("TC-301", "PAROI COMB. STATO", 0.08, 0.70, Kind::RamWall, 6.0, 1400.0, 1500.0),
+            tc!("TC-401", "PAROI COMB. SCRAM", -0.08, 0.70, Kind::ScramWall, 4.0, 1600.0, 1700.0),
+            tc!("TC-402", "RAMPE TUYERE", 0.0, 0.97, Kind::Nozzle, 15.0, 1100.0, 1200.0),
+            tc!("TC-501", "CARBURANT RESERVOIR", 0.0, 0.55, Kind::FuelTank, 300.0, 120.0, 150.0),
+            tc!("TC-502", "CARBURANT INJECTEURS", 0.05, 0.63, Kind::FuelInj, 20.0, 350.0, 420.0),
+            tc!("TC-601", "BAIE AVIONIQUE", 0.0, 0.17, Kind::Avionics, 120.0, 60.0, 75.0),
+            tc!("TC-602", "FLUIDE HYDRAULIQUE", -0.12, 0.47, Kind::Hydraulic, 150.0, 260.0, 300.0),
+            tc!("TC-701", "BAIE TRAIN", 0.14, 0.54, Kind::GearBay, 90.0, 180.0, 220.0),
+            tc!("TC-702", "FREINS", 0.18, 0.62, Kind::Brakes, 300.0, 500.0, 700.0),
+            tc!("TC-801", "BATTERIE", 0.0, 0.24, Kind::Battery, 300.0, 50.0, 60.0),
+        ];
+        ThermalSys { sensors, sample_t: 0.0, events: Vec::new() }
+    }
+
+    pub fn reading(&self, id: &str) -> f64 {
+        self.sensors.iter().find(|s| s.id == id).map(|s| s.truth).unwrap_or(0.0)
+    }
+
+    pub fn update(&mut self, dt: f64, ac: &Aircraft) {
+        if dt <= 0.0 {
+            return;
+        }
+        let oat = ac.d.oat;
+        let nose_eq = skin_equilibrium(ac.alt, ac.tas) - 273.15;
+        let rise = (nose_eq - oat).max(0.0);
+        let mach = ac.d.mach;
+        let t_amb_k = oat + 273.15;
+        let stag = t_amb_k * (1.0 + 0.2 * mach * mach) - 273.15;
+        let alpha = ac.d.alpha.to_degrees().max(0.0);
+        let e = &ac.eng;
+        let fuel_frac = ac.fuel / FUEL_MAX;
+        let tank = self.reading("TC-501");
+        let skin_avg = self.reading("TC-131");
+        let avion = self.reading("TC-601");
+        let ram_w = self.reading("TC-301");
+        let scram_w = self.reading("TC-401");
+
+        for s in &mut self.sensors {
+            let target = match s.kind {
+                Kind::Skin(f) => {
+                    let mut t = oat + rise * f;
+                    if s.id.starts_with("TC-13") {
+                        t += rise * alpha * 0.015; // intrados plus chaud avec l'incidence
+                    }
+                    if s.id == "TC-141" {
+                        t -= rise * alpha * 0.01;
+                    }
+                    t
+                }
+                Kind::Inlet => oat + rise * 0.95 + if e.scram == ScramState::Lit { 40.0 } else { 0.0 },
+                Kind::Cit => {
+                    // Portes fermées : la sonde CIT ne voit plus que l'air de la cavité
+                    oat + (stag - oat) * (1.0 - e.doors * 0.94)
+                }
+                Kind::Egt(off) => {
+                    if matches!(e.turb, TurbState::Running | TurbState::Starting) {
+                        e.egt + off
+                    } else {
+                        e.egt
+                    }
+                }
+                Kind::Oil => {
+                    if e.turb == TurbState::Running {
+                        60.0 + 70.0 * e.n2 + stag.max(0.0) * 0.15
+                    } else {
+                        oat.max(avion - 10.0)
+                    }
+                }
+                Kind::RamWall => {
+                    if e.ram == RamState::Lit {
+                        600.0 + 700.0 * ac.throttle
+                    } else {
+                        oat + (stag - oat) * 0.6
+                    }
+                }
+                Kind::ScramWall => {
+                    if e.scram == ScramState::Lit {
+                        900.0 + 650.0 * ac.throttle - 15.0 * e.fuel_flow
+                    } else {
+                        oat + (stag - oat).min(rise) * 0.6
+                    }
+                }
+                Kind::Nozzle => ram_w.max(scram_w) * 0.6 + rise * 0.3 + e.egt.max(0.0) * 0.15,
+                Kind::FuelTank => 20.0 + (skin_avg - 20.0).max(0.0) * 0.25 * (1.0 - fuel_frac * 0.6),
+                Kind::FuelInj => tank + 15.0 * e.fuel_flow + if e.scram == ScramState::Lit { 200.0 } else { 0.0 },
+                Kind::Avionics => 25.0 + (tank - 20.0).max(0.0) * 0.35,
+                Kind::Hydraulic => 40.0 + rise * 0.12,
+                Kind::GearBay => oat + rise * 0.35,
+                Kind::Brakes => oat.max(15.0),
+                Kind::Battery => 25.0 + (avion - 25.0).max(0.0) * 0.4,
+            };
+            if s.kind == Kind::Brakes {
+                // Énergie de freinage : échauffement rapide, refroidissement lent
+                if ac.on_ground && ac.brakes && ac.tas > 1.0 {
+                    s.truth += ac.tas * 0.25 * dt;
+                }
+                s.truth += (target - s.truth) * (dt / s.tau).min(1.0);
+            } else {
+                s.truth += (target - s.truth) * (dt / s.tau).min(1.0);
+            }
+            // Bruit de mesure (thermocouple type K : ±0.75 % ou ±2.2 °C)
+            let noise = gen_range(-1.0, 1.0) * (0.4 + s.truth.abs() * 0.0015);
+            s.value = s.truth + noise;
+        }
+
+        // Pannes aléatoires de capteurs (circuit ouvert)
+        for s in &mut self.sensors {
+            if !s.failed && gen_range(0.0, 1.0) < dt / 90_000.0 {
+                s.failed = true;
+                self.events.push((Level::Caution, format!("CAPTEUR {} ({}) : CIRCUIT OUVERT", s.id, s.name)));
+            }
+        }
+
+        // Échantillonnage pour l'historique et la tendance
+        self.sample_t -= dt;
+        if self.sample_t <= 0.0 {
+            self.sample_t = 1.0;
+            for s in &mut self.sensors {
+                s.hist.push_back(s.truth as f32);
+                if s.hist.len() > 120 {
+                    s.hist.pop_front();
+                }
+                let n = s.hist.len();
+                if n > 10 {
+                    s.rate = (s.hist[n - 1] - s.hist[n - 11]) as f64 * 6.0;
+                }
+            }
+        }
+    }
+
+    pub fn alerts(&self) -> Vec<(Level, String)> {
+        let mut a = Vec::new();
+        for s in &self.sensors {
+            if s.failed {
+                a.push((Level::Caution, format!("SENS FAIL {}", s.id)));
+            } else if s.value > s.limit {
+                a.push((Level::Warning, format!("OVERTEMP {}", s.name)));
+            } else if s.value > s.caution {
+                a.push((Level::Caution, format!("TEMP {}", s.name)));
+            }
+        }
+        a
+    }
+}
+
+fn temp_color(v: f64, caution: f64, limit: f64) -> Color {
+    if v > limit {
+        RED
+    } else if v > caution {
+        AMBER
+    } else {
+        let f = (v / caution).clamp(0.0, 1.0) as f32;
+        if f < 0.5 {
+            Color::new(0.2, 0.6 + f * 0.6, 1.0 - f, 1.0)
+        } else {
+            Color::new((f - 0.5) * 1.6, 1.0, 0.25, 1.0)
+        }
+    }
+}
+
+pub fn draw_thermal(th: &ThermalSys, r: Rect, time: f64) {
+    panel(r, "THERMIQUE — TELEMESURE CAPTEURS");
+    let n_bad = th.sensors.iter().filter(|s| !s.failed && s.value > s.caution).count();
+    let n_fail = th.sensors.iter().filter(|s| s.failed).count();
+    txt_r(&format!("{} CAPTEURS  {} ALERTE  {} HS", th.sensors.len(), n_bad, n_fail), r.x + r.w - 8.0, r.y + 15.0, 13.0, if n_bad > 0 { AMBER } else { DIM });
+
+    // Vue en plan de la cellule
+    let pw = (r.w * 0.36).min(r.h * 0.62);
+    let ph = r.h - 40.0;
+    let cx = r.x + 10.0 + pw / 2.0;
+    let y0 = r.y + 30.0;
+    let to = |x: f32, y: f32| vec2(cx + x * pw / 2.0, y0 + y * ph);
+    // Silhouette Darkstar : nez effilé, chines, aile en delta à double flèche, dérives canted
+    let outline = [
+        (0.0, 0.0), (0.035, 0.10), (0.075, 0.24), (0.12, 0.40), (0.20, 0.55), (0.42, 0.70), (0.66, 0.84),
+        (0.68, 0.90), (0.42, 0.91), (0.26, 0.96), (0.10, 0.99), (-0.10, 0.99), (-0.26, 0.96), (-0.42, 0.91),
+        (-0.68, 0.90), (-0.66, 0.84), (-0.42, 0.70), (-0.20, 0.55), (-0.12, 0.40), (-0.075, 0.24), (-0.035, 0.10),
+    ];
+    let col = Color::new(0.25, 0.85, 0.35, 0.9);
+    let center = to(0.0, 0.62);
+    for i in 0..outline.len() {
+        let a = to(outline[i].0, outline[i].1);
+        let b = to(outline[(i + 1) % outline.len()].0, outline[(i + 1) % outline.len()].1);
+        draw_triangle(center, a, b, Color::new(0.05, 0.16, 0.08, 1.0));
+    }
+    for i in 0..outline.len() {
+        let a = to(outline[i].0, outline[i].1);
+        let b = to(outline[(i + 1) % outline.len()].0, outline[(i + 1) % outline.len()].1);
+        draw_line(a.x, a.y, b.x, b.y, 1.5, col);
+    }
+    // Dérives inclinées et tuyères jumelles
+    for sx in [-1.0f32, 1.0] {
+        let (a, b) = (to(sx * 0.16, 0.74), to(sx * 0.27, 0.97));
+        draw_line(a.x, a.y, b.x, b.y, 3.0, col);
+        let n = to(sx * 0.07, 0.985);
+        draw_rectangle_lines(n.x - 5.0, n.y - 3.0, 10.0, 8.0, 1.5, col);
+    }
+    // Ligne de chine
+    let (a, b) = (to(0.0, 0.02), to(0.0, 0.95));
+    draw_line(a.x, a.y, b.x, b.y, 1.0, Color::new(0.25, 0.85, 0.35, 0.3));
+    for s in &th.sensors {
+        let p = to(s.pos.0, s.pos.1);
+        if s.failed {
+            let blink = (time * 2.0).fract() < 0.5;
+            draw_circle_lines(p.x, p.y, 5.0, 1.5, if blink { AMBER } else { DIM });
+            continue;
+        }
+        let c = temp_color(s.value, s.caution, s.limit);
+        draw_circle(p.x, p.y, 7.0, Color::new(c.r, c.g, c.b, 0.25));
+        draw_circle(p.x, p.y, 4.0, c);
+    }
+    // Étiquettes des capteurs de peau principaux
+    for id in ["TC-101", "TC-112", "TC-113", "TC-402"] {
+        if let Some(s) = th.sensors.iter().find(|s| s.id == id && !s.failed) {
+            let p = to(s.pos.0, s.pos.1);
+            let c = temp_color(s.value, s.caution, s.limit);
+            let dx = if s.pos.0 < 0.0 { -38.0 } else if s.pos.0 > 0.0 { 6.0 } else { 9.0 };
+            txt(&format!("{:.0}", s.value), p.x + dx, p.y - 6.0, 13.0, c);
+        }
+    }
+    // Échelle de couleurs
+    let lx = r.x + 10.0;
+    let ly = r.y + r.h - 12.0;
+    for i in 0..40 {
+        let f = i as f64 / 40.0;
+        draw_rectangle(lx + i as f32 * 2.0, ly - 6.0, 2.0, 6.0, temp_color(f * 1.1, 1.0, 1.05));
+    }
+    txt("FROID", lx, ly - 9.0, 11.0, DIM);
+    txt("LIMITE", lx + 64.0, ly - 9.0, 11.0, DIM);
+
+    // Tableau
+    let tx = r.x + pw + 22.0;
+    let tw = r.x + r.w - tx - 8.0;
+    let row_h = ((r.h - 46.0) / th.sensors.len() as f32).clamp(11.0, 16.0);
+    let fs = (row_h - 1.0).min(13.0);
+    let mut y = r.y + 36.0;
+    let c_val = tx + tw * 0.56;
+    let c_rate = tx + tw * 0.70;
+    let c_lim = tx + tw * 0.80;
+    let spark_x = tx + tw * 0.82;
+    let spark_w = tw * 0.18;
+    txt("CAPTEUR / ZONE", tx, y - 4.0, 11.0, DIM);
+    txt_r("°C", c_val, y - 4.0, 11.0, DIM);
+    txt_r("/MIN", c_rate, y - 4.0, 11.0, DIM);
+    txt_r("LIM", c_lim, y - 4.0, 11.0, DIM);
+    y += row_h - 2.0;
+    for s in &th.sensors {
+        let c = if s.failed { DIM } else { temp_color(s.value, s.caution, s.limit) };
+        let name_col = if s.failed || s.value <= s.caution { Color::new(0.75, 0.82, 0.88, 1.0) } else { c };
+        let label = format!("{} {}", &s.id[3..], s.name);
+        txt(&label, tx, y, fs, name_col);
+        if s.failed {
+            txt_r("OPEN", c_val, y, fs, AMBER);
+        } else {
+            txt_r(&format!("{:.0}", s.value), c_val, y, fs, c);
+            let rc = if s.rate.abs() < 0.5 { DIM } else if s.rate > 0.0 { AMBER } else { CYAN_S };
+            txt_r(&format!("{:+.0}", s.rate), c_rate, y, fs, rc);
+        }
+        txt_r(&format!("{:.0}", s.limit), c_lim, y, fs, DIM);
+        // Courbe des 2 dernières minutes, normalisée sur la limite
+        if s.hist.len() > 1 && !s.failed {
+            let n = s.hist.len();
+            let sy = y - 1.0;
+            let sh = row_h - 3.0;
+            draw_line(spark_x, sy - sh * (s.caution / s.limit) as f32, spark_x + spark_w, sy - sh * (s.caution / s.limit) as f32, 1.0, Color::new(1.0, 0.7, 0.0, 0.25));
+            let mut prev: Option<Vec2> = None;
+            for (i, v) in s.hist.iter().enumerate() {
+                let p = vec2(spark_x + spark_w * i as f32 / 119.0, sy - sh * (*v as f64 / s.limit).clamp(0.0, 1.05) as f32);
+                if let Some(q) = prev {
+                    draw_line(q.x, q.y, p.x, p.y, 1.0, c);
+                }
+                prev = Some(p);
+            }
+            let _ = n;
+        }
+        y += row_h;
+    }
+}
