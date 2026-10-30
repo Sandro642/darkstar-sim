@@ -107,3 +107,9 @@ Données carte : Natural Earth (domaine public).
 - Protections (désactivées par FBW OVERRIDE) : le pilote auto limite sa pente quand q approche la limite ;
   la loi de vol limite l'angle de piqué selon le Mach (~-4° à M6, -10° à M2) et cabre automatiquement si la q
   prévue à 8 s dépasse 80 kPa. Aérofreins plus efficaces en supersonique.
+
+## Capteurs thermiques (v1.2.7)
+- `CAPTEUR 101 OFF` inhibe un capteur par son numéro (affiché dans la liste, ex. 101 = nez) : il n'alarme plus
+  et apparaît « INHIB ». `CAPTEUR 101 ON` le réactive, `CAPTEURS ON` réactive tout.
+- Page THERMIQUE : clic sur un point du schéma = sa ligne est surlignée dans la liste et une étiquette
+  (numéro, nom, valeur) s'affiche ; clic sur une ligne = le point clignote sur le schéma. Re-clic = désélection.

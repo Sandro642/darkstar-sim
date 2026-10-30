@@ -340,7 +340,7 @@ pub fn draw_help(r: Rect) {
         ("  DESCENTE 50 : descente hypersonique a q constant (anti-surpression)", GREEN_S),
         ("  TURB START/STOP  INLET OPEN/CLOSE  RAM ARM/IGN  SCRAM ENABLE/IGN", CYAN_S),
         ("  OVERRIDE MOTEUR ON  OVERRIDE FBW ON  OVERRIDE OFF  H2/FUEL DUMP", AMBER),
-        ("  HSI 80  SON OFF  WARP 8  MENU  AIDE", GREEN_S),
+        ("  HSI 80  SON OFF  WARP 8  MENU  AIDE  CAPTEUR 101 OFF/ON", GREEN_S),
         ("", WHITE),
         ("Raccourcis : T turbines  I entrees  Y stato  U scram  G train", WHITE),
         ("  B freins  S aerofreins  P AP  O A/THR  N NAV  L ILS  D/K dest.", WHITE),

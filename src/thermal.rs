@@ -36,6 +36,8 @@ pub struct Sensor {
     pub truth: f64,
     pub value: f64,
     pub failed: bool,
+    /// Capteur inhibé par l'opérateur (n'alarme plus).
+    pub inhibited: bool,
     pub hist: VecDeque<f32>,
     pub rate: f64, // °C/min
 }
@@ -43,12 +45,14 @@ pub struct Sensor {
 pub struct ThermalSys {
     pub sensors: Vec<Sensor>,
     sample_t: f64,
+    /// Capteur sélectionné (clic sur le schéma ou la liste, ou instruction CAPTEUR).
+    pub selected: Option<usize>,
     pub events: Vec<(Level, String)>,
 }
 
 macro_rules! tc {
     ($id:expr, $n:expr, $x:expr, $y:expr, $k:expr, $tau:expr, $c:expr, $l:expr) => {
-        Sensor { id: $id, name: $n, pos: ($x, $y), kind: $k, tau: $tau, caution: $c, limit: $l, truth: 15.0, value: 15.0, failed: false, hist: VecDeque::new(), rate: 0.0 }
+        Sensor { id: $id, name: $n, pos: ($x, $y), kind: $k, tau: $tau, caution: $c, limit: $l, truth: 15.0, value: 15.0, failed: false, inhibited: false, hist: VecDeque::new(), rate: 0.0 }
     };
 }
 
@@ -78,7 +82,7 @@ impl ThermalSys {
             tc!("TC-702", "FREINS", 0.18, 0.62, Kind::Brakes, 300.0, 500.0, 700.0),
             tc!("TC-801", "BATTERIE", 0.0, 0.24, Kind::Battery, 300.0, 50.0, 60.0),
         ];
-        ThermalSys { sensors, sample_t: 0.0, events: Vec::new() }
+        ThermalSys { sensors, sample_t: 0.0, events: Vec::new(), selected: None }
     }
 
     pub fn reading(&self, id: &str) -> f64 {
@@ -207,9 +211,18 @@ impl ThermalSys {
         }
     }
 
+    /// Retrouve un capteur par son numéro (« 101 », « TC-101 »).
+    pub fn find(&self, num: &str) -> Option<usize> {
+        let n = num.trim_start_matches("TC-").trim_start_matches("TC");
+        self.sensors.iter().position(|s| s.id.trim_start_matches("TC-") == n)
+    }
+
     pub fn alerts(&self) -> Vec<(Level, String)> {
         let mut a = Vec::new();
         for s in &self.sensors {
+            if s.inhibited {
+                continue;
+            }
             if s.failed {
                 a.push((Level::Caution, format!("SENS FAIL {}", s.id)));
             } else if s.value > s.limit {
@@ -241,11 +254,16 @@ fn temp_color(v: f64, caution: f64, limit: f64) -> Color {
     }
 }
 
-pub fn draw_thermal(th: &ThermalSys, r: Rect, time: f64) {
+/// Dessine la page thermique ; renvoie l'indice du capteur cliqué (schéma ou liste).
+pub fn draw_thermal(th: &ThermalSys, r: Rect, time: f64) -> Option<usize> {
+    let mut clicked_idx = None;
     panel(r, "THERMIQUE — TELEMESURE CAPTEURS");
-    let n_bad = th.sensors.iter().filter(|s| !s.failed && s.value > s.caution).count();
+    let n_bad = th.sensors.iter().filter(|s| !s.failed && !s.inhibited && s.value > s.caution).count();
     let n_fail = th.sensors.iter().filter(|s| s.failed).count();
-    txt_r(&format!("{} CAPTEURS  {} ALERTE  {} HS", th.sensors.len(), n_bad, n_fail), r.x + r.w - 8.0, r.y + 15.0, 13.0, if n_bad > 0 { AMBER } else { DIM });
+    let n_inh = th.sensors.iter().filter(|s| s.inhibited).count();
+    txt_r(&format!("{} CAPTEURS  {} ALERTE  {} HS  {} INHIB", th.sensors.len(), n_bad, n_fail, n_inh), r.x + r.w - 8.0, r.y + 15.0, 13.0, if n_bad > 0 { AMBER } else { DIM });
+    let sel = th.selected;
+    let pulse = (time * 4.0).sin() as f32 * 0.5 + 0.5;
 
     // Vue en plan de la cellule
     let pw = (r.w * 0.36).min(r.h * 0.62);
@@ -281,16 +299,25 @@ pub fn draw_thermal(th: &ThermalSys, r: Rect, time: f64) {
     // Ligne de chine
     let (a, b) = (to(0.0, 0.02), to(0.0, 0.95));
     draw_line(a.x, a.y, b.x, b.y, 1.0, Color::new(0.25, 0.85, 0.35, 0.3));
-    for s in &th.sensors {
+    for (i, s) in th.sensors.iter().enumerate() {
         let p = to(s.pos.0, s.pos.1);
-        if s.failed {
+        if clicked(Rect::new(p.x - 9.0, p.y - 9.0, 18.0, 18.0)) {
+            clicked_idx = Some(i);
+        }
+        if s.inhibited {
+            draw_circle_lines(p.x, p.y, 5.0, 1.0, DIM);
+            draw_line(p.x - 4.0, p.y - 4.0, p.x + 4.0, p.y + 4.0, 1.0, DIM);
+        } else if s.failed {
             let blink = (time * 2.0).fract() < 0.5;
             draw_circle_lines(p.x, p.y, 5.0, 1.5, if blink { AMBER } else { DIM });
-            continue;
+        } else {
+            let c = temp_color(s.value, s.caution, s.limit);
+            draw_circle(p.x, p.y, 7.0, Color::new(c.r, c.g, c.b, 0.25));
+            draw_circle(p.x, p.y, 4.0, c);
         }
-        let c = temp_color(s.value, s.caution, s.limit);
-        draw_circle(p.x, p.y, 7.0, Color::new(c.r, c.g, c.b, 0.25));
-        draw_circle(p.x, p.y, 4.0, c);
+        if sel == Some(i) {
+            draw_circle_lines(p.x, p.y, 9.0 + pulse * 4.0, 2.0, ACCENT);
+        }
     }
     // Étiquettes des capteurs de peau principaux
     for id in ["TC-101", "TC-112", "TC-113", "TC-402"] {
@@ -300,6 +327,21 @@ pub fn draw_thermal(th: &ThermalSys, r: Rect, time: f64) {
             let dx = if s.pos.0 < 0.0 { -38.0 } else if s.pos.0 > 0.0 { 6.0 } else { 9.0 };
             txt(&format!("{:.0}", s.value), p.x + dx, p.y - 6.0, 13.0, c);
         }
+    }
+    // Étiquette du capteur sélectionné, à côté du point
+    if let Some(i) = sel {
+        let s = &th.sensors[i];
+        let p = to(s.pos.0, s.pos.1);
+        let val = if s.inhibited { "INHIB".to_string() } else if s.failed { "OPEN".to_string() } else { format!("{:.0}C", s.value) };
+        let l1 = format!("{} {}", s.id, val);
+        let w = txt_w(&l1, 13.0).max(txt_w(s.name, 11.0)) + 12.0;
+        let bx = if s.pos.0 < 0.0 { p.x + 14.0 } else { (p.x - 14.0 - w).max(r.x + 4.0) };
+        let bx = bx.min(r.x + pw + 10.0 - w);
+        let by = p.y - 30.0;
+        rrect(Rect::new(bx, by, w, 34.0), 5.0, Color::new(0.02, 0.05, 0.08, 0.92));
+        rrect_lines(Rect::new(bx, by, w, 34.0), 5.0, 1.0, ACCENT);
+        txt(&l1, bx + 6.0, by + 14.0, 13.0, WHITE);
+        txt(s.name, bx + 6.0, by + 28.0, 11.0, DIM);
     }
     // Échelle de couleurs
     let lx = r.x + 10.0;
@@ -327,12 +369,30 @@ pub fn draw_thermal(th: &ThermalSys, r: Rect, time: f64) {
     txt_r("/MIN", c_rate, y - 4.0, 11.0, DIM);
     txt_r("LIM", c_lim, y - 4.0, 11.0, DIM);
     y += row_h - 2.0;
-    for s in &th.sensors {
-        let c = if s.failed { DIM } else { temp_color(s.value, s.caution, s.limit) };
-        let name_col = if s.failed || s.value <= s.caution { Color::new(0.75, 0.82, 0.88, 1.0) } else { c };
+    for (i, s) in th.sensors.iter().enumerate() {
+        let row_r = Rect::new(tx - 4.0, y - row_h + 3.0, tw + 8.0, row_h);
+        if sel == Some(i) {
+            rrect(row_r, 3.0, Color::new(0.12, 0.25, 0.35, 0.9));
+            draw_rectangle(row_r.x, row_r.y, 3.0, row_r.h, ACCENT);
+        } else if hovered(row_r) {
+            draw_rectangle(row_r.x, row_r.y, row_r.w, row_r.h, Color::new(1.0, 1.0, 1.0, 0.04));
+        }
+        if clicked(row_r) {
+            clicked_idx = Some(i);
+        }
+        let c = if s.failed || s.inhibited { DIM } else { temp_color(s.value, s.caution, s.limit) };
+        let name_col = if s.inhibited {
+            DIM
+        } else if s.failed || s.value <= s.caution {
+            Color::new(0.75, 0.82, 0.88, 1.0)
+        } else {
+            c
+        };
         let label = format!("{} {}", &s.id[3..], s.name);
         txt(&label, tx, y, fs, name_col);
-        if s.failed {
+        if s.inhibited {
+            txt_r("INHIB", c_val, y, fs, DIM);
+        } else if s.failed {
             txt_r("OPEN", c_val, y, fs, AMBER);
         } else {
             txt_r(&format!("{:.0}", s.value), c_val, y, fs, c);
@@ -341,7 +401,7 @@ pub fn draw_thermal(th: &ThermalSys, r: Rect, time: f64) {
         }
         txt_r(&format!("{:.0}", s.limit), c_lim, y, fs, DIM);
         // Courbe des 2 dernières minutes, normalisée sur la limite
-        if s.hist.len() > 1 && !s.failed {
+        if s.hist.len() > 1 && !s.failed && !s.inhibited {
             let n = s.hist.len();
             let sy = y - 1.0;
             let sh = row_h - 3.0;
@@ -358,6 +418,7 @@ pub fn draw_thermal(th: &ThermalSys, r: Rect, time: f64) {
         }
         y += row_h;
     }
+    clicked_idx
 }
 
 #[cfg(test)]

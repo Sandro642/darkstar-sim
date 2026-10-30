@@ -132,6 +132,7 @@ impl Game {
                 ac.gear_pos = 0.0;
                 ac.brakes = false;
                 ac.eng.inlet_open = false;
+                ac.eng.doors = 1.0;
                 ac.eng.scram = ScramState::Lit;
                 ac.throttle = 0.7;
                 ac.fuel = 26_000.0;
@@ -859,6 +860,37 @@ impl Game {
                     reply = Err("AU SOL".into());
                 }
             }
+            "CAPTEUR" | "CAPTEURS" | "SENSOR" | "SENSORS" | "TC" => {
+                let on_off = |w: &str| match w {
+                    "ON" | "ACTIF" | "ACTIVER" => Some(false),
+                    "OFF" | "INHIB" | "INHIBER" | "DESACTIVER" => Some(true),
+                    _ => None,
+                };
+                // « CAPTEURS ON » : réactive tout
+                if w[0].ends_with('S') && on_off(arg(1)) == Some(false) {
+                    for s in self.thermal.sensors.iter_mut() {
+                        s.inhibited = false;
+                    }
+                    reply = Ok("TOUS LES CAPTEURS RÉACTIVÉS".into());
+                } else {
+                    // Le numéro et l'action peuvent venir dans les deux ordres : CAPTEUR 101 OFF / CAPTEUR OFF 101
+                    let (num_s, act) = if on_off(arg(1)).is_some() { (arg(2), on_off(arg(1))) } else { (arg(1), on_off(arg(2))) };
+                    match self.thermal.find(num_s) {
+                        Some(i) => {
+                            let s = &mut self.thermal.sensors[i];
+                            if let Some(inh) = act {
+                                s.inhibited = inh;
+                            }
+                            let (id, name, inh) = (s.id, s.name, s.inhibited);
+                            self.thermal.selected = Some(i);
+                            self.tab = gcs::Tab::Thermique;
+                            let v = if inh { "INHIBÉ".to_string() } else { format!("ACTIF, {:.0} °C", self.thermal.sensors[i].value) };
+                            reply = Ok(format!("{id} {name} : {v}"));
+                        }
+                        None => reply = Err(format!("CAPTEUR INCONNU : {num_s} (ex : CAPTEUR 101 OFF)")),
+                    }
+                }
+            }
             "G" | "GMAX" => {
                 ac.g_max = ac.d.nz.max(1.0);
                 ac.g_min = ac.d.nz.min(1.0);
@@ -1029,6 +1061,7 @@ impl Game {
                     "HSI 80 (portée NM)",
                     "MENU | START | STOP | ENG L ON/OFF/MOTOR | FADEC RESET [L|R] | ALERT START ON/OFF",
                     "AIR DATA OVRD ON/OFF | BIT | SYSTEM RESET | YAW TRIM -2.5 | G RESET (mémoire G max)",
+                    "CAPTEUR 101 OFF|ON (inhiber/réactiver un capteur par son numéro) | CAPTEURS ON",
                     "TRAIN UP/DOWN | FREINS ON/OFF | AP ON/OFF | MANUEL | WARP 8",
                 ] {
                     self.log.push((self.sim_time, Level::Info, l.into()));
@@ -1106,6 +1139,12 @@ async fn main() {
             "9" => gcs::Tab::Console,
             _ => gcs::Tab::Moteurs,
         };
+    }
+    // Instructions exécutées au démarrage (tests, scénarios) : DARKSTAR_CMD="CAPTEUR 101;ALT 30000"
+    if let Ok(cmds) = std::env::var("DARKSTAR_CMD") {
+        for c in cmds.split(';').filter(|c| !c.trim().is_empty()) {
+            g.exec_command(c);
+        }
     }
     let mut show_help = scenario.is_empty();
     let mut map_full = false;
@@ -1227,7 +1266,12 @@ async fn main() {
             let cr = Rect::new(rx, tabs_r.y + tabs_r.h + 4.0, rw, content_h);
             match g.tab {
                 gcs::Tab::Moteurs => panels::draw_engines(&g.ac, cr, time),
-                gcs::Tab::Thermique => thermal::draw_thermal(&g.thermal, cr, time),
+                gcs::Tab::Thermique => {
+                    if let Some(i) = thermal::draw_thermal(&g.thermal, cr, time) {
+                        // Clic sur un capteur déjà sélectionné : désélection
+                        g.thermal.selected = if g.thermal.selected == Some(i) { None } else { Some(i) };
+                    }
+                }
                 gcs::Tab::Essais => panels::draw_card(&g.ac, &g.mission, cr),
                 gcs::Tab::Domaine => panels::draw_envelope(&g.ac, cr, &g.history),
                 gcs::Tab::Override => {
