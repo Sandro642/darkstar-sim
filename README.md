@@ -22,7 +22,7 @@ Mac Apple Silicon (arm64), macOS 11+.
 ## Pilotage par instructions (ENTRÉE ouvre la console)
 
     CAP 270 · ALT 90000 / FL350 · ASSIETTE 10 · MACH 6 · KEAS 300 · THR 80
-    DIRECT KEDW · ATTERRIR KEDW (autoland) · DECOLLAGE 15000
+    DEST KEDW (choisir la destination ; DEST seul = liste) · DIRECT KEDW · ATTERRIR KEDW (autoland) · DECOLLAGE 15000
     TURB START/STOP · INLET OPEN/CLOSE · RAM ARM/IGN/OFF · SCRAM ENABLE/IGN/OFF · H2 DUMP [OFF]
     TRAIN UP/DOWN · FREINS ON/OFF · AP ON/OFF · MANUEL · WARP 8 · AIDE
 
@@ -33,7 +33,7 @@ Il faut que les turbines tournent (sous Mach 2.5 : `INLET OPEN` puis `TURB START
 
 ## Raccourcis
 T turbines · I entrées d'air · Y stato · U scram · G train · B freins · S aérofreins
-P AP · O auto-manette · N NAV · L ILS · D/K destination · X reprise en main manuelle
+P AP · O auto-manette · N NAV · L ILS · X reprise en main manuelle
 (flèches = manche, R/F = manette) · V carte plein écran · E accélération du temps · TAB aide
 
 ## Procédure TBCC

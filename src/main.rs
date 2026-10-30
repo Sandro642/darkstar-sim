@@ -556,11 +556,6 @@ impl Game {
                 msgs.push((Level::Caution, "ILS HORS PORTÉE (< 80 km de la destination)".into()));
             }
         }
-        if is_key_pressed(KeyCode::D) || is_key_pressed(KeyCode::K) {
-            let n = AIRPORTS.len();
-            self.dest = if is_key_pressed(KeyCode::D) { (self.dest + 1) % n } else { (self.dest + n - 1) % n };
-            msgs.push((Level::Info, format!("DESTINATION : {} — {}", AIRPORTS[self.dest].icao, AIRPORTS[self.dest].name)));
-        }
         if is_key_pressed(KeyCode::X) {
             ac.ap.on = false;
             ac.ap.at_on = false;
@@ -775,6 +770,23 @@ impl Game {
                 }
                 None => reply = Err("USAGE : THR 80".into()),
             },
+            "DEST" | "DESTINATION" => {
+                if arg(1).is_empty() {
+                    // Sans argument : destination actuelle et liste des codes disponibles
+                    let codes: Vec<&str> = AIRPORTS.iter().map(|a| a.icao).collect();
+                    self.log.push((self.sim_time, Level::Info, format!("AÉROPORTS : {}", codes.join(" "))));
+                    reply = Ok(format!("DESTINATION ACTUELLE : {} — {}", AIRPORTS[self.dest].icao, AIRPORTS[self.dest].name));
+                } else {
+                    match apt_arg(1) {
+                        Some(i) => {
+                            self.dest = i;
+                            let (d, b) = dist_brg(ac.lat, ac.lon, AIRPORTS[i].lat, AIRPORTS[i].lon);
+                            reply = Ok(format!("DESTINATION {} — {} ({:.0} NM, {:03.0}°)", AIRPORTS[i].icao, AIRPORTS[i].name, d / NM, b));
+                        }
+                        None => reply = Err(format!("AÉROPORT INCONNU : {} (DEST seul = liste)", arg(1))),
+                    }
+                }
+            }
             "DIRECT" | "DCT" | "DIR" => match apt_arg(1) {
                 Some(i) if airborne => {
                     self.dest = i;
@@ -1064,7 +1076,7 @@ impl Game {
                 for l in [
                     "CAP 270 | ALT 90000 / FL350 | ASSIETTE 10 | MACH 6 | KEAS 300 | VITESSE AUTO | THR 80",
                     "DESCENTE [50] : descente hypersonique à q constant (kPa) jusqu'au subsonique",
-                    "DIRECT KEDW | ATTERRIR [KEDW] (autoland) | DECOLLAGE [15000]",
+                    "DEST KEDW (destination, DEST seul = liste) | DIRECT KEDW | ATTERRIR [KEDW] | DECOLLAGE [15000]",
                     "TURB START/STOP | INLET OPEN/CLOSE | RAM ARM/IGN/OFF | SCRAM ENABLE/IGN/OFF",
                     "H2 DUMP [OFF] | FUEL DUMP [OFF] | OVERRIDE MOTEUR/FBW ON/OFF | OVERRIDE OFF",
                     "HSI 80 (portée NM)",
