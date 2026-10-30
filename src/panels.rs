@@ -394,6 +394,7 @@ pub fn draw_help(r: Rect) {
         ("(bas droite) montre couloirs moteurs, lignes de q, limite thermique.", AMBER),
         ("Liaison : LOS 45 ms près d'Edwards, SATCOM 380 ms au-delà.", AMBER),
     ];
+    txt_r(&format!("v{}", crate::updater::VERSION), x + w - 16.0, y + 24.0, 14.0, DIM);
     let mut yy = y + 30.0;
     for (s, c) in lines {
         txt(s, x + 20.0, yy, if c == CYAN_S && yy < y + 40.0 { 20.0 } else { 15.0 }, c);
