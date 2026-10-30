@@ -287,6 +287,7 @@ fn draw_header(ac: &Aircraft, r: Rect, s: Rect, info: &PfdInfo) {
     if ac.ap.at_on {
         parts.push((
             match ac.ap.spd_keas {
+                Some(k) if ac.ap.spd_managed => format!("A/THR {k:.0} AUTO"),
                 Some(k) => format!("A/THR {k:.0}KEAS"),
                 None => format!("A/THR M{:.2}", ac.ap.mach_tgt),
             },

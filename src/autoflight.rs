@@ -134,9 +134,10 @@ impl Aircraft {
                 self.ap.vert = VertMode::Alt;
                 self.ap.alt_tgt_ft = alt_ft;
                 self.ap.at_on = true;
-                self.ap.spd_keas = Some(350.0);
+                self.ap.spd_managed = true;
+                self.ap.spd_keas = Some(250.0);
                 self.autotakeoff = None;
-                self.msg(Level::Info, format!("DÉCOLLAGE AUTO TERMINÉ — AP1 : CAP {hdg:03.0}, ALT {alt_ft:.0}, 350 KEAS"));
+                self.msg(Level::Info, format!("DÉCOLLAGE AUTO TERMINÉ — AP1 : CAP {hdg:03.0}, ALT {alt_ft:.0}, VITESSE GÉRÉE"));
             }
             return None;
         }
@@ -363,5 +364,59 @@ mod tests {
             }
         }
         assert!(fails.is_empty(), "échecs : {fails:?}");
+    }
+
+    /// ILS (touche L) engagé avec une vitesse sélectionnée de 300 KEAS : la vitesse gérée doit
+    /// ramener l'avion à la vitesse d'approche, puis réduire la manette (RETARD) à l'arrondi.
+    #[test]
+    fn ils_managed_speed() {
+        let edw = AIRPORTS.iter().position(|a| a.icao == "KEDW").unwrap();
+        let apt = &AIRPORTS[edw];
+        let mut ac = Aircraft::new_on_runway(0);
+        let (la, lo) = apt.point(-apt.len / 2.0 - 16.0 * NM, 0.0);
+        ac.lat = la;
+        ac.lon = lo;
+        ac.psi = apt.hdg.to_radians();
+        ac.alt = apt.elev + 4_500.0 * FT;
+        ac.tas = 300.0 * KT / (crate::atmosphere::isa(ac.alt).rho / crate::atmosphere::RHO0).sqrt();
+        ac.on_ground = false;
+        ac.gear_down = true;
+        ac.brakes = false;
+        ac.fuel = 10_000.0;
+        ac.set_turbines(TurbState::Running, 0.8);
+        ac.throttle = 0.5;
+        ac.ap.on = true;
+        ac.ap.at_on = true;
+        ac.ap.spd_keas = Some(300.0); // vitesse sélectionnée avant l'ILS
+        // Touche L : LOC + G/S, vitesse gérée
+        let a = apt.approach_for(ac.lat, ac.lon);
+        ac.approach = Some((edw, a.thr_lat, a.thr_lon, a.hdg, apt.elev));
+        ac.ap.lat = LatMode::Loc;
+        ac.ap.vert = VertMode::Gs;
+        ac.ap.spd_managed = true;
+        let dt = 1.0 / 60.0;
+        let mut keas_at = Vec::new();
+        let mut retard = false;
+        for _ in 0..(900 * 60) {
+            ac.step(dt, 0.0, 0.0);
+            let along = crate::aircraft::along_before(a.thr_lat, a.thr_lon, a.hdg, ac.lat, ac.lon) / NM;
+            for mark in [10.0, 4.0] {
+                if (along - mark).abs() < 0.02 && !keas_at.iter().any(|(m, _, _)| *m == mark) {
+                    keas_at.push((mark, ac.d.keas, vapp(&ac)));
+                }
+            }
+            for (_, m) in ac.events.drain(..) {
+                if m.contains("RETARD") {
+                    retard = true;
+                }
+            }
+            if retard || ac.on_ground || ac.crashed.is_some() {
+                break;
+            }
+        }
+        println!("ILS vitesse gérée : {:?} (NM, KEAS, Vapp) retard={retard}", keas_at);
+        let (_, k4, va) = keas_at.iter().find(|(m, _, _)| *m == 4.0).copied().expect("passage à 4 NM");
+        assert!((k4 - va).abs() < 12.0, "à 4 NM : {k4:.0} KEAS pour Vapp {va:.0}");
+        assert!(retard, "RETARD attendu à l'arrondi");
     }
 }

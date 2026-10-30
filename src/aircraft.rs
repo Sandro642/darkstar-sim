@@ -82,6 +82,10 @@ pub struct Autopilot {
     pub pitch_tgt: f64,
     /// Consigne de pression dynamique (Pa) du mode QHold.
     pub q_tgt: f64,
+    /// Vitesse gérée (consigne calculée selon la phase de vol) plutôt que sélectionnée.
+    pub spd_managed: bool,
+    /// Aérofreins sortis par l'auto-manette (décélération en approche).
+    pub at_speedbrake: bool,
 }
 
 pub struct Engines {
@@ -329,6 +333,8 @@ impl Aircraft {
                 spd_keas: None,
                 pitch_tgt: 0.0,
                 q_tgt: 50_000.0,
+                spd_managed: false,
+                at_speedbrake: false,
             },
             d: Derived { elev: a.elev, oat: 15.0, ..Default::default() },
             crashed: None,
@@ -372,6 +378,32 @@ impl Aircraft {
             100.0 - (1.0 - (self.fuel / FUEL_MAX / 0.05).min(1.0)) * 70.0
         } else {
             12.0
+        }
+    }
+
+    /// Consigne de vitesse gérée (KEAS) selon la phase de vol.
+    pub fn managed_keas(&self, air: &Air) -> f64 {
+        // Approche ILS armée (reste vraie après la déconnexion AP aux minimums)
+        let on_approach = self.approach.is_some() && (self.ap.lat == LatMode::Loc || matches!(self.ap.vert, VertMode::Gs | VertMode::Flare));
+        if on_approach {
+            if let Some((_, tla, tlo, h, _)) = self.approach {
+                let along = along_before(tla, tlo, h, self.lat, self.lon);
+                let va = crate::autoflight::vapp(self);
+                return if along > 12.0 * NM {
+                    250.0f64.max(va + 30.0)
+                } else if along > 7.0 * NM {
+                    210.0f64.max(va + 15.0)
+                } else {
+                    va
+                };
+            }
+        }
+        if (self.alt - self.d.elev) / FT < 10_000.0 {
+            250.0
+        } else {
+            // 350 KEAS, plafonnée à Mach 0.9 en altitude
+            let keas_m09 = 0.9 * air.a * (air.rho / RHO0).sqrt() / KT;
+            350.0f64.min(keas_m09)
         }
     }
 
@@ -829,6 +861,31 @@ impl Aircraft {
             if self.gamma < gamma_min + 0.5f64.to_radians() {
                 let push_up = ((gamma_min + 0.5f64.to_radians() - self.gamma) * 1.5).min(4f64.to_radians());
                 pitch_rate = pitch_rate.max(push_up);
+            }
+        }
+        // Vitesse gérée : la consigne suit la phase de vol (approche, basse altitude, croisière)
+        // Approche ILS armée (reste vraie après la déconnexion AP aux minimums)
+        let on_approach = self.approach.is_some() && (self.ap.lat == LatMode::Loc || matches!(self.ap.vert, VertMode::Gs | VertMode::Flare));
+        if self.ap.at_on && self.ap.spd_managed && self.autoland.is_none() {
+            let k = self.managed_keas(&air);
+            self.ap.spd_keas = Some(k);
+            if on_approach && !self.on_ground {
+                if self.d.keas > k + 20.0 && self.throttle < 0.02 && !self.speedbrake {
+                    self.speedbrake = true;
+                    self.ap.at_speedbrake = true;
+                } else if self.ap.at_speedbrake && self.d.keas < k + 5.0 {
+                    self.speedbrake = false;
+                    self.ap.at_speedbrake = false;
+                }
+                if agl < 9.0 {
+                    self.ap.at_on = false;
+                    self.throttle = 0.0;
+                    if self.ap.at_speedbrake {
+                        self.speedbrake = false;
+                        self.ap.at_speedbrake = false;
+                    }
+                    self.msg(Level::Info, "RETARD, RETARD — A/THR OFF");
+                }
             }
         }
         if self.ap.at_on {

@@ -549,7 +549,9 @@ impl Game {
                 ac.ap.on = true;
                 ac.ap.lat = LatMode::Loc;
                 ac.ap.vert = VertMode::Gs;
-                msgs.push((Level::Info, "APPROCHE ILS ARMÉE — LOC / G/S".into()));
+                ac.ap.at_on = true;
+                ac.ap.spd_managed = true;
+                msgs.push((Level::Info, "APPROCHE ILS ARMÉE — LOC / G/S, A/THR VITESSE GÉRÉE".into()));
             } else {
                 msgs.push((Level::Caution, "ILS HORS PORTÉE (< 80 km de la destination)".into()));
             }
@@ -744,15 +746,22 @@ impl Game {
             "MACH" | "M" => match num(1) {
                 Some(m) => {
                     ac.ap.at_on = true;
+                    ac.ap.spd_managed = false;
                     ac.ap.spd_keas = None;
                     ac.ap.mach_tgt = m.clamp(0.3, 12.0);
                     reply = Ok(format!("A/THR MACH {:.2}", ac.ap.mach_tgt));
                 }
                 None => reply = Err("USAGE : MACH 6".into()),
             },
+            "KEAS" | "VIT" | "VITESSE" | "SPD" | "SPEED" if matches!(arg(1), "AUTO" | "GEREE" | "MANAGED") => {
+                ac.ap.at_on = true;
+                ac.ap.spd_managed = true;
+                reply = Ok("A/THR VITESSE GÉRÉE (APPROCHE / 250 KEAS SOUS 10 000 FT / 350 KEAS - M0.9)".into());
+            }
             "KEAS" | "VIT" | "VITESSE" | "SPD" | "SPEED" => match num(1) {
                 Some(k) => {
                     ac.ap.at_on = true;
+                    ac.ap.spd_managed = false;
                     ac.ap.spd_keas = Some(k.clamp(140.0, 800.0));
                     reply = Ok(format!("A/THR {:.0} KEAS", k.clamp(140.0, 800.0)));
                 }
@@ -1053,7 +1062,7 @@ impl Game {
             }
             "AIDE" | "HELP" | "?" => {
                 for l in [
-                    "CAP 270 | ALT 90000 / FL350 | ASSIETTE 10 | MACH 6 | KEAS 300 | THR 80",
+                    "CAP 270 | ALT 90000 / FL350 | ASSIETTE 10 | MACH 6 | KEAS 300 | VITESSE AUTO | THR 80",
                     "DESCENTE [50] : descente hypersonique à q constant (kPa) jusqu'au subsonique",
                     "DIRECT KEDW | ATTERRIR [KEDW] (autoland) | DECOLLAGE [15000]",
                     "TURB START/STOP | INLET OPEN/CLOSE | RAM ARM/IGN/OFF | SCRAM ENABLE/IGN/OFF",

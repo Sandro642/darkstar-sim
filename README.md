@@ -114,3 +114,10 @@ Données carte : Natural Earth (domaine public).
   et apparaît « INHIB ». `CAPTEUR 101 ON` le réactive, `CAPTEURS ON` réactive tout.
 - Page THERMIQUE : clic sur un point du schéma = sa ligne est surlignée dans la liste et une étiquette
   (numéro, nom, valeur) s'affiche ; clic sur une ligne = le point clignote sur le schéma. Re-clic = désélection.
+
+## Auto-manette : vitesse gérée / sélectionnée (v1.2.9)
+- **Sélectionnée** : `MACH 2.7` ou `KEAS 300` fixent une consigne (FMA « A/THR 300KEAS »).
+- **Gérée** (FMA « A/THR 210 AUTO ») : `VITESSE AUTO`, automatique à l'armement ILS (touche L) et après `DECOLLAGE`.
+  Approche ILS : 250 KEAS au-delà de 12 NM, ~210 entre 12 et 7 NM, puis vitesse d'approche selon la masse ;
+  aérofreins automatiques si trop rapide, RETARD (manette réduite, A/THR off) à l'arrondi.
+  Hors approche : 250 KEAS sous 10 000 ft sol, 350 KEAS au-dessus (plafond Mach 0.9).
