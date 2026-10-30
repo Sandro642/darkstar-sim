@@ -133,3 +133,13 @@ Données carte : Natural Earth (domaine public).
   LOC capturé dans l'axe, devant la piste, à moins de 25 NM ; G/S capturé en arrivant par en dessous du plan.
   Sens d'approche figé dès l'armement. Au-delà de la mi-piste sans toucher : remise des gaz automatique.
 - Trop haut ou trop rapide à l'armement : avertissement ; descendre d'abord (DESCENTE / ALT) ou utiliser ATTERRIR.
+
+## Fin de vol, page FCS, infos éphémères (v1.2.13)
+- `FIN` : termine le vol (simulation figée), sauvegarde l'enregistrement et affiche un débriefing
+  (durée, distance, Mach/altitude max, q, peau, g, carburant consommé, points d'essai, atterrissage, issue).
+  ENTRÉE : nouveau vol. `QUITTER` : sauvegarde et ferme l'application.
+- Onglet **0 FCS** : loi de vol (normale / directe sous FBW OVERRIDE), protections (incidence, g, haute
+  vitesse, piqué maxi, entrée d'air scram, inclinaison, données air) avec état ACTIVE / LIMITATION / INHIBÉE,
+  jauges valeur/limites, manche (ordre pilote vs loi FCS), élevons et dérives.
+- Infos éphémères sur l'horizon (~3,5 s) : instructions collationnées, captures LOC/G/S, points d'essai,
+  allumages, décollage/toucher, remises des gaz, passages de Mach, annonces radio-altimètre (2500…10 ft).

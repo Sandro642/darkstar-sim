@@ -124,6 +124,27 @@ pub struct Engines {
     pub combustor_failed: bool,
 }
 
+/// État des commandes de vol (FCS) exposé pour la page FCS.
+#[derive(Clone, Copy, Default)]
+pub struct Fcs {
+    pub alpha_max: f64, // deg
+    pub alpha_min: f64,
+    pub nz_max: f64,
+    pub gamma_min: f64, // deg
+    pub q_pred: f64,    // Pa
+    pub hs_active: bool,
+    pub dive_active: bool,
+    pub alpha_limit_active: bool,
+    pub inlet_protect: bool,
+    pub pitch_in: f64,
+    pub roll_in: f64,
+    pub pitch_rate: f64, // deg/s ordonné par la loi
+    pub roll_rate: f64,
+    pub elevon_l: f64, // deg
+    pub elevon_r: f64,
+    pub rudder: f64,
+}
+
 /// Grandeurs dérivées, recalculées à chaque pas, pour l'affichage.
 #[derive(Clone, Copy, Default)]
 pub struct Derived {
@@ -182,11 +203,17 @@ pub struct Aircraft {
     /// Accéléromètre à mémoire : facteurs de charge max/min atteints en vol.
     pub g_max: f64,
     pub g_min: f64,
+    pub fcs: Fcs,
     pub events: Vec<(Level, String)>,
     pub jolt: f64,
     pub approach: Option<(usize, f64, f64, f64, f64)>, // (aéroport, lat seuil, lon seuil, cap, élévation)
     pub autoland: Option<crate::autoflight::Autoland>,
     pub autotakeoff: Option<crate::autoflight::Takeoff>,
+}
+
+/// Braquage de compensation (deg) proportionnel à l'incidence, pour l'affichage des gouvernes.
+fn alpha_trim_hint(ac: &Aircraft) -> f64 {
+    -(ac.theta - ac.gamma).to_degrees()
 }
 
 /// Distance (m) restant avant le seuil, le long de l'axe d'approche (négative après le seuil).
@@ -348,6 +375,7 @@ impl Aircraft {
             max_alt: 0.0,
             g_max: 1.0,
             g_min: 1.0,
+            fcs: Fcs::default(),
             events: Vec::new(),
             jolt: 0.0,
             approach: None,
@@ -852,21 +880,28 @@ impl Aircraft {
         }
         // Loi FBW : protection haute vitesse anticipatrice (q prévue à 8 s), cabré automatique
         // prioritaire sur le manche, sauf FBW OVERRIDE
+        let mut fcs = Fcs { pitch_in, roll_in, q_pred: q, ..Default::default() };
         if !self.ovr_fbw && !self.on_ground {
             let q_rate = (q - self.d.q) / dt.max(1e-3);
             let q_pred = q + q_rate.max(0.0) * 8.0;
+            fcs.q_pred = q_pred;
             let over = (q_pred.max(q) - 0.80 * Q_LIMIT) / (0.12 * Q_LIMIT);
             if over > 0.0 {
                 pitch_rate = pitch_rate.max(over.min(1.0) * 4f64.to_radians());
+                fcs.hs_active = true;
             }
             // Pente de descente maximale : la ressource en hypersonique est très lente (~0.4°/s à 2 g),
             // la loi limite donc l'angle de piqué selon le Mach, et davantage quand q approche la limite
             let margin = ((0.90 * Q_LIMIT - q_pred.max(q)) / (0.40 * Q_LIMIT)).clamp(0.05, 1.0);
             let gamma_min = -(35f64.to_radians() / (1.0 + mach * 1.2)) * margin;
+            fcs.gamma_min = gamma_min.to_degrees();
             if self.gamma < gamma_min + 0.5f64.to_radians() {
                 let push_up = ((gamma_min + 0.5f64.to_radians() - self.gamma) * 1.5).min(4f64.to_radians());
                 pitch_rate = pitch_rate.max(push_up);
+                fcs.dive_active = true;
             }
+        } else {
+            fcs.gamma_min = -90.0;
         }
         // Vitesse gérée : la consigne suit la phase de vol (approche, basse altitude, croisière)
         // Approche ILS armée (reste vraie après la déconnexion AP aux minimums)
@@ -930,9 +965,25 @@ impl Aircraft {
                 amax = amax.min(lim.to_radians());
             }
             let amin = if self.ovr_fbw { -10f64.to_radians() } else { -5f64.to_radians() };
+            let unclamped = self.theta;
             self.theta = self.theta.clamp(self.gamma + amin, self.gamma + amax);
+            fcs.alpha_limit_active = (unclamped - self.theta).abs() > 1e-6 && !self.ovr_fbw;
+            fcs.alpha_max = amax.to_degrees();
+            fcs.alpha_min = amin.to_degrees();
+            fcs.nz_max = if self.ovr_fbw { 5.5 } else { nmax };
+            fcs.inlet_protect = self.eng.scram == ScramState::Lit && !self.ovr_fbw;
             self.phi = (self.phi + roll_rate * dt).clamp(-80f64.to_radians(), 80f64.to_radians());
         }
+        // Gouvernes : élevons (tangage + roulis différentiel) et dérives (lacet), en degrés
+        fcs.pitch_rate = pitch_rate.to_degrees();
+        fcs.roll_rate = roll_rate.to_degrees();
+        let pitch_def = (pitch_rate / qmax.max(1e-6)).clamp(-1.0, 1.0) * 18.0 + (alpha_trim_hint(self) * 0.3);
+        let roll_def = (roll_rate / pmax.max(1e-6)).clamp(-1.0, 1.0) * 14.0;
+        fcs.elevon_l = (-pitch_def + roll_def).clamp(-30.0, 30.0);
+        fcs.elevon_r = (-pitch_def - roll_def).clamp(-30.0, 30.0);
+        let asym_y = (self.eng.t_side[0] - self.eng.t_side[1]) / 240_000.0;
+        fcs.rudder = (self.yaw_trim * 15.0 - asym_y * 10.0).clamp(-25.0, 25.0);
+        self.fcs = fcs;
         // Lacet : poussée dissymétrique des turbines et compensateur YAW TRIM
         let asym = (self.eng.t_side[0] - self.eng.t_side[1]) / 240_000.0;
         let yaw_rate = (asym * 2.5 + self.yaw_trim * 1.0).to_radians() / (1.0 + mach);

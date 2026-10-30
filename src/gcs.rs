@@ -92,15 +92,17 @@ pub enum Tab {
     Domaine,
     Override,
     Console,
+    Fcs,
 }
 
-pub const TABS: [(Tab, &str); 6] = [
+pub const TABS: [(Tab, &str); 7] = [
     (Tab::Moteurs, "MOTEURS"),
     (Tab::Thermique, "THERMIQUE"),
     (Tab::Essais, "ESSAIS"),
     (Tab::Domaine, "DOMAINE"),
     (Tab::Override, "OVERRIDE"),
     (Tab::Console, "CONSOLE"),
+    (Tab::Fcs, "FCS"),
 ];
 
 /// Barre d'onglets ; renvoie l'onglet cliqué.
@@ -116,7 +118,7 @@ pub fn draw_tabs(r: Rect, cur: Tab, alert_override: bool) -> Option<Tab> {
             draw_rectangle(tr.x + 8.0, tr.y + tr.h - 3.0, tr.w - 16.0, 3.0, ACCENT);
         }
         let c = if *tab == Tab::Override && alert_override { AMBER } else if active { WHITE } else { DIM };
-        txt_c(&format!("{} {}", i + 4, label), tr.x + tr.w / 2.0, tr.y + tr.h / 2.0 + 5.0, 13.0, c);
+        txt_c(&format!("{} {}", (i + 4) % 10, label), tr.x + tr.w / 2.0, tr.y + tr.h / 2.0 + 5.0, 12.0, c);
         if clicked(tr) {
             out = Some(*tab);
         }

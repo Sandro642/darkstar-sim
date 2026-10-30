@@ -5,6 +5,7 @@ mod airports;
 mod atmosphere;
 mod audio;
 mod autoflight;
+mod fcs;
 mod gcs;
 mod geo;
 mod map;
@@ -68,6 +69,13 @@ struct Game {
     update_cmd: bool,
     cues: Vec<audio::Cue>,
     fdr: recorder::Recorder,
+    /// Infos éphémères affichées sur l'horizon : (texte, couleur, échéance en temps réel).
+    flashes: Vec<(String, Color, f64)>,
+    prev_agl_ft: f64,
+    prev_mach_int: i32,
+    /// Fin de vol (instruction FIN) : simulation figée, débriefing affiché.
+    ended: bool,
+    debrief: Vec<String>,
     crash_report: Vec<String>,
     muted: bool,
     thermal: thermal::ThermalSys,
@@ -166,6 +174,11 @@ impl Game {
             update_cmd: false,
             cues: Vec::new(),
             fdr: recorder::Recorder::new(),
+            flashes: Vec::new(),
+            prev_agl_ft: 0.0,
+            prev_mach_int: 0,
+            ended: false,
+            debrief: Vec::new(),
             crash_report: Vec::new(),
             muted: false,
             thermal: thermal::ThermalSys::new(),
@@ -179,8 +192,44 @@ impl Game {
         }
     }
 
+    fn flash(&mut self, s: impl Into<String>, c: Color) {
+        let s: String = s.into();
+        self.flashes.retain(|(t, _, _)| *t != s);
+        self.flashes.push((s, c, get_time() + 3.5));
+        if self.flashes.len() > 3 {
+            self.flashes.remove(0);
+        }
+    }
+
+    /// Sélectionne les messages à rappeler brièvement sur l'horizon artificiel.
+    fn flash_from_message(&mut self, l: Level, s: &str) {
+        let short = |m: &str| {
+            let m = m.split(" — ").next().unwrap_or(m).trim().to_string();
+            if m.chars().count() > 46 { m.chars().take(46).collect() } else { m }
+        };
+        if let Some(rest) = s.strip_prefix("DARKSTAR : ") {
+            if let Some(cmd) = rest.strip_suffix(" — COLLATIONNÉ") {
+                self.flash(short(cmd), ui::CYAN_S);
+            } else if rest.starts_with("IMPOSSIBLE") {
+                self.flash(short(rest), ui::AMBER);
+            }
+            return;
+        }
+        let up = s.to_uppercase();
+        if up.contains("CAPTURE") || up.contains("LIFTOFF") || up.contains("TOUCHER DES ROUES") || up.contains("AUTOLAND TERMIN") {
+            self.flash(short(s), ui::GREEN_S);
+        } else if up.contains("POINT D'ESSAI VALIDÉ") || up.contains("CAMPAGNE") {
+            self.flash(short(&s.replace("POINT D'ESSAI VALIDÉ : ", "VALIDÉ ")), ui::CYAN_S);
+        } else if up.contains("ALLUMÉ") || up.contains("LIGHT-OFF") || up.contains("RALENTI STABILISÉ") {
+            self.flash(short(s), WHITE);
+        } else if up.contains("RETARD") || up.contains("REMISE DES GAZ") || up.contains("UNSTART") || up.contains("EXTINCTION") || up.contains("AP OFF") || up.contains("DISCONNECT") || (l == Level::Warning && !up.contains("PERTE")) {
+            self.flash(short(s), ui::AMBER);
+        }
+    }
+
     fn push(&mut self, l: Level, s: impl Into<String>) {
         let s = s.into();
+        self.flash_from_message(l, &s);
         self.fdr.event(self.sim_time, &s);
         self.log.push((self.sim_time, l, s));
         if self.log.len() > 300 {
@@ -194,6 +243,52 @@ impl Game {
         let max_warp = if ac.on_ground || ac.d.agl < 1500.0 { 2.0 } else { 32.0 };
         let w = WARPS[self.warp_idx];
         (w.min(max_warp), w > max_warp)
+    }
+
+    /// Termine le vol : enregistrement final et débriefing.
+    fn end_flight(&mut self) {
+        let s = &self.fdr.samples;
+        let mut dist = 0.0;
+        for w in s.windows(2) {
+            dist += dist_brg(w[0].lat, w[0].lon, w[1].lat, w[1].lon).0;
+        }
+        let maxv = |f: &dyn Fn(&recorder::Sample) -> f64| s.iter().map(|x| f(x)).fold(f64::MIN, f64::max);
+        let minv = |f: &dyn Fn(&recorder::Sample) -> f64| s.iter().map(|x| f(x)).fold(f64::MAX, f64::min);
+        let ac = &self.ac;
+        let (fuel0, h20) = s.first().map(|x| (x.fuel_kg, x.h2_kg)).unwrap_or((ac.fuel, ac.h2));
+        let mut d = vec![
+            format!("DURÉE {}   DISTANCE {:.0} NM", mission::fmt_time(self.sim_time), dist / NM),
+            format!("MACH MAX {:.2}   ALTITUDE MAX {:.0} FT", ac.max_mach, ac.max_alt / FT),
+        ];
+        if !s.is_empty() {
+            d.push(format!(
+                "q MAX {:.0} kPa   PEAU MAX {:.0} °C   G {:+.1} / {:+.1}",
+                maxv(&|x| x.q_kpa),
+                maxv(&|x| x.skin_c),
+                minv(&|x| x.nz),
+                maxv(&|x| x.nz)
+            ));
+        }
+        d.push(format!("CARBURANT CONSOMMÉ : JP-7 {:.1} t   H2 {:.1} t", (fuel0 - ac.fuel) / 1000.0, (h20 - ac.h2) / 1000.0));
+        d.push(format!("POINTS D'ESSAI VALIDÉS : {} / {}", self.mission.completed_at.len(), mission::STEPS.len()));
+        for (i, t) in self.mission.completed_at.iter().enumerate() {
+            d.push(format!("  {}  {}", mission::fmt_time(*t), mission::STEPS[i].title));
+        }
+        if let Some((_, m)) = self.fdr.events.iter().rev().find(|(_, m)| m.contains("TOUCHER DES ROUES")) {
+            d.push(format!("DERNIER ATTERRISSAGE : {}", m.trim_start_matches("TOUCHER DES ROUES : ")));
+        }
+        match &ac.crashed {
+            Some(c) => d.push(format!("ISSUE : PERTE DU VÉHICULE — {c}")),
+            None if ac.on_ground => d.push("ISSUE : AVION AU SOL, VOL TERMINÉ".into()),
+            None => d.push(format!("ISSUE : VOL INTERROMPU EN L'AIR ({:.0} FT, M{:.2})", ac.alt / FT, ac.d.mach)),
+        }
+        self.fdr.finalize();
+        if let Some(p) = &self.fdr.saved_path {
+            d.push(format!("TRACE : {}", p.display()));
+        }
+        self.debrief = d;
+        self.ended = true;
+        self.push(Level::Info, "FIN DE VOL — DÉBRIEFING (ENTRÉE : NOUVEAU VOL)");
     }
 
     /// Défauts relevés par le test intégré (BIT).
@@ -595,7 +690,7 @@ impl Game {
         if is_key_pressed(KeyCode::C) {
             self.map.follow = true;
         }
-        for (k, tab) in [(KeyCode::Key4, gcs::Tab::Moteurs), (KeyCode::Key5, gcs::Tab::Thermique), (KeyCode::Key6, gcs::Tab::Essais), (KeyCode::Key7, gcs::Tab::Domaine), (KeyCode::Key8, gcs::Tab::Override), (KeyCode::Key9, gcs::Tab::Console)] {
+        for (k, tab) in [(KeyCode::Key4, gcs::Tab::Moteurs), (KeyCode::Key5, gcs::Tab::Thermique), (KeyCode::Key6, gcs::Tab::Essais), (KeyCode::Key7, gcs::Tab::Domaine), (KeyCode::Key8, gcs::Tab::Override), (KeyCode::Key9, gcs::Tab::Console), (KeyCode::Key0, gcs::Tab::Fcs)] {
             if is_key_pressed(k) {
                 self.tab = tab;
             }
@@ -696,6 +791,24 @@ impl Game {
             self.push(Level::Info, m);
         }
         self.atc_flavor();
+        // Infos éphémères : annonces radio-altimètre et passages de Mach entiers
+        let agl_ft = self.ac.d.agl / FT;
+        if !self.ac.on_ground && self.ac.crashed.is_none() && self.ac.d.vs < 0.0 {
+            for c in [2500.0, 1000.0, 500.0, 400.0, 300.0, 200.0, 100.0, 50.0, 40.0, 30.0, 20.0, 10.0] {
+                if self.prev_agl_ft > c && agl_ft <= c {
+                    self.flash(format!("{c:.0}"), if c <= 100.0 { ui::AMBER } else { ui::GREEN_S });
+                }
+            }
+        }
+        self.prev_agl_ft = agl_ft;
+        let m_int = self.ac.d.mach.floor() as i32;
+        if m_int > self.prev_mach_int && m_int >= 1 && self.sim_time > 1.0 {
+            self.flash(format!("MACH {m_int}"), ui::MAGENTA_S);
+        } else if m_int == 0 && self.prev_mach_int >= 1 {
+            self.flash("SUBSONIQUE", WHITE);
+        }
+        self.prev_mach_int = m_int;
+
         // Enregistreur de vol : trace continue, analyse et sauvegarde définitive au crash
         let alerts = self.alerts();
         if self.ac.crashed.is_some() {
@@ -960,6 +1073,14 @@ impl Game {
                 ac.g_min = ac.d.nz.min(1.0);
                 reply = Ok("MÉMOIRE G MAX / MIN REMISE À ZÉRO".into());
             }
+            "FIN" | "END" | "TERMINER" => {
+                self.end_flight();
+                return;
+            }
+            "QUITTER" | "QUIT" | "EXIT" => {
+                self.fdr.finalize();
+                std::process::exit(0);
+            }
             "FDR" | "ENREGISTRER" | "SAVE" | "TRACK" => {
                 match self.fdr.save(None) {
                     Ok(p) => reply = Ok(format!("TRACE ENREGISTRÉE : {}", p.display())),
@@ -1144,6 +1265,7 @@ impl Game {
                     "AIR DATA OVRD ON/OFF | BIT | SYSTEM RESET | YAW TRIM -2.5 | G RESET (mémoire G max)",
                     "CAPTEUR 101 OFF|ON (inhiber/réactiver un capteur par son numéro) | CAPTEURS ON",
                     "FDR (enregistrer la trace) | ANALYSE (analyse du vol / du crash)",
+                    "FIN (terminer le vol + débriefing) | QUITTER (sauvegarder et fermer)",
                     "TRAIN UP/DOWN | FREINS ON/OFF | AP ON/OFF | MANUEL | WARP 8",
                 ] {
                     self.log.push((self.sim_time, Level::Info, l.into()));
@@ -1219,6 +1341,7 @@ async fn main() {
             "7" => gcs::Tab::Domaine,
             "8" => gcs::Tab::Override,
             "9" => gcs::Tab::Console,
+            "0" => gcs::Tab::Fcs,
             _ => gcs::Tab::Moteurs,
         };
     }
@@ -1244,7 +1367,7 @@ async fn main() {
         }
         let shift = is_key_down(KeyCode::LeftShift) || is_key_down(KeyCode::RightShift);
         let enter = is_key_pressed(KeyCode::Enter) || is_key_pressed(KeyCode::KpEnter);
-        if enter && (g.ac.crashed.is_some() || (shift && g.console.is_none())) {
+        if enter && (g.ac.crashed.is_some() || g.ended || (shift && g.console.is_none())) {
             let muted = g.muted;
             g.fdr.finalize();
             g = Game::new(&scenario);
@@ -1286,11 +1409,13 @@ async fn main() {
                 g.console = None;
             }
             g.stick = (0.0, 0.0);
-        } else {
+        } else if !g.ended {
             while get_char_pressed().is_some() {}
             g.input(real_dt);
         }
-        g.update(real_dt);
+        if !g.ended {
+            g.update(real_dt);
+        }
 
         let alerts = g.alerts();
         let unacked = |lv: Level| alerts.iter().any(|(l, s)| *l == lv && !g.acked.contains(s));
@@ -1327,6 +1452,7 @@ async fn main() {
             if g.ac.crashed.is_some() && !g.crash_report.is_empty() {
                 draw_crash_report(&g.crash_report, svs_r);
             }
+            draw_flashes(&mut g.flashes, svs_r);
             // Bouton MENU du PFD : ouvre l'onglet CONSOLE
             let menu_btn = Rect::new(svs_r.x + 6.0, svs_r.y + svs_r.h + 7.0, 70.0, 18.0);
             if g.tab == gcs::Tab::Console {
@@ -1365,6 +1491,7 @@ async fn main() {
                         g.apply_switch(sw);
                     }
                 }
+                gcs::Tab::Fcs => fcs::draw_fcs(&g.ac, cr),
                 gcs::Tab::Console => {
                     let bit = menu::BitState { running: g.bit_timer > 0.0, fail: g.bit_fail };
                     if let Some(a) = menu::draw_menu(&g.ac, &bit, cr, time) {
@@ -1408,6 +1535,9 @@ async fn main() {
         }
         if top.help {
             show_help = !show_help;
+        }
+        if g.ended {
+            draw_debrief(&g.debrief, Rect::new(0.0, 0.0, sw, sh));
         }
         if show_help {
             panels::draw_help(Rect::new(0.0, 0.0, sw, sh));
@@ -1594,4 +1724,43 @@ fn draw_crash_report(report: &[String], r: Rect) {
     for (i, (l, c)) in lines.iter().enumerate() {
         ui::txt(l, x + 10.0, y + 36.0 + i as f32 * 15.0, 13.0, *c);
     }
+}
+
+/// Infos éphémères sur l'horizon : affichées ~3.5 s puis estompées.
+fn draw_flashes(flashes: &mut Vec<(String, Color, f64)>, r: Rect) {
+    let now = get_time();
+    flashes.retain(|(_, _, t)| *t > now);
+    let mut y = r.y + 64.0;
+    for (s, c, t) in flashes.iter() {
+        let a = ((t - now) as f32).min(1.0);
+        let w = ui::txt_w(s, 18.0) + 24.0;
+        let x = r.x + (r.w - w) / 2.0;
+        ui::rrect(Rect::new(x, y - 18.0, w, 26.0), 6.0, Color::new(0.0, 0.0, 0.0, 0.55 * a));
+        ui::rrect_lines(Rect::new(x, y - 18.0, w, 26.0), 6.0, 1.0, Color::new(c.r, c.g, c.b, 0.6 * a));
+        ui::txt_c(s, r.x + r.w / 2.0, y, 18.0, Color::new(c.r, c.g, c.b, a));
+        y += 30.0;
+    }
+}
+
+/// Débriefing de fin de vol (instruction FIN).
+fn draw_debrief(lines: &[String], r: Rect) {
+    draw_rectangle(r.x, r.y, r.w, r.h, Color::new(0.0, 0.0, 0.0, 0.6));
+    let w = 760.0f32.min(r.w - 40.0);
+    let h = (90.0 + lines.len() as f32 * 22.0).min(r.h - 40.0);
+    let b = Rect::new(r.x + (r.w - w) / 2.0, r.y + (r.h - h) / 2.0, w, h);
+    ui::rrect(b, 12.0, Color::new(0.03, 0.04, 0.06, 0.97));
+    ui::rrect_lines(b, 12.0, 1.5, ui::ACCENT);
+    ui::txt("FIN DE VOL - DEBRIEFING DARKSTAR FTV-01", b.x + 22.0, b.y + 34.0, 20.0, ui::ACCENT);
+    let mut y = b.y + 66.0;
+    for l in lines {
+        let c = if l.starts_with("ISSUE : PERTE") { RED } else if l.starts_with("  ") { ui::DIM } else if l.starts_with("TRACE") { ui::CYAN_S } else { WHITE };
+        for wl in ui::wrap_text(l, 15.0, w - 44.0) {
+            if y > b.y + b.h - 34.0 {
+                break;
+            }
+            ui::txt(&wl, b.x + 22.0, y, 15.0, c);
+            y += 22.0;
+        }
+    }
+    ui::txt_c("ENTREE : NOUVEAU VOL   -   instruction QUITTER pour fermer", b.x + w / 2.0, b.y + b.h - 14.0, 14.0, ui::DIM);
 }
