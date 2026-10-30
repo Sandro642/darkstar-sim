@@ -12,6 +12,7 @@ mod menu;
 mod mfd;
 mod mission;
 mod panels;
+mod recorder;
 mod pfd;
 mod svs;
 mod thermal;
@@ -66,6 +67,8 @@ struct Game {
     console: Option<String>,
     update_cmd: bool,
     cues: Vec<audio::Cue>,
+    fdr: recorder::Recorder,
+    crash_report: Vec<String>,
     muted: bool,
     thermal: thermal::ThermalSys,
     style: svs::SvsStyle,
@@ -162,6 +165,8 @@ impl Game {
             console: None,
             update_cmd: false,
             cues: Vec::new(),
+            fdr: recorder::Recorder::new(),
+            crash_report: Vec::new(),
             muted: false,
             thermal: thermal::ThermalSys::new(),
             style: svs::SvsStyle::Darkstar,
@@ -175,7 +180,9 @@ impl Game {
     }
 
     fn push(&mut self, l: Level, s: impl Into<String>) {
-        self.log.push((self.sim_time, l, s.into()));
+        let s = s.into();
+        self.fdr.event(self.sim_time, &s);
+        self.log.push((self.sim_time, l, s));
         if self.log.len() > 300 {
             self.log.remove(0);
         }
@@ -668,6 +675,21 @@ impl Game {
             self.push(Level::Info, m);
         }
         self.atc_flavor();
+        // Enregistreur de vol : trace continue, analyse et sauvegarde définitive au crash
+        let alerts = self.alerts();
+        if self.ac.crashed.is_some() {
+            if self.crash_report.is_empty() {
+                self.crash_report = self.fdr.finalize_crash(&self.ac, self.sim_time, &alerts);
+                let lines = self.crash_report.clone();
+                self.push(Level::Warning, "=== ANALYSE DU CRASH (enregistreur de vol) ===");
+                for l in lines {
+                    let lvl = if l.starts_with("DIAGNOSTIC") || l.starts_with("CAUSE") { Level::Caution } else { Level::Info };
+                    self.log.push((self.sim_time, lvl, l));
+                }
+            }
+        } else {
+            self.fdr.update(&self.ac, self.sim_time, &alerts);
+        }
         self.update_bit(real_dt);
     }
 
@@ -917,6 +939,23 @@ impl Game {
                 ac.g_min = ac.d.nz.min(1.0);
                 reply = Ok("MÉMOIRE G MAX / MIN REMISE À ZÉRO".into());
             }
+            "FDR" | "ENREGISTRER" | "SAVE" | "TRACK" => {
+                match self.fdr.save(None) {
+                    Ok(p) => reply = Ok(format!("TRACE ENREGISTRÉE : {}", p.display())),
+                    Err(e) => reply = Err(format!("ENREGISTREMENT IMPOSSIBLE : {e}")),
+                }
+            }
+            "ANALYSE" | "ANALYSER" => {
+                let lines = if self.crash_report.is_empty() {
+                    recorder::analyze(&self.fdr.samples, &self.fdr.events, "(analyse en vol, pas de crash)")
+                } else {
+                    self.crash_report.clone()
+                };
+                for l in lines {
+                    self.log.push((self.sim_time, Level::Info, l));
+                }
+                return;
+            }
             "MENU" | "CONSOLE" => {
                 self.tab = gcs::Tab::Console;
                 reply = Ok("CONSOLE MOTEURS / COMMANDES DE VOL".into());
@@ -1083,6 +1122,7 @@ impl Game {
                     "MENU | START | STOP | ENG L ON/OFF/MOTOR | FADEC RESET [L|R] | ALERT START ON/OFF",
                     "AIR DATA OVRD ON/OFF | BIT | SYSTEM RESET | YAW TRIM -2.5 | G RESET (mémoire G max)",
                     "CAPTEUR 101 OFF|ON (inhiber/réactiver un capteur par son numéro) | CAPTEURS ON",
+                    "FDR (enregistrer la trace) | ANALYSE (analyse du vol / du crash)",
                     "TRAIN UP/DOWN | FREINS ON/OFF | AP ON/OFF | MANUEL | WARP 8",
                 ] {
                     self.log.push((self.sim_time, Level::Info, l.into()));
@@ -1185,6 +1225,7 @@ async fn main() {
         let enter = is_key_pressed(KeyCode::Enter) || is_key_pressed(KeyCode::KpEnter);
         if enter && (g.ac.crashed.is_some() || (shift && g.console.is_none())) {
             let muted = g.muted;
+            g.fdr.finalize();
             g = Game::new(&scenario);
             g.muted = muted;
             sfx.reset();
@@ -1262,6 +1303,9 @@ async fn main() {
             }
             let svs_r = mfd::layout(mfd_r).1.svs;
             draw_console(&g, svs_r);
+            if g.ac.crashed.is_some() && !g.crash_report.is_empty() {
+                draw_crash_report(&g.crash_report, svs_r);
+            }
             // Bouton MENU du PFD : ouvre l'onglet CONSOLE
             let menu_btn = Rect::new(svs_r.x + 6.0, svs_r.y + svs_r.h + 7.0, 70.0, 18.0);
             if g.tab == gcs::Tab::Console {
@@ -1499,5 +1543,34 @@ mod icon {
             }
         }
         img.export_png(concat!(env!("CARGO_MANIFEST_DIR"), "/assets/icon.png"));
+    }
+}
+
+/// Rapport d'analyse du crash, affiché sur la vue synthétique.
+fn draw_crash_report(report: &[String], r: Rect) {
+    let x = r.x + 16.0;
+    let w = r.w - 32.0;
+    let mut lines: Vec<(String, Color)> = Vec::new();
+    for l in report.iter().take(9) {
+        let c = if l.starts_with("CAUSE") {
+            RED
+        } else if l.starts_with("DIAGNOSTIC") {
+            ui::AMBER
+        } else if l.starts_with("Trace") {
+            ui::CYAN_S
+        } else {
+            WHITE
+        };
+        for wl in ui::wrap_text(l, 13.0, w - 16.0) {
+            lines.push((wl, c));
+        }
+    }
+    let h = 30.0 + lines.len() as f32 * 15.0;
+    let y = (r.y + r.h - h - 34.0).max(r.y + 110.0);
+    ui::rrect(Rect::new(x, y, w, h), 8.0, Color::new(0.0, 0.0, 0.0, 0.85));
+    ui::rrect_lines(Rect::new(x, y, w, h), 8.0, 1.0, RED);
+    ui::txt("ANALYSE ENREGISTREUR DE VOL", x + 10.0, y + 18.0, 14.0, RED);
+    for (i, (l, c)) in lines.iter().enumerate() {
+        ui::txt(l, x + 10.0, y + 36.0 + i as f32 * 15.0, 13.0, *c);
     }
 }

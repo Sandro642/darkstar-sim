@@ -8,6 +8,13 @@
 - Réinstaller localement si besoin : `scripts/bundle.sh && scripts/install.sh`.
 - L'utilisateur parle français ; interface en français.
 
+## Analyse de crash
+- L'enregistreur de vol écrit chaque vol dans `~/Library/Application Support/Darkstar/vols/` :
+  `<date>_vol.csv` / `<date>_CRASH.csv` (trace 2 Hz : position, alt, KEAS, Mach, vario, pente, assiette,
+  incidence, g, q, poussée/traînée, manette, carburant, peau, train, modes AP, moteurs, alarmes) et
+  `.txt` (analyse automatique + journal des messages). Quand l'utilisateur signale un crash, lire le
+  dernier `*_CRASH.txt` puis la fin du `.csv` correspondant pour analyser.
+
 ## Environnement
 - Toolchain : `export RUSTUP_HOME=~/Rust/toolchain/rustup CARGO_HOME=~/Rust/toolchain/cargo`.
 - Tests de vol headless : `cargo test --release -- --nocapture` (profil Mach 10, décollage + autoland).

@@ -121,3 +121,9 @@ Données carte : Natural Earth (domaine public).
   Approche ILS : 250 KEAS au-delà de 12 NM, ~210 entre 12 et 7 NM, puis vitesse d'approche selon la masse ;
   aérofreins automatiques si trop rapide, RETARD (manette réduite, A/THR off) à l'arrondi.
   Hors approche : 250 KEAS sous 10 000 ft sol, 350 KEAS au-dessus (plafond Mach 0.9).
+
+## Enregistreur de vol (v1.2.11)
+- Chaque vol est enregistré (trace 2 Hz + journal) dans `~/Library/Application Support/Darkstar/vols/`,
+  sauvegardé toutes les 30 s. Au crash : analyse automatique (cause, état au crash, 60 dernières secondes,
+  diagnostic et recommandations) affichée sur le PFD et écrite dans `<date>_CRASH.txt`.
+- Instructions : `FDR` (enregistrer maintenant), `ANALYSE` (analyse du vol ou du dernier crash).
