@@ -4,7 +4,11 @@ use crate::aircraft::*;
 use crate::airports::AIRPORTS;
 use crate::geo::*;
 
-pub const VAPP: f64 = 170.0; // KEAS
+/// Vitesse d'approche selon la masse (incidence d'approche ~11°), bornée à 165-235 KEAS.
+pub fn vapp(ac: &Aircraft) -> f64 {
+    let v = (2.0 * ac.mass() * 9.81 / (crate::atmosphere::RHO0 * S_WING * 0.52)).sqrt() / KT;
+    v.clamp(165.0, 235.0)
+}
 const IAF_DIST: f64 = 15.0 * NM;
 const IAF_HGT_FT: f64 = 4_500.0;
 
@@ -179,7 +183,8 @@ impl Aircraft {
                     self.ap.vert = VertMode::Alt;
                     self.ap.alt_tgt_ft = (elev / FT + IAF_HGT_FT).min(self.ap.alt_tgt_ft);
                 }
-                let tgt = if along > 9.0 * NM { 220.0 } else { VAPP };
+                let va = vapp(self);
+                let tgt = if along > 9.0 * NM { va.max(220.0) } else { va };
                 self.ap.spd_keas = Some(tgt);
                 self.speedbrake = self.d.keas > tgt + 25.0;
                 if along < 9.0 * NM && !self.gear_down {
@@ -210,7 +215,8 @@ impl Aircraft {
                 self.ap.at_on = false;
                 self.throttle = 0.0;
                 self.speedbrake = true;
-                if self.d.keas < 150.0 {
+                // Autobrake MAX dès que la roulette de nez est posée
+                if self.theta < 2f64.to_radians() || self.d.keas < 200.0 {
                     self.brakes = true;
                 }
                 let herr = wrap180(self.hdg_deg() - hdg);

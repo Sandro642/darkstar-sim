@@ -134,8 +134,8 @@ impl Game {
                 ac.eng.inlet_open = false;
                 ac.eng.scram = ScramState::Lit;
                 ac.throttle = 0.7;
-                ac.fuel = 20_000.0;
-                ac.h2 = 5_000.0;
+                ac.fuel = 26_000.0;
+                ac.h2 = 12_000.0;
                 ac.skin_temp = skin_equilibrium(ac.alt, ac.tas);
                 mission.idx = 8;
                 dest = apt_index("PHNL");

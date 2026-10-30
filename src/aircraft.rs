@@ -6,8 +6,8 @@ use crate::geo::*;
 
 pub const S_WING: f64 = 200.0;
 pub const M_EMPTY: f64 = 28_000.0;
-pub const FUEL_MAX: f64 = 29_000.0; // JP-7 (turbines, statoréacteur)
-pub const H2_MAX: f64 = 7_000.0; // hydrogène liquide (scramjet)
+pub const FUEL_MAX: f64 = 38_000.0; // JP-7 (turbines, statoréacteur)
+pub const H2_MAX: f64 = 16_000.0; // hydrogène liquide (scramjet)
 pub const EYE_H: f64 = 4.0;
 const G0: f64 = 9.80665;
 
@@ -214,14 +214,17 @@ fn cd0(m: f64) -> f64 {
 
 /// Coefficient de poussée du statoréacteur (m² équivalents par unité de q).
 pub fn ram_k(m: f64) -> f64 {
+    // Le statoréacteur devient efficace dès M2.5 (compression dynamique suffisante)
     if m < 1.8 {
         0.0
+    } else if m < 2.5 {
+        6.5 * (m - 1.8) / 0.7
     } else if m < 3.5 {
-        8.0 * (m - 1.8) / 1.7
-    } else if m < 4.5 {
-        8.0
+        6.5 + 2.0 * (m - 2.5)
+    } else if m < 4.6 {
+        8.5
     } else if m < 6.8 {
-        8.0 * (6.8 - m) / 2.3
+        8.5 * (6.8 - m) / 2.2
     } else {
         0.0
     }
@@ -1134,7 +1137,8 @@ impl Aircraft {
         }
 
         // Débit carburant (Isp effectifs)
-        let isp_turb = 3800.0 + (1700.0 - 3800.0) * e.ab_frac;
+        // Isp : ~3800 s à sec, ~1900 s en pleine PC (ordre de grandeur J58)
+        let isp_turb = 3800.0 + (1900.0 - 3800.0) * e.ab_frac;
         let mut ff = e.t_turb / (isp_turb * G0) + e.t_ram / (1600.0 * G0);
         if matches!(e.turb, TurbState::Running | TurbState::Starting) {
             ff += 0.25;
@@ -1216,8 +1220,8 @@ mod tests {
                         ac.cmd_ram();
                     }
                     if ac.eng.ram == RamState::Lit {
-                        ac.ap.alt_tgt_ft = 65_000.0;
-                        if d.mach > 2.8 {
+                        ac.ap.alt_tgt_ft = 58_000.0;
+                        if d.mach > 3.05 {
                             ac.cmd_turbine();
                             ac.cmd_inlet();
                             phase = 3;
@@ -1225,9 +1229,7 @@ mod tests {
                     }
                 }
                 3 => {
-                    if d.mach > 3.5 {
-                        ac.ap.alt_tgt_ft = 85_000.0;
-                    }
+                    ac.ap.alt_tgt_ft = if d.mach < 3.5 { 58_000.0 } else if d.mach < 4.2 { 72_000.0 } else { 80_000.0 };
                     if d.mach > 4.0 && ac.eng.scram == ScramState::Off {
                         ac.cmd_scram();
                     }
@@ -1239,7 +1241,7 @@ mod tests {
                 4 => {
                     ac.ap.alt_tgt_ft = if d.mach < 6.0 { 88_000.0 } else if d.mach < 8.0 { 98_000.0 } else { 108_000.0 };
                     if d.mach > 10.0 && phase == 4 {
-                        println!(">>> MACH 10 à t={t:.0}s  JP={:.0} H2={:.0}", ac.fuel, ac.h2);
+                        println!(">>> MACH 10 à t={t:.0}s  JP={:.0} H2={:.0} — croisière M10 possible ~{:.0} min", ac.fuel, ac.h2, ac.h2 / ac.eng.h2_flow.max(0.1) / 60.0);
                         phase = 5;
                     }
                 }

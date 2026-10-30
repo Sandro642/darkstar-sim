@@ -54,11 +54,11 @@ Données carte : Natural Earth (domaine public).
   (circuit ouvert). Les dépassements remontent en CAUTION/WARNING.
 
 ## Modèle Darkstar
-- Deux turbines à PC, statoréacteur (JP-7) et scramjet à **hydrogène liquide** (réservoir séparé de 7 t,
+- Deux turbines à PC, statoréacteur (JP-7, 38 t) et scramjet à **hydrogène liquide** (réservoir séparé de 16 t,
   Isp élevé). `SCRAM ENABLE` pressurise le circuit H2 ; `H2 DUMP` vidange l'hydrogène en urgence.
 - EICAS façon Darkstar : nacelles G/D (portes d'entrée d'air en degrés, GEN ON/OFF, RPM %, EGT et
   CIT en °F, flamme de PC), page carburant (FUEL FLOW en PPH, FUEL PRES en psi, CG %, réservoirs JP-7/H2).
-- Le profil de test atteint Mach 10 vers T+24 min avec ~2,5 t de H2 restant : l'hydrogène est la ressource critique.
+- Le profil de test atteint Mach 10 vers T+32 min avec ~21 t de JP-7 et ~8,6 t de H2 restants (~19 min de croisière à Mach 10).
 
 ## Sons (synthétisés au démarrage, aucun fichier)
 - Moteur : sifflement turbine (ralenti -> plein régime selon N2), grondement du jet, post-combustion
