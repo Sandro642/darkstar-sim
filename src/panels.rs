@@ -337,6 +337,7 @@ pub fn draw_help(r: Rect) {
         ("ENTREE ouvre la console d'instructions :", WHITE),
         ("  CAP 270  ALT 90000 / FL350  ASSIETTE 10  MACH 6  KEAS 300  THR 80", GREEN_S),
         ("  DIRECT KEDW   ATTERRIR KEDW (autoland)   DECOLLAGE 15000", GREEN_S),
+        ("  DESCENTE 50 : descente hypersonique a q constant (anti-surpression)", GREEN_S),
         ("  TURB START/STOP  INLET OPEN/CLOSE  RAM ARM/IGN  SCRAM ENABLE/IGN", CYAN_S),
         ("  OVERRIDE MOTEUR ON  OVERRIDE FBW ON  OVERRIDE OFF  H2/FUEL DUMP", AMBER),
         ("  HSI 80  SON OFF  WARP 8  MENU  AIDE", GREEN_S),

@@ -308,6 +308,7 @@ fn draw_header(ac: &Aircraft, r: Rect, s: Rect, info: &PfdInfo) {
                 VertMode::Gs => "G/S".into(),
                 VertMode::Flare => "FLARE".into(),
                 VertMode::Pitch => format!("PITCH {:+.0}", ac.ap.pitch_tgt),
+                VertMode::QHold => format!("DESC q{:.0}", ac.ap.q_tgt / 1000.0),
             },
             GREEN_S,
         ));

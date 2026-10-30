@@ -844,6 +844,21 @@ impl Game {
                 }
                 reply = Ok("SCRAM".into());
             }
+            "DESCENTE" | "DESCENT" | "DESC" => {
+                if airborne {
+                    engage_ap(ac);
+                    ac.ap.vert = VertMode::QHold;
+                    ac.ap.q_tgt = num(1).unwrap_or(50.0).clamp(20.0, 80.0) * 1000.0;
+                    ac.ap.at_on = false;
+                    ac.throttle = 0.0;
+                    reply = Ok(format!(
+                        "DESCENTE À q {:.0} kPa CONSTANTE, MANETTE RÉDUITE — PALIER AUTO EN SUBSONIQUE SOUS FL350",
+                        ac.ap.q_tgt / 1000.0
+                    ));
+                } else {
+                    reply = Err("AU SOL".into());
+                }
+            }
             "G" | "GMAX" => {
                 ac.g_max = ac.d.nz.max(1.0);
                 ac.g_min = ac.d.nz.min(1.0);
@@ -1007,6 +1022,7 @@ impl Game {
             "AIDE" | "HELP" | "?" => {
                 for l in [
                     "CAP 270 | ALT 90000 / FL350 | ASSIETTE 10 | MACH 6 | KEAS 300 | THR 80",
+                    "DESCENTE [50] : descente hypersonique à q constant (kPa) jusqu'au subsonique",
                     "DIRECT KEDW | ATTERRIR [KEDW] (autoland) | DECOLLAGE [15000]",
                     "TURB START/STOP | INLET OPEN/CLOSE | RAM ARM/IGN/OFF | SCRAM ENABLE/IGN/OFF",
                     "H2 DUMP [OFF] | FUEL DUMP [OFF] | OVERRIDE MOTEUR/FBW ON/OFF | OVERRIDE OFF",

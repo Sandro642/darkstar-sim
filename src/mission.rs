@@ -25,7 +25,7 @@ pub const STEPS: &[Step] = &[
     Step { title: "TP-08  TRANSITION SCRAMJET", text: "Armer le scram (U) à M>=4.0. Allumer (U) à M>=4.8 avec q 40-60 kPa idéalement (25-90 toléré) et AoA 0-7°. Le stato s'éteint : mode SCRAM. Ne pas trop monter avant l'allumage.", hold: 0.0 },
     Step { title: "TP-09  CROISIÈRE HYPERSONIQUE", text: "Tenir M6.0+ entre 90 000 et 110 000 ft pendant 60 s. AoA < 7° sinon UNSTART. Pilote auto conseillé (P, O).", hold: 60.0 },
     Step { title: "TP-10  DARKSTAR — MACH 10", text: "Pousser jusqu'à M10.0. Peau < 1250 °C : monter si la température grimpe (q plus faible).", hold: 5.0 },
-    Step { title: "TP-11  DÉCÉLÉRATION / RALLUMAGE", text: "Couper le scram (U). Plané de décélération. Sous M2.5 ouvrir les entrées (I) puis rallumer les turbines (T). Descendre sous le FL450 et M1.5.", hold: 0.0 },
+    Step { title: "TP-11  DÉCÉLÉRATION / RALLUMAGE", text: "Couper le scram (U). Instruction DESCENTE (q constant 50 kPa) : l\'avion décélère en descendant sans surpression. Sous M2.5 ouvrir les entrées (I) puis rallumer les turbines (T). Descendre sous le FL450 et M1.5.", hold: 0.0 },
     Step { title: "TP-12  RETOUR ET ATTERRISSAGE", text: "Instruction ATTERRIR KEDW : autoland complet (IAF 15 NM, LOC, G/S, arrondi, freinage). Ou à la main : ILS (L), train sous 270 KEAS, toucher < 600 ft/min.", hold: 0.0 },
 ];
 

@@ -99,3 +99,11 @@ Données carte : Natural Earth (domaine public).
 ## Train d'atterrissage
 - Trois voyants nez / gauche / droite (bloc TRAIN dans la colonne de droite, à côté des messages, et onglet MOTEURS) :
   vert = sorti et verrouillé, rouge = en transit, éteint = rentré, rouge clignotant = train rentré trop bas.
+
+## Descente depuis l'hypersonique (v1.2.6)
+- Plonger fait exploser la pression dynamique q (limite structurale 100 kPa) : l'avion garde sa vitesse
+  alors que l'air devient dense. Instruction **`DESCENTE [kPa]`** : descente à q constant (50 kPa par défaut),
+  manette réduite ; l'avion décélère en descendant puis se met en palier automatiquement en subsonique sous le FL350.
+- Protections (désactivées par FBW OVERRIDE) : le pilote auto limite sa pente quand q approche la limite ;
+  la loi de vol limite l'angle de piqué selon le Mach (~-4° à M6, -10° à M2) et cabre automatiquement si la q
+  prévue à 8 s dépasse 80 kPa. Aérofreins plus efficaces en supersonique.

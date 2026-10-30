@@ -64,6 +64,8 @@ pub enum VertMode {
     Flare,
     /// Tenue d'assiette (instruction ASSIETTE).
     Pitch,
+    /// Descente hypersonique à pression dynamique constante (instruction DESCENTE).
+    QHold,
 }
 
 pub struct Autopilot {
@@ -78,6 +80,8 @@ pub struct Autopilot {
     pub spd_keas: Option<f64>,
     /// Consigne d'assiette en degrés (mode Pitch).
     pub pitch_tgt: f64,
+    /// Consigne de pression dynamique (Pa) du mode QHold.
+    pub q_tgt: f64,
 }
 
 pub struct Engines {
@@ -324,6 +328,7 @@ impl Aircraft {
                 mach_tgt: 0.9,
                 spd_keas: None,
                 pitch_tgt: 0.0,
+                q_tgt: 50_000.0,
             },
             d: Derived { elev: a.elev, oat: 15.0, ..Default::default() },
             crashed: None,
@@ -721,7 +726,7 @@ impl Aircraft {
         let alpha = self.theta - self.gamma;
 
         // --- Pilote automatique ---
-        let pitch_rate;
+        let mut pitch_rate;
         let roll_rate;
         let qmax = (6.0f64).to_radians() / (1.0 + mach / 3.0);
         let pmax = (35.0f64).to_radians() / (1.0 + mach / 6.0);
@@ -746,10 +751,21 @@ impl Aircraft {
                     (vs_cmd / v).asin()
                 }
                 VertMode::Pitch => self.gamma,
+                VertMode::QHold => {
+                    // q trop faible : on descend ; q trop forte : on remonte (couloir de pression dynamique)
+                    (-(self.ap.q_tgt - q) / self.ap.q_tgt * 0.35).clamp(-0.10, 0.06)
+                }
             };
             // Protection basse vitesse : on rend de l'altitude si l'incidence approche la butée
             let a_deg = alpha.to_degrees();
             let gamma_cmd = if a_deg > 13.0 { gamma_cmd.min(-0.04 - (a_deg - 13.0).to_radians() * 2.0) } else { gamma_cmd };
+            // Protection haute vitesse : pas de descente quand q approche la limite structurale (remontée au-delà)
+            let gamma_cmd = if matches!(self.ap.vert, VertMode::Gs | VertMode::Flare) {
+                gamma_cmd
+            } else {
+                let margin = (0.82 * Q_LIMIT - q) / (0.22 * Q_LIMIT);
+                gamma_cmd.max(-0.08 * margin.clamp(-1.0, 1.0))
+            };
             let c = (q * S_WING * cla / (mass * v)).max(0.01);
             let (wn, zeta) = (0.6, 0.8);
             let k = (wn * wn / c).min(5.0);
@@ -784,6 +800,11 @@ impl Aircraft {
             let phi_cmd = (err * 2.0).clamp(-bank_lim, bank_lim).to_radians();
             roll_rate = (1.5 * (phi_cmd - self.phi)).clamp(-pmax * 0.5, pmax * 0.5);
 
+            if self.ap.vert == VertMode::QHold && mach < 0.95 && self.alt < 35_000.0 * FT {
+                self.ap.vert = VertMode::Alt;
+                self.ap.alt_tgt_ft = (self.alt / FT / 1000.0).round() * 1000.0;
+                self.msg(Level::Info, format!("DESCENTE TERMINÉE — PALIER {:.0} FT, SUBSONIQUE", self.ap.alt_tgt_ft));
+            }
             if self.ap.vert == VertMode::Gs && agl < 60.0 && self.autoland.is_none() {
                 self.ap.on = false;
                 self.msg(Level::Caution, "AP OFF — MINIMUMS : ARRONDI MANUEL");
@@ -791,6 +812,24 @@ impl Aircraft {
         } else {
             pitch_rate = pitch_in * qmax;
             roll_rate = roll_in * pmax;
+        }
+        // Loi FBW : protection haute vitesse anticipatrice (q prévue à 8 s), cabré automatique
+        // prioritaire sur le manche, sauf FBW OVERRIDE
+        if !self.ovr_fbw && !self.on_ground {
+            let q_rate = (q - self.d.q) / dt.max(1e-3);
+            let q_pred = q + q_rate.max(0.0) * 8.0;
+            let over = (q_pred.max(q) - 0.80 * Q_LIMIT) / (0.12 * Q_LIMIT);
+            if over > 0.0 {
+                pitch_rate = pitch_rate.max(over.min(1.0) * 4f64.to_radians());
+            }
+            // Pente de descente maximale : la ressource en hypersonique est très lente (~0.4°/s à 2 g),
+            // la loi limite donc l'angle de piqué selon le Mach, et davantage quand q approche la limite
+            let margin = ((0.90 * Q_LIMIT - q_pred.max(q)) / (0.40 * Q_LIMIT)).clamp(0.05, 1.0);
+            let gamma_min = -(35f64.to_radians() / (1.0 + mach * 1.2)) * margin;
+            if self.gamma < gamma_min + 0.5f64.to_radians() {
+                let push_up = ((gamma_min + 0.5f64.to_radians() - self.gamma) * 1.5).min(4f64.to_radians());
+                pitch_rate = pitch_rate.max(push_up);
+            }
         }
         if self.ap.at_on {
             let tas_tgt = match self.ap.spd_keas {
@@ -855,7 +894,7 @@ impl Aircraft {
         let keas = v * (air.rho / RHO0).sqrt() / KT;
         let mut cd = cd0(mach) + k_ind * cl * cl + 0.015 * self.gear_pos;
         if self.speedbrake {
-            cd += if mach < 2.0 { 0.025 } else { 0.006 };
+            cd += if mach < 2.0 { 0.025 } else { 0.012 };
         }
         let lift = q * S_WING * cl;
         let drag = q * S_WING * cd;
@@ -1473,5 +1512,84 @@ mod sweep {
         }
         println!("A/THR {} -> M{:.2} FL{:.0} manette {:.0}% stato {:?}", ac.ap.at_on, ac.d.mach, ac.alt / FT / 100.0, ac.throttle * 100.0, ac.eng.ram);
         assert_eq!(ac.eng.ram, RamState::Lit, "le stato doit pouvoir s'allumer en suivant la procédure");
+    }
+}
+
+#[cfg(test)]
+mod descent {
+    use super::*;
+
+    fn hyper_start() -> Aircraft {
+        let mut ac = Aircraft::new_on_runway(0);
+        ac.on_ground = false;
+        ac.gear_down = false;
+        ac.gear_pos = 0.0;
+        ac.brakes = false;
+        ac.alt = 95_000.0 * FT;
+        ac.tas = 6.2 * crate::atmosphere::isa(ac.alt).a;
+        ac.theta = 3f64.to_radians();
+        ac.eng.inlet_open = false;
+        ac.skin_temp = skin_equilibrium(ac.alt, ac.tas);
+        ac.ap.on = true;
+        ac.ap.hdg_tgt = ac.hdg_deg();
+        ac.throttle = 0.0;
+        ac.speedbrake = true;
+        ac
+    }
+
+    /// Descente au pilote auto (ALT 30000) depuis Mach 6.2 / 95 000 ft, manette réduite, aérofreins sortis.
+    #[test]
+    fn descent_q_limit() {
+        let mut ac = hyper_start();
+        ac.ap.alt_tgt_ft = 30_000.0;
+        let mut qmax: f64 = 0.0;
+        for _ in 0..(1500 * 60) {
+            ac.step(1.0 / 60.0, 0.0, 0.0);
+            qmax = qmax.max(ac.d.q);
+            if ac.crashed.is_some() || (ac.d.mach < 0.95 && ac.alt / FT < 32_000.0) {
+                break;
+            }
+        }
+        println!("ALT 30000 : q max {:.0} kPa, fin M{:.2} FL{:.0}, crash {:?}", qmax / 1000.0, ac.d.mach, ac.alt / FT / 100.0, ac.crashed);
+        assert!(ac.crashed.is_none());
+        assert!(qmax < Q_LIMIT, "surpression : q max {:.0} kPa", qmax / 1000.0);
+    }
+
+    /// Instruction DESCENTE : q constant jusqu'au subsonique.
+    #[test]
+    fn descent_qhold() {
+        let mut ac = hyper_start();
+        ac.ap.vert = VertMode::QHold;
+        ac.ap.q_tgt = 50_000.0;
+        let mut qmax: f64 = 0.0;
+        let mut t = 0.0;
+        for _ in 0..(3000 * 60) {
+            ac.step(1.0 / 60.0, 0.0, 0.0);
+            t += 1.0 / 60.0;
+            qmax = qmax.max(ac.d.q);
+            if ac.crashed.is_some() || ac.ap.vert == VertMode::Alt {
+                break;
+            }
+        }
+        println!("DESCENTE : {:.0} s, q max {:.0} kPa, fin M{:.2} FL{:.0}, crash {:?}", t, qmax / 1000.0, ac.d.mach, ac.alt / FT / 100.0, ac.crashed);
+        assert!(ac.crashed.is_none() && ac.ap.vert == VertMode::Alt);
+        assert!(qmax < 0.8 * Q_LIMIT);
+    }
+
+    /// Piqué manuel à Mach 6 : la protection haute vitesse de la loi FBW évite la rupture.
+    #[test]
+    fn manual_dive_protection() {
+        let mut ac = hyper_start();
+        ac.ap.on = false;
+        let mut qmax: f64 = 0.0;
+        for _ in 0..(300 * 60) {
+            ac.step(1.0 / 60.0, -0.6, 0.0); // manche poussé en continu
+            qmax = qmax.max(ac.d.q);
+            if ac.crashed.is_some() {
+                break;
+            }
+        }
+        println!("PIQUÉ MANUEL : q max {:.0} kPa, crash {:?}", qmax / 1000.0, ac.crashed);
+        assert!(ac.crashed.is_none());
     }
 }
