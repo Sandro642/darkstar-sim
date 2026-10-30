@@ -22,6 +22,14 @@ pub enum TurbState {
     Running,
     Failed,
 }
+/// Position des interrupteurs moteur du panneau ENGINE/APU.
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub enum EngSw {
+    On,
+    Off,
+    Motor,
+}
+
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub enum RamState {
     Off,
@@ -91,6 +99,13 @@ pub struct Engines {
     pub h2_flow: f64,
     /// Portes d'entrée d'air turbine : 0 = ouvertes, 1 = fermées.
     pub doors: f64,
+    /// Turbines gauche / droite : interrupteur, état, N2, défaut FADEC.
+    pub sw: [EngSw; 2],
+    pub side: [TurbState; 2],
+    pub n2s: [f64; 2],
+    pub fadec_fault: [bool; 2],
+    pub alert_start: bool,
+    pub t_side: [f64; 2],
     /// Santé des chambres de combustion (1 = neuf, 0 = rupture).
     pub health: f64,
     pub combustor_failed: bool,
@@ -133,6 +148,10 @@ pub struct Aircraft {
     pub ovr_fbw: bool,
     /// Facteur de limitation FADEC appliqué à la manette (1 = aucune limitation).
     pub fadec_limit: f64,
+    /// Données air (pitot) remplacées par les données inertielles/GPS.
+    pub air_data_ovrd: bool,
+    /// Compensateur de lacet (-1 gauche .. +1 droite).
+    pub yaw_trim: f64,
     pub throttle: f64,
     pub gear_down: bool,
     pub gear_pos: f64,
@@ -147,6 +166,9 @@ pub struct Aircraft {
     pub landed: bool,
     pub max_mach: f64,
     pub max_alt: f64,
+    /// Accéléromètre à mémoire : facteurs de charge max/min atteints en vol.
+    pub g_max: f64,
+    pub g_min: f64,
     pub events: Vec<(Level, String)>,
     pub jolt: f64,
     pub approach: Option<(usize, f64, f64, f64, f64)>, // (aéroport, lat seuil, lon seuil, cap, élévation)
@@ -250,6 +272,8 @@ impl Aircraft {
             ovr_engine: false,
             ovr_fbw: false,
             fadec_limit: 1.0,
+            air_data_ovrd: false,
+            yaw_trim: 0.0,
             throttle: 0.0,
             gear_down: true,
             gear_pos: 1.0,
@@ -274,6 +298,12 @@ impl Aircraft {
                 ab_frac: 0.0,
                 h2_flow: 0.0,
                 doors: 0.0,
+                sw: [EngSw::Off; 2],
+                side: [TurbState::Off; 2],
+                n2s: [0.0; 2],
+                fadec_fault: [false; 2],
+                alert_start: false,
+                t_side: [0.0; 2],
                 health: 1.0,
                 combustor_failed: false,
             },
@@ -294,6 +324,8 @@ impl Aircraft {
             landed: false,
             max_mach: 0.0,
             max_alt: 0.0,
+            g_max: 1.0,
+            g_min: 1.0,
             events: Vec::new(),
             jolt: 0.0,
             approach: None,
@@ -395,32 +427,124 @@ impl Aircraft {
 
     // ---------- Commandes du pilote (procédures) ----------
 
+    /// Met les deux turbines dans un état donné (scénarios, tests).
+    pub fn set_turbines(&mut self, st: TurbState, n2: f64) {
+        let e = &mut self.eng;
+        e.side = [st; 2];
+        e.n2s = [n2; 2];
+        e.sw = [if st == TurbState::Off { EngSw::Off } else { EngSw::On }; 2];
+        e.turb = st;
+        e.n2 = n2;
+    }
+
+    fn start_refusal(&self, i: usize) -> Option<String> {
+        let e = &self.eng;
+        let n = ["L", "R"][i];
+        if e.side[i] == TurbState::Failed {
+            Some(format!("ENG {n} HS"))
+        } else if e.fadec_fault[i] {
+            Some(format!("ENG {n} : DÉFAUT FADEC (FADEC RESET)"))
+        } else if !e.inlet_open {
+            Some("ENTRÉES D'AIR FERMÉES (I)".into())
+        } else if self.d.mach > 2.5 {
+            Some("MACH > 2.5".into())
+        } else if self.fuel <= 0.0 {
+            Some("CARBURANT".into())
+        } else {
+            None
+        }
+    }
+
+    /// Bouton START : démarre les turbines dont l'interrupteur est sur ON.
+    pub fn cmd_start(&mut self) {
+        let mut started = Vec::new();
+        let mut refused = Vec::new();
+        for i in 0..2 {
+            if self.eng.sw[i] != EngSw::On || self.eng.side[i] != TurbState::Off {
+                continue;
+            }
+            match self.start_refusal(i) {
+                None => {
+                    self.eng.side[i] = TurbState::Starting;
+                    started.push(["L", "R"][i]);
+                }
+                Some(r) => refused.push(r),
+            }
+        }
+        if !started.is_empty() {
+            let mode = if self.eng.alert_start { "ALERT START" } else { "STARTER / IGN" };
+            self.msg(Level::Info, format!("ENG {} : SÉQUENCE DE DÉMARRAGE ({mode})", started.join("+")));
+        } else if let Some(r) = refused.first() {
+            self.msg(Level::Caution, format!("DÉMARRAGE REFUSÉ : {r}"));
+        } else {
+            self.msg(Level::Caution, "START : AUCUN MOTEUR SUR ON (interrupteurs L/R ENG)");
+        }
+    }
+
+    /// Bouton STOP : coupure carburant des deux turbines.
+    pub fn cmd_stop(&mut self) {
+        let mut any = false;
+        for i in 0..2 {
+            if matches!(self.eng.side[i], TurbState::Running | TurbState::Starting) {
+                self.eng.side[i] = TurbState::Off;
+                any = true;
+            }
+        }
+        if any {
+            self.msg(Level::Info, "TURBINES : COUPURE (FUEL CUTOFF)");
+        }
+    }
+
+    pub fn cmd_eng_switch(&mut self, i: usize, sw: EngSw) {
+        self.eng.sw[i] = sw;
+        let n = ["L", "R"][i];
+        let label = match sw {
+            EngSw::On => "ON",
+            EngSw::Off => "OFF",
+            EngSw::Motor => "MOTOR (VENTILATION SANS ALLUMAGE)",
+        };
+        self.msg(Level::Info, format!("ENG {n} : {label}"));
+    }
+
+    pub fn cmd_fadec_reset(&mut self, i: usize) {
+        let n = ["L", "R"][i];
+        if self.eng.fadec_fault[i] {
+            self.eng.fadec_fault[i] = false;
+            self.msg(Level::Info, format!("FADEC {n} RÉARMÉ"));
+        } else {
+            self.msg(Level::Info, format!("FADEC {n} : AUCUN DÉFAUT"));
+        }
+    }
+
+    /// Touche T / TURB START|STOP : arme les deux moteurs et démarre, ou coupe tout.
     pub fn cmd_turbine(&mut self) {
-        let m = self.d.mach;
-        match self.eng.turb {
-            TurbState::Off => {
-                if !self.eng.inlet_open {
-                    self.msg(Level::Caution, "DÉMARRAGE TURBINES REFUSÉ : ENTRÉES D'AIR FERMÉES (I)");
-                } else if m > 2.5 {
-                    self.msg(Level::Caution, "DÉMARRAGE TURBINES REFUSÉ : MACH > 2.5");
-                } else if self.fuel <= 0.0 {
-                    self.msg(Level::Caution, "DÉMARRAGE REFUSÉ : CARBURANT");
-                } else {
-                    self.eng.turb = TurbState::Starting;
-                    self.msg(Level::Info, "TURBINES : SÉQUENCE DE DÉMARRAGE (STARTER / IGN)");
+        if self.eng.side.iter().any(|s| matches!(s, TurbState::Running | TurbState::Starting)) {
+            self.cmd_stop();
+        } else if self.eng.side.iter().all(|s| *s == TurbState::Failed) {
+            self.msg(Level::Warning, "TURBINES HS — RALLUMAGE IMPOSSIBLE");
+        } else {
+            for i in 0..2 {
+                if self.eng.sw[i] != EngSw::On {
+                    self.eng.sw[i] = EngSw::On;
                 }
             }
-            TurbState::Starting | TurbState::Running => {
-                self.eng.turb = TurbState::Off;
-                self.msg(Level::Info, "TURBINES : COUPURE (FUEL CUTOFF)");
-            }
-            TurbState::Failed => self.msg(Level::Warning, "TURBINES HS — RALLUMAGE IMPOSSIBLE"),
+            self.cmd_start();
         }
+    }
+
+    /// Données anémométriques dégradées (échauffement des sondes au-delà de Mach 5.5).
+    pub fn adc_degraded(&self) -> bool {
+        self.d.mach > 5.5 && !self.air_data_ovrd
     }
 
     pub fn cmd_inlet(&mut self) {
         if self.eng.inlet_open {
-            if self.eng.turb == TurbState::Running || self.eng.turb == TurbState::Starting {
+            if self.eng.side.iter().any(|s| matches!(s, TurbState::Running | TurbState::Starting)) {
+                for st in self.eng.side.iter_mut() {
+                    if matches!(st, TurbState::Running | TurbState::Starting) {
+                        *st = TurbState::Off;
+                    }
+                }
                 self.eng.turb = TurbState::Off;
                 self.msg(Level::Caution, "FERMETURE ENTRÉES TURBINE : TURBINES COUPÉES AUTOMATIQUEMENT");
             }
@@ -695,6 +819,12 @@ impl Aircraft {
             self.theta = self.theta.clamp(self.gamma + amin, self.gamma + amax);
             self.phi = (self.phi + roll_rate * dt).clamp(-80f64.to_radians(), 80f64.to_radians());
         }
+        // Lacet : poussée dissymétrique des turbines et compensateur YAW TRIM
+        let asym = (self.eng.t_side[0] - self.eng.t_side[1]) / 240_000.0;
+        let yaw_rate = (asym * 2.5 + self.yaw_trim * 1.0).to_radians() / (1.0 + mach);
+        if self.tas > 5.0 {
+            self.psi += yaw_rate * dt;
+        }
         if self.jolt > 0.0 {
             self.jolt -= dt;
             self.phi += (self.jolt * 37.0).sin() * 0.02;
@@ -789,6 +919,10 @@ impl Aircraft {
         };
         self.max_mach = self.max_mach.max(self.d.mach);
         self.max_alt = self.max_alt.max(self.alt);
+        if !self.on_ground {
+            self.g_max = self.g_max.max(self.d.nz);
+            self.g_min = self.g_min.min(self.d.nz);
+        }
 
         // --- Contact sol / limites ---
         if !self.on_ground && self.alt <= elev {
@@ -836,7 +970,8 @@ impl Aircraft {
         let skin_c = self.skin_temp - 273.15;
         let mut lim = self.thr_max();
         if !self.ovr_engine {
-            lim = lim.min(1.0 - ((skin_c - (SKIN_LIMIT_C - 60.0)) / 60.0).clamp(0.0, 0.8));
+            // Régulation thermique : le nez est tenu vers 1100 °C, sous le seuil d'alerte capteurs (1150 °C)
+            lim = lim.min(1.0 - ((skin_c - 1060.0) / 70.0).clamp(0.0, 0.8));
             lim = lim.min(1.0 - ((q - 92_000.0) / 8_000.0).clamp(0.0, 0.8));
         }
         self.fadec_limit = lim;
@@ -851,41 +986,70 @@ impl Aircraft {
         e.doors += (dt_door - e.doors).clamp(-dt / 6.0, dt / 6.0);
         let mut ev: Vec<(Level, String)> = Vec::new();
 
-        // Turbines (2 x turboréacteurs à PC)
-        match e.turb {
-            TurbState::Starting => {
-                e.n2 += dt / 25.0 * 0.62;
-                if e.n2 >= 0.62 {
-                    e.turb = TurbState::Running;
-                    ev.push((Level::Info, "TURBINES : RALENTI STABILISÉ (IDLE) — N2 62%".into()));
+        // Turbines gauche / droite (turboréacteurs à PC)
+        let start_time = if e.alert_start { 8.0 } else { 25.0 };
+        let any_running = e.side.contains(&TurbState::Running);
+        e.ab_frac = if any_running { ((th - 0.8) / 0.2).clamp(0.0, 1.0) } else { 0.0 };
+        for i in 0..2 {
+            let n = ["L", "R"][i];
+            match e.side[i] {
+                TurbState::Starting => {
+                    e.n2s[i] += dt / start_time * 0.62;
+                    if e.sw[i] != EngSw::On {
+                        e.side[i] = TurbState::Off;
+                    } else if e.n2s[i] >= 0.62 {
+                        e.side[i] = TurbState::Running;
+                        ev.push((Level::Info, format!("ENG {n} : RALENTI STABILISÉ (IDLE) — N2 62%")));
+                    }
+                }
+                TurbState::Running => {
+                    let tgt = 0.62 + 0.38 * (th / 0.8).min(1.0);
+                    e.n2s[i] += (tgt - e.n2s[i]) * (dt / 3.0).min(1.0);
+                    if e.sw[i] == EngSw::Off {
+                        e.side[i] = TurbState::Off;
+                        ev.push((Level::Info, format!("ENG {n} : COUPURE (INTERRUPTEUR OFF)")));
+                    }
+                }
+                TurbState::Off if e.sw[i] == EngSw::Motor && e.inlet_open => {
+                    // Ventilation au démarreur, sans carburant ni allumage
+                    e.n2s[i] += (0.25 - e.n2s[i]) * (dt / 4.0).min(1.0);
+                }
+                _ => {
+                    let wm = (mach * 0.15).min(0.3);
+                    e.n2s[i] += (wm - e.n2s[i]) * (dt / 5.0).min(1.0);
                 }
             }
-            TurbState::Running => {
-                let tgt = 0.62 + 0.38 * (th / 0.8).min(1.0);
-                e.n2 += (tgt - e.n2) * (dt / 3.0).min(1.0);
+            if !has_fuel && matches!(e.side[i], TurbState::Running | TurbState::Starting) {
+                e.side[i] = TurbState::Off;
+                e.fadec_fault[i] = true;
+                ev.push((Level::Warning, format!("EXTINCTION ENG {n} — PLUS DE CARBURANT")));
             }
-            _ => {
-                let wm = (mach * 0.15).min(0.3);
-                e.n2 += (wm - e.n2) * (dt / 5.0).min(1.0);
-            }
+            e.t_side[i] = if e.side[i] == TurbState::Running && e.inlet_open {
+                let nf = ((e.n2s[i] - 0.62) / 0.38).clamp(0.0, 1.0).powf(1.5) * 0.92 + 0.08;
+                let mf = (1.0 + 0.7 * mach.min(2.6)) * ((3.3 - mach) / 0.7).clamp(0.0, 1.0);
+                120_000.0 * sigma.powf(0.75) * mf * nf * (1.0 + 0.65 * e.ab_frac) * (1.0 + 0.5 * overboost)
+            } else {
+                0.0
+            };
         }
-        if !has_fuel && matches!(e.turb, TurbState::Running | TurbState::Starting) {
-            e.turb = TurbState::Off;
-            ev.push((Level::Warning, "EXTINCTION TURBINES — PLUS DE CARBURANT".into()));
-        }
-        e.ab_frac = if e.turb == TurbState::Running { ((th - 0.8) / 0.2).clamp(0.0, 1.0) } else { 0.0 };
-        e.t_turb = if e.turb == TurbState::Running && e.inlet_open {
-            let nf = ((e.n2 - 0.62) / 0.38).clamp(0.0, 1.0).powf(1.5) * 0.92 + 0.08;
-            let mf = (1.0 + 0.7 * mach.min(2.6)) * ((3.3 - mach) / 0.7).clamp(0.0, 1.0);
-            2.0 * 120_000.0 * sigma.powf(0.75) * mf * nf * (1.0 + 0.65 * e.ab_frac) * (1.0 + 0.5 * overboost)
+        // États agrégés (affichage, procédures)
+        e.turb = if e.side.contains(&TurbState::Running) {
+            TurbState::Running
+        } else if e.side.contains(&TurbState::Starting) {
+            TurbState::Starting
+        } else if e.side.iter().all(|s| *s == TurbState::Failed) {
+            TurbState::Failed
         } else {
-            0.0
+            TurbState::Off
         };
+        e.n2 = 0.5 * (e.n2s[0] + e.n2s[1]);
+        e.t_turb = e.t_side[0] + e.t_side[1];
         let egt_tgt = if e.turb == TurbState::Running || e.turb == TurbState::Starting {
             if e.n2 < 0.2 {
                 air.t - 273.15
             } else {
-                400.0 + 450.0 * ((e.n2 - 0.6) / 0.4).max(0.0) + 150.0 * e.ab_frac + (mach - 2.8).max(0.0) * 900.0
+                // EGT régulée par le FADEC (air de refroidissement) : ~800 °C à pleine PC, sous la limite
+                380.0 + 330.0 * ((e.n2 - 0.6) / 0.4).max(0.0) + 90.0 * e.ab_frac + (mach - 2.8).max(0.0) * 900.0
             }
         } else if e.doors < 0.5 {
             // Moulinet : l'air d'impact traverse la turbine arrêtée
@@ -897,9 +1061,24 @@ impl Aircraft {
         e.egt += (egt_tgt - e.egt) * (dt / 2.0).min(1.0);
         if e.turb == TurbState::Running && mach > 3.2 {
             e.overtemp_t += dt;
-            if e.overtemp_t > if ovr { 25.0 } else { 8.0 } {
+            if !ovr && e.overtemp_t > 3.0 {
+                // Protection FADEC : coupure automatique, réarmement requis
+                for i in 0..2 {
+                    if e.side[i] == TurbState::Running {
+                        e.side[i] = TurbState::Off;
+                        e.fadec_fault[i] = true;
+                    }
+                }
+                e.turb = TurbState::Off;
+                ev.push((Level::Warning, "FADEC : COUPURE TURBINES PAR SURCHAUFFE (M>3.2) — FADEC RESET REQUIS".into()));
+            } else if ovr && e.overtemp_t > 25.0 {
+                for i in 0..2 {
+                    if e.side[i] == TurbState::Running {
+                        e.side[i] = TurbState::Failed;
+                    }
+                }
                 e.turb = TurbState::Failed;
-                ev.push((Level::Warning, "SURCHAUFFE TURBINES — MOTEURS DÉTRUITS (COUPER AVANT M3.2 !)".into()));
+                ev.push((Level::Warning, "SURCHAUFFE TURBINES SOUS OVERRIDE — MOTEURS DÉTRUITS".into()));
             }
         } else {
             e.overtemp_t = (e.overtemp_t - dt).max(0.0);
@@ -1112,8 +1291,7 @@ mod tests {
     fn autoland_and_takeoff() {
         // Décollage auto depuis Palmdale
         let mut ac = Aircraft::new_on_runway(0);
-        ac.eng.turb = TurbState::Running;
-        ac.eng.n2 = 0.62;
+        ac.set_turbines(TurbState::Running, 0.62);
         ac.engage_takeoff(12_000.0).unwrap();
         run(&mut ac, 600.0, |a| a.alt / FT > 11_500.0 && a.autotakeoff.is_none());
         assert!(ac.crashed.is_none(), "{:?}", ac.crashed);
@@ -1135,8 +1313,7 @@ mod tests {
         ac.gear_down = false;
         ac.gear_pos = 0.0;
         ac.brakes = false;
-        ac.eng.turb = TurbState::Running;
-        ac.eng.n2 = 0.9;
+        ac.set_turbines(TurbState::Running, 0.9);
         ac.throttle = 0.9;
         ac.ap.on = true;
         ac.ap.vert = VertMode::Pitch;
@@ -1185,5 +1362,37 @@ mod tests {
         println!("normal : Mach max {m_norm:.2} santé {h_norm:.2} | override : Mach max {m_ovr:.2} santé {h_ovr:.2}");
         assert!(m_ovr > m_norm + 0.1);
         assert!(h_norm == 1.0 && h_ovr < 1.0);
+    }
+
+    #[test]
+    fn engine_panel_procedures() {
+        let dt = 1.0 / 120.0;
+        // Démarrage du seul moteur gauche (interrupteur L ON, START) en ALERT START
+        let mut ac = Aircraft::new_on_runway(0);
+        ac.eng.alert_start = true;
+        ac.cmd_eng_switch(0, EngSw::On);
+        ac.cmd_start();
+        for _ in 0..(10 * 120) {
+            ac.step(dt, 0.0, 0.0);
+        }
+        assert_eq!(ac.eng.side, [TurbState::Running, TurbState::Off], "ALERT START : 8 s");
+        // Moteur droit en MOTOR : ventilation sans allumage
+        ac.cmd_eng_switch(1, EngSw::Motor);
+        for _ in 0..(10 * 120) {
+            ac.step(dt, 0.0, 0.0);
+        }
+        assert!(ac.eng.n2s[1] > 0.2 && ac.eng.side[1] == TurbState::Off);
+        // Surchauffe M>3.2 sans override : coupure FADEC et défaut à réarmer
+        let mut ac = Aircraft::new_on_runway(0);
+        ac.on_ground = false;
+        ac.alt = 70_000.0 * FT;
+        ac.tas = 3.4 * crate::atmosphere::isa(ac.alt).a;
+        ac.set_turbines(TurbState::Running, 0.9);
+        for _ in 0..(5 * 120) {
+            ac.step(dt, 0.0, 0.0);
+        }
+        assert!(ac.eng.fadec_fault[0] && ac.eng.side[0] == TurbState::Off, "coupure FADEC attendue");
+        ac.cmd_fadec_reset(0);
+        assert!(!ac.eng.fadec_fault[0]);
     }
 }

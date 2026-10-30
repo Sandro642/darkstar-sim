@@ -8,6 +8,7 @@ mod autoflight;
 mod gcs;
 mod geo;
 mod map;
+mod menu;
 mod mfd;
 mod mission;
 mod panels;
@@ -69,6 +70,9 @@ struct Game {
     thermal: thermal::ThermalSys,
     style: svs::SvsStyle,
     tab: gcs::Tab,
+    menu_open: bool,
+    bit_timer: f64,
+    bit_fail: Option<bool>,
     mfd: mfd::MfdState,
     cmd_hist: Vec<String>,
     hist_pos: usize,
@@ -97,8 +101,7 @@ impl Game {
                 ac.theta = ac.gamma + 8f64.to_radians();
                 ac.on_ground = false;
                 ac.brakes = false;
-                ac.eng.turb = TurbState::Running;
-                ac.eng.n2 = 0.75;
+                ac.set_turbines(TurbState::Running, 0.75);
                 ac.throttle = 0.35;
                 ac.fuel = 8_000.0;
                 ac.h2 = 600.0;
@@ -163,6 +166,9 @@ impl Game {
             thermal: thermal::ThermalSys::new(),
             style: svs::SvsStyle::Darkstar,
             tab: gcs::Tab::Moteurs,
+            menu_open: false,
+            bit_timer: 0.0,
+            bit_fail: None,
             mfd: mfd::MfdState::new(),
             cmd_hist: Vec::new(),
             hist_pos: 0,
@@ -182,6 +188,100 @@ impl Game {
         let max_warp = if ac.on_ground || ac.d.agl < 1500.0 { 2.0 } else { 32.0 };
         let w = WARPS[self.warp_idx];
         (w.min(max_warp), w > max_warp)
+    }
+
+    /// Défauts relevés par le test intégré (BIT).
+    fn bit_faults(&self) -> Vec<String> {
+        let ac = &self.ac;
+        let mut f = Vec::new();
+        for i in 0..2 {
+            let n = ["L", "R"][i];
+            if ac.eng.side[i] == TurbState::Failed {
+                f.push(format!("ENG {n} HS"));
+            }
+            if ac.eng.fadec_fault[i] {
+                f.push(format!("FADEC {n} EN DÉFAUT"));
+            }
+        }
+        if ac.eng.combustor_failed {
+            f.push("CHAMBRE DE COMBUSTION DÉTRUITE".into());
+        } else if ac.eng.health < 0.3 {
+            f.push(format!("CHAMBRES DÉGRADÉES {:.0}%", ac.eng.health * 100.0));
+        }
+        for s in self.thermal.sensors.iter().filter(|s| s.failed) {
+            f.push(format!("CAPTEUR {} CIRCUIT OUVERT", s.id));
+        }
+        if ac.adc_degraded() {
+            f.push("DONNÉES AIR DÉGRADÉES (AIR DATA OVRD)".into());
+        }
+        f
+    }
+
+    fn start_bit(&mut self) {
+        if self.bit_timer > 0.0 {
+            return;
+        }
+        self.bit_timer = 6.0;
+        self.bit_fail = None;
+        self.push(Level::Info, "INITIATE BIT : TEST INTÉGRÉ EN COURS (FCS, FADEC, CAPTEURS, ADC)");
+    }
+
+    fn update_bit(&mut self, real_dt: f64) {
+        if self.bit_timer <= 0.0 {
+            return;
+        }
+        self.bit_timer -= real_dt;
+        if self.bit_timer <= 0.0 {
+            let faults = self.bit_faults();
+            self.bit_fail = Some(!faults.is_empty());
+            if faults.is_empty() {
+                self.push(Level::Info, "BIT OK — AUCUN DÉFAUT");
+            } else {
+                self.push(Level::Caution, format!("BIT FAIL — {} DÉFAUT(S)", faults.len()));
+                for f in faults {
+                    self.push(Level::Caution, format!("  BIT : {f}"));
+                }
+            }
+        }
+    }
+
+    fn system_reset(&mut self) {
+        let ac = &mut self.ac;
+        if ac.ovr_fbw {
+            ac.cmd_override_fbw(false);
+        }
+        ac.yaw_trim = 0.0;
+        ac.g_max = ac.d.nz.max(1.0);
+        ac.g_min = ac.d.nz.min(1.0);
+        if ac.eng.scram == ScramState::Unstart {
+            ac.eng.scram = ScramState::Armed;
+        }
+        self.bit_fail = None;
+        self.acked.clear();
+        self.push(Level::Info, "SYSTEM RESET : CALCULATEURS DE VOL RÉINITIALISÉS (LOI NORMALE, TRIM CENTRÉ, MÉMOIRE G)");
+    }
+
+    fn apply_menu(&mut self, a: menu::MenuAction) {
+        use menu::MenuAction::*;
+        match a {
+            EngSwitch(i, sw) => self.ac.cmd_eng_switch(i, sw),
+            FadecReset(i) => self.ac.cmd_fadec_reset(i),
+            Start => self.ac.cmd_start(),
+            Stop => self.ac.cmd_stop(),
+            AlertStart(on) => {
+                self.ac.eng.alert_start = on;
+                self.push(Level::Info, if on { "ALERT START ENABLE : DÉMARRAGE RAPIDE (8 s)" } else { "ALERT START : OFF (DÉMARRAGE NORMAL 25 s)" });
+            }
+            AirDataOvrd(on) => {
+                self.ac.air_data_ovrd = on;
+                self.push(Level::Info, if on { "AIR DATA OVRD : DONNÉES INERTIELLES / GPS" } else { "AIR DATA OVRD OFF : SONDES ANÉMOMÉTRIQUES" });
+            }
+            Bit => self.start_bit(),
+            SystemReset => self.system_reset(),
+            YawTrim(v) => self.ac.yaw_trim = v,
+            Close => self.menu_open = false,
+        }
+        self.cues.push(audio::Cue::Ack);
     }
 
     fn apply_switch(&mut self, sw: gcs::Switch) {
@@ -294,6 +394,17 @@ impl Game {
         }
         if ac.ovr_fbw {
             a.push((Level::Caution, "FBW OVRD".to_string()));
+        }
+        for i in 0..2 {
+            if ac.eng.fadec_fault[i] {
+                a.push((Level::Caution, format!("FADEC FAULT {}", ["L", "R"][i])));
+            }
+        }
+        if ac.adc_degraded() {
+            a.push((Level::Caution, "AIR DATA".to_string()));
+        }
+        if self.bit_fail == Some(true) {
+            a.push((Level::Caution, "BIT FAIL".to_string()));
         }
         if ac.fuel_dump {
             a.push((Level::Caution, "FUEL DUMP".to_string()));
@@ -471,6 +582,12 @@ impl Game {
                 self.tab = tab;
             }
         }
+        if is_key_pressed(KeyCode::Key9) {
+            self.menu_open = !self.menu_open;
+        }
+        if is_key_pressed(KeyCode::Escape) {
+            self.menu_open = false;
+        }
         if is_key_pressed(KeyCode::J) {
             self.muted = !self.muted;
         }
@@ -565,6 +682,7 @@ impl Game {
             self.push(Level::Info, m);
         }
         self.atc_flavor();
+        self.update_bit(real_dt);
     }
 
     /// Interprète une instruction texte de la station sol (FR ou EN).
@@ -738,6 +856,80 @@ impl Game {
                 }
                 reply = Ok("SCRAM".into());
             }
+            "G" | "GMAX" => {
+                ac.g_max = ac.d.nz.max(1.0);
+                ac.g_min = ac.d.nz.min(1.0);
+                reply = Ok("MÉMOIRE G MAX / MIN REMISE À ZÉRO".into());
+            }
+            "MENU" => {
+                self.menu_open = !self.menu_open;
+                reply = Ok("MENU CONSOLE".into());
+            }
+            "START" => {
+                ac.cmd_start();
+                reply = Ok("START".into());
+            }
+            "STOP" => {
+                ac.cmd_stop();
+                reply = Ok("STOP".into());
+            }
+            "ENG" | "MOTEUR" => {
+                let i = match arg(1) {
+                    "L" | "G" | "GAUCHE" => Some(0),
+                    "R" | "D" | "DROIT" => Some(1),
+                    _ => None,
+                };
+                let sw = match arg(2) {
+                    "ON" => Some(EngSw::On),
+                    "OFF" => Some(EngSw::Off),
+                    "MOTOR" => Some(EngSw::Motor),
+                    _ => None,
+                };
+                match (i, sw) {
+                    (Some(i), Some(sw)) => {
+                        ac.cmd_eng_switch(i, sw);
+                        reply = Ok(format!("ENG {} {}", arg(1), arg(2)));
+                    }
+                    _ => reply = Err("USAGE : ENG L ON|OFF|MOTOR".into()),
+                }
+            }
+            "FADEC" => {
+                match arg(2) {
+                    "L" | "G" => ac.cmd_fadec_reset(0),
+                    "R" | "D" => ac.cmd_fadec_reset(1),
+                    _ => {
+                        ac.cmd_fadec_reset(0);
+                        ac.cmd_fadec_reset(1);
+                    }
+                }
+                reply = Ok("FADEC RESET".into());
+            }
+            "ALERT" => {
+                ac.eng.alert_start = !w.contains(&"OFF");
+                reply = Ok(format!("ALERT START {}", if ac.eng.alert_start { "ON" } else { "OFF" }));
+            }
+            "AIR" | "AIRDATA" => {
+                ac.air_data_ovrd = !w.contains(&"OFF");
+                reply = Ok(format!("AIR DATA OVRD {}", if ac.air_data_ovrd { "ON (INS)" } else { "OFF (PITOT)" }));
+            }
+            "BIT" => {
+                self.start_bit();
+                reply = Ok("INITIATE BIT".into());
+            }
+            "SYSTEM" | "RESET" => {
+                self.system_reset();
+                reply = Ok("SYSTEM RESET".into());
+            }
+            "YAW" | "TRIM" => {
+                let v = if w[0] == "YAW" { num(2) } else { num(1) };
+                match v {
+                    Some(t) => {
+                        ac.yaw_trim = (t / 10.0).clamp(-1.0, 1.0);
+                        reply = Ok(format!("YAW TRIM {:+.1}", ac.yaw_trim * 10.0));
+                    }
+                    None => reply = Err("USAGE : YAW TRIM -2.5  (-10 gauche .. +10 droite)".into()),
+                }
+            }
             "OVERRIDE" | "OVRD" => {
                 let on = !matches!(arg(2), "OFF") && !matches!(arg(1), "OFF");
                 match arg(1) {
@@ -839,6 +1031,8 @@ impl Game {
                     "TURB START/STOP | INLET OPEN/CLOSE | RAM ARM/IGN/OFF | SCRAM ENABLE/IGN/OFF",
                     "H2 DUMP [OFF] | FUEL DUMP [OFF] | OVERRIDE MOTEUR/FBW ON/OFF | OVERRIDE OFF",
                     "CAMERA ZOOM 4 | CAMERA ELEV -10 | HSI 80 (portée NM)",
+                    "MENU | START | STOP | ENG L ON/OFF/MOTOR | FADEC RESET [L|R] | ALERT START ON/OFF",
+                    "AIR DATA OVRD ON/OFF | BIT | SYSTEM RESET | YAW TRIM -2.5 | G RESET (mémoire G max)",
                     "TRAIN UP/DOWN | FREINS ON/OFF | AP ON/OFF | MANUEL | WARP 8",
                 ] {
                     self.log.push((self.sim_time, Level::Info, l.into()));
@@ -916,6 +1110,7 @@ async fn main() {
             _ => gcs::Tab::Moteurs,
         };
     }
+    g.menu_open = std::env::var("DARKSTAR_MENU").is_ok();
     let mut show_help = scenario.is_empty();
     let mut map_full = false;
     let mut frame = 0u64;
@@ -1004,6 +1199,10 @@ async fn main() {
             // Écran principal Darkstar
             let mfd_w = (body.w * 0.56).floor();
             let mfd_r = Rect::new(body.x, body.y, mfd_w, body.h);
+            let menu_w = 520.0f32.min(mfd_w - 30.0);
+            let menu_h = 660.0f32.min(body.h - 30.0);
+            let menu_r = Rect::new(mfd_r.x + (mfd_w - menu_w) / 2.0, body.y + 15.0, menu_w, menu_h);
+            ui::set_click_block(if g.menu_open { Some(menu_r) } else { None });
             let info = pfd::PfdInfo { alerts: &alerts, ra: g.traffic.ra, link_name: ln, latency_ms: lat, dest: g.dest, warp: warp_eff, time };
             let (_, act) = mfd::draw_mfd(&world, &g.ac, &g.traffic, mfd_r, &mut g.mfd, &info, g.style, time);
             if act.fuel_dump {
@@ -1011,6 +1210,14 @@ async fn main() {
             }
             let svs_r = mfd::layout(mfd_r).1.svs;
             draw_console(&g, svs_r);
+            // Bouton MENU du PFD
+            let menu_btn = Rect::new(svs_r.x + 6.0, svs_r.y + svs_r.h + 7.0, 70.0, 18.0);
+            if g.menu_open {
+                draw_rectangle_lines(menu_btn.x - 1.0, menu_btn.y - 1.0, menu_btn.w + 2.0, menu_btn.h + 2.0, 2.0, ui::ACCENT);
+            }
+            if ui::clicked(menu_btn) {
+                g.menu_open = !g.menu_open;
+            }
 
             // Colonne de droite : carte, onglets, messages
             let rx = mfd_r.x + mfd_r.w + 8.0;
@@ -1039,6 +1246,13 @@ async fn main() {
             }
             let my = cr.y + cr.h + 6.0;
             panels::draw_messages(&g.log, Rect::new(rx, my, rw, body.y + body.h - my));
+            ui::set_click_block(None);
+            if g.menu_open {
+                let bit = menu::BitState { running: g.bit_timer > 0.0, fail: g.bit_fail };
+                if let Some(a) = menu::draw_menu(&g.ac, &bit, menu_r, time) {
+                    g.apply_menu(a);
+                }
+            }
         }
         let top = gcs::draw_topbar(
             bar,

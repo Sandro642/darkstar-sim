@@ -103,6 +103,7 @@ impl ThermalSys {
         let avion = self.reading("TC-601");
         let ram_w = self.reading("TC-301");
         let scram_w = self.reading("TC-401");
+        let th = ac.throttle.min(ac.fadec_limit);
 
         for s in &mut self.sensors {
             let target = match s.kind {
@@ -116,7 +117,7 @@ impl ThermalSys {
                     }
                     t
                 }
-                Kind::Inlet => oat + rise * 0.95 + if e.scram == ScramState::Lit { 40.0 } else { 0.0 },
+                Kind::Inlet => oat + rise * 0.93 + if e.scram == ScramState::Lit { 30.0 } else { 0.0 },
                 Kind::Cit => {
                     // Portes fermées : la sonde CIT ne voit plus que l'air de la cavité
                     oat + (stag - oat) * (1.0 - e.doors * 0.94)
@@ -130,31 +131,38 @@ impl ThermalSys {
                 }
                 Kind::Oil => {
                     if e.turb == TurbState::Running {
-                        60.0 + 70.0 * e.n2 + stag.max(0.0) * 0.15
+                        // Huile refroidie par échangeur carburant
+                        60.0 + 55.0 * e.n2 + stag.max(0.0) * 0.08
                     } else {
                         oat.max(avion - 10.0)
                     }
                 }
                 Kind::RamWall => {
                     if e.ram == RamState::Lit {
-                        600.0 + 700.0 * ac.throttle
+                        600.0 + 650.0 * th
+                    } else if e.scram == ScramState::Lit {
+                        // Conduit commun dual-mode, refroidi avec la chambre scram
+                        scram_w * 0.75
                     } else {
-                        oat + (stag - oat) * 0.6
+                        oat + (stag - oat).min(rise) * 0.5
                     }
                 }
                 Kind::ScramWall => {
                     if e.scram == ScramState::Lit {
-                        900.0 + 650.0 * ac.throttle - 15.0 * e.fuel_flow
+                        // Refroidissement régénératif par l'hydrogène liquide
+                        850.0 + 600.0 * th + 900.0 * (th - 1.0).max(0.0) - 55.0 * e.h2_flow
                     } else {
                         oat + (stag - oat).min(rise) * 0.6
                     }
                 }
-                Kind::Nozzle => ram_w.max(scram_w) * 0.6 + rise * 0.3 + e.egt.max(0.0) * 0.15,
+                Kind::Nozzle => ram_w.max(scram_w) * 0.45 + rise * 0.25 + e.egt.max(0.0) * 0.08,
                 Kind::FuelTank => 20.0 + (skin_avg - 20.0).max(0.0) * 0.25 * (1.0 - fuel_frac * 0.6),
-                Kind::FuelInj => tank + 15.0 * e.fuel_flow + if e.scram == ScramState::Lit { 200.0 } else { 0.0 },
+                // Carburant après l'échangeur : échauffé par la cellule, pas par le débit (puits de chaleur)
+                Kind::FuelInj => tank + 30.0 + rise * 0.12 + if e.ram == RamState::Lit || e.scram == ScramState::Lit { 40.0 } else { 0.0 },
                 Kind::Avionics => 25.0 + (tank - 20.0).max(0.0) * 0.35,
                 Kind::Hydraulic => 40.0 + rise * 0.12,
-                Kind::GearBay => oat + rise * 0.35,
+                // Baie isolée et refroidie par la boucle carburant (pneus)
+                Kind::GearBay => oat + rise * 0.15,
                 Kind::Brakes => oat.max(15.0),
                 Kind::Battery => 25.0 + (avion - 25.0).max(0.0) * 0.4,
             };
@@ -343,5 +351,66 @@ pub fn draw_thermal(th: &ThermalSys, r: Rect, time: f64) {
             let _ = n;
         }
         y += row_h;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::geo::FT;
+
+    /// À 100 % de manette, aucun capteur ne doit dépasser son seuil d'alerte (refroidissement nominal).
+    #[test]
+    fn full_throttle_no_overtemp() {
+        let cases: [(&str, f64, f64); 4] = [("sol PC", 0.0, 0.0), ("turbine M2.2", 50_000.0, 2.2), ("stato M4", 75_000.0, 4.0), ("scram M9", 105_000.0, 9.0)];
+        for (name, alt_ft, mach) in cases {
+            let mut ac = Aircraft::new_on_runway(0);
+            let mut th = ThermalSys::new();
+            if mach > 0.0 {
+                ac.on_ground = false;
+                ac.brakes = false;
+                ac.gear_down = false;
+                ac.gear_pos = 0.0;
+                ac.alt = alt_ft * FT;
+                ac.tas = mach * crate::atmosphere::isa(ac.alt).a;
+                ac.theta = 3f64.to_radians();
+                ac.ap.on = true;
+                ac.ap.alt_tgt_ft = alt_ft;
+                ac.ap.hdg_tgt = ac.hdg_deg();
+                ac.ap.at_on = true;
+                ac.ap.mach_tgt = mach;
+                ac.skin_temp = skin_equilibrium(ac.alt, ac.tas);
+            }
+            match name {
+                "sol PC" | "turbine M2.2" => ac.set_turbines(TurbState::Running, 1.0),
+                "stato M4" => {
+                    ac.eng.inlet_open = false;
+                    ac.eng.ram = RamState::Lit;
+                }
+                _ => {
+                    ac.eng.inlet_open = false;
+                    ac.eng.scram = ScramState::Lit;
+                }
+            }
+            ac.throttle = 1.0;
+            let dt = 1.0 / 60.0;
+            for _ in 0..(600 * 60) {
+                if mach == 0.0 {
+                    // Point fixe moteur : avion calé
+                    ac.throttle = 1.0;
+                    ac.tas = 0.0;
+                } else {
+                    ac.ap.at_on = false;
+                    ac.throttle = 1.0;
+                }
+                ac.step(dt, 0.0, 0.0);
+                th.update(dt, &ac);
+            }
+            let hot: Vec<String> = th.sensors.iter().filter(|s| !s.failed && s.truth > s.caution).map(|s| format!("{} {:.0}/{:.0}", s.name, s.truth, s.caution)).collect();
+            let peak = th.sensors.iter().map(|s| (s.truth / s.caution, s.name)).fold((0.0, ""), |a, b| if b.0 > a.0 { b } else { a });
+            println!("{name}: M{:.2} crash={:?} — capteur le plus proche du seuil : {} {:.0}%", ac.d.mach, ac.crashed, peak.1, peak.0 * 100.0);
+            assert!(ac.crashed.is_none(), "{name}: {:?}", ac.crashed);
+            assert!(hot.is_empty(), "{name}: surchauffe {:?}", hot);
+        }
     }
 }

@@ -13,9 +13,9 @@ fn f_of(c: f64) -> f64 {
 }
 
 /// Nacelle moteur façon écran Darkstar : portes, GEN, RPM, EGT et température d'entrée (°F).
-fn nacelle(r: Rect, side: &str, ac: &Aircraft, egt_off: f64, time: f64) {
+fn nacelle(r: Rect, side: &str, ac: &Aircraft, i: usize, egt_off: f64, time: f64) {
     let e = &ac.eng;
-    let running = e.turb == TurbState::Running;
+    let running = e.side[i] == TurbState::Running;
     let (x, y, w, h) = (r.x, r.y, r.w, r.h);
     let cy = y + h * 0.55;
     txt("FWD", x + 4.0, y + 12.0, 12.0, DIM);
@@ -48,13 +48,13 @@ fn nacelle(r: Rect, side: &str, ac: &Aircraft, egt_off: f64, time: f64) {
     txt("DOORS", x + 4.0, cy + h * 0.30, 11.0, DIM);
     txt(&format!("{:02.0}°", door_deg), x + 8.0, cy + h * 0.30 + 14.0, 15.0, WHITE);
     // GEN + RPM
-    let gen_on = running && e.n2 > 0.55;
+    let gen_on = running && e.n2s[i] > 0.55;
     let bx = x + w * 0.36;
     draw_rectangle(bx, cy - 9.0, 58.0, 18.0, Color::new(0.20, 0.12, 0.05, 1.0));
     draw_rectangle_lines(bx, cy - 9.0, 58.0, 18.0, 1.0, if gen_on { AMBER } else { DIM });
     txt_c(if gen_on { "GEN ON" } else { "GEN OFF" }, bx + 29.0, cy + 5.0, 12.0, if gen_on { AMBER } else { DIM });
     txt("RPM", bx + 64.0, cy - 2.0, 10.0, DIM);
-    let rpm = e.n2 * 104.0;
+    let rpm = e.n2s[i] * 104.0;
     let rc = if rpm > 106.0 { RED } else if rpm > 102.0 { AMBER } else { WHITE };
     txt(&format!("{rpm:.0}%"), bx + 64.0, cy + 11.0, 15.0, rc);
     // Flamme de post-combustion
@@ -94,16 +94,18 @@ pub fn draw_engines(ac: &Aircraft, r: Rect, time: f64) {
     // Nacelles gauche / droite
     let top = r.y + 30.0;
     let nh = ((r.h - 140.0) / 2.0).clamp(60.0, 110.0);
-    let tstate = match e.turb {
-        TurbState::Off => "OFF",
-        TurbState::Starting => "START",
-        TurbState::Running => "RUN",
-        TurbState::Failed => "FAIL",
-    };
     for (i, (side, off)) in [("ENG L", 8.0), ("ENG R", -6.0)].iter().enumerate() {
+        let tstate = match e.side[i] {
+            TurbState::Off if e.fadec_fault[i] => "FADEC FAULT",
+            TurbState::Off if e.sw[i] == EngSw::Motor => "MOTOR",
+            TurbState::Off => "OFF",
+            TurbState::Starting => "START",
+            TurbState::Running => "RUN",
+            TurbState::Failed => "FAIL",
+        };
         let nr = Rect::new(x, top + i as f32 * (nh + 6.0), w * 0.66, nh);
         rrect(nr, 6.0, Color::new(0.035, 0.04, 0.05, 1.0));
-        nacelle(nr, &format!("{side}  {tstate}"), ac, *off, time + i as f64 * 0.37);
+        nacelle(nr, &format!("{side}  {tstate}"), ac, i, *off, time + i as f64 * 0.37);
     }
 
     // Colonne droite : poussée, stato, scram
@@ -332,6 +334,7 @@ pub fn draw_help(r: Rect) {
         ("  AP actif : fleches = consignes alt (ou assiette)/cap, R/F = vitesse", DIM),
         ("X  reprise en main manuelle (fleches = manche, R/F = manette)", AMBER),
         ("4-8 onglets MOTEURS / THERMIQUE / ESSAIS / DOMAINE / OVERRIDE", WHITE),
+        ("9 ou bouton MENU du PFD : console ENGINE/APU + FLT CNTRL", WHITE),
         ("V carte plein ecran  C recentrer  H palette SVS  E temps (ou clic TEMPS)", WHITE),
         ("ESPACE acquitter  J son  MAJ+ENTREE nouvel essai  TAB aide", WHITE),
         ("", WHITE),

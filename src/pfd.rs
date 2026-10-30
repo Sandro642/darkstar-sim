@@ -63,8 +63,8 @@ pub fn draw_pfd(ac: &Aircraft, v: &View, r: Rect, info: &PfdInfo) {
     draw_rectangle_lines(s.x - 1.0, s.y - 1.0, s.w + 2.0, s.h + 2.0, 1.0, Color::new(0.45, 0.47, 0.5, 1.0));
 
     draw_svs_overlay(ac, v, info);
-    draw_speed(ac, r, s);
-    draw_g_bracket(ac.d.nz, r, s);
+    draw_speed(ac, r, s, info.time);
+    draw_g_bracket(ac, r, s);
     draw_altitude(ac, r, s);
     draw_vsi(ac.d.vs, r, s);
     draw_heading(ac, s, info);
@@ -335,12 +335,21 @@ fn draw_header(ac: &Aircraft, r: Rect, s: Rect, info: &PfdInfo) {
     }
 }
 
-fn draw_speed(ac: &Aircraft, r: Rect, s: Rect) {
+/// Erreur des données air quand les sondes sont dégradées (Mach > 5.5 sans AIR DATA OVRD).
+fn adc_noise(ac: &Aircraft, time: f64) -> f64 {
+    if !ac.adc_degraded() {
+        return 0.0;
+    }
+    let k = (ac.d.mach - 5.5).min(4.0);
+    k * (8.0 * (time * 7.3).sin() + 5.0 * (time * 17.1).sin() + 3.0 * (time * 31.7).cos())
+}
+
+fn draw_speed(ac: &Aircraft, r: Rect, s: Rect, time: f64) {
     let d = &ac.d;
     let lx = s.x - 18.0;
     let cy = s.y + s.h / 2.0;
     let ppk = s.h / 150.0;
-    let spd = d.keas as f32;
+    let spd = (d.keas + adc_noise(ac, time)).max(0.0) as f32;
     scissor(Some(Rect::new(r.x, s.y - 4.0, s.x - r.x, s.h + 8.0)));
     draw_line(lx, s.y, lx, s.y + s.h, 1.5, LINE);
     let base = (spd / 10.0).floor() as i32 * 10;
@@ -396,7 +405,13 @@ fn draw_speed(ac: &Aircraft, r: Rect, s: Rect) {
     let a = d.alpha.to_degrees();
     let ac_col = if a > 7.0 && ac.eng.scram == ScramState::Lit { AMBER } else { LABEL };
     txt(&format!("a {a:+.1}°"), r.x + 14.0, y, 16.0, ac_col);
-    txt("EAS", lx - 34.0, y, 15.0, LABEL);
+    if ac.adc_degraded() {
+        draw_rectangle(lx - 42.0, y - 14.0, 40.0, 18.0, Color::new(0.0, 0.0, 0.0, 0.8));
+        draw_rectangle_lines(lx - 42.0, y - 14.0, 40.0, 18.0, 1.0, AMBER);
+        txt_c("ADC", lx - 22.0, y, 14.0, AMBER);
+    } else {
+        txt(if ac.air_data_ovrd { "INS" } else { "EAS" }, lx - 34.0, y, 15.0, if ac.air_data_ovrd { CYAN_S } else { LABEL });
+    }
     let qcol = if d.q > Q_LIMIT { RED } else if d.q > 90_000.0 { AMBER } else { LABEL };
     txt(&format!("q {:.0} kPa", d.q / 1000.0), r.x + 14.0, y + 18.0, 14.0, qcol);
     let skin = ac.skin_temp - 273.15;
@@ -408,7 +423,8 @@ fn draw_speed(ac: &Aircraft, r: Rect, s: Rect) {
     txt_c("MENU", mx + 35.0, y + 1.0, 14.0, LABEL);
 }
 
-fn draw_g_bracket(nz: f64, r: Rect, s: Rect) {
+fn draw_g_bracket(ac: &Aircraft, r: Rect, s: Rect) {
+    let nz = ac.d.nz;
     let x = r.x + 16.0;
     let top = s.y + s.h * 0.22;
     let bot = s.y + s.h * 0.72;
@@ -419,9 +435,20 @@ fn draw_g_bracket(nz: f64, r: Rect, s: Rect) {
         draw_line(x, y, x + 6.0, y, 1.5, LINE);
         txt(&format!("{:+.1}G", g), x + 8.0, y + 5.0, 14.0, LABEL);
     }
+    // Mémoires G max / G min atteints (repères ambre)
+    for g in [ac.g_max, ac.g_min] {
+        if (g - 1.0).abs() > 0.05 {
+            let y = gy(g.clamp(-2.6, 3.6) as f32);
+            draw_line(x - 9.0, y, x + 4.0, y, 2.5, AMBER);
+        }
+    }
     let gc = if !(-0.5..=2.5).contains(&nz) { AMBER } else { GREEN_S };
     let y = gy(nz.clamp(-2.6, 3.6) as f32);
     draw_triangle(vec2(x, y), vec2(x - 8.0, y - 5.0), vec2(x - 8.0, y + 5.0), gc);
+    let mc = if ac.g_max > 3.0 || ac.g_min < -1.0 { AMBER } else { LABEL };
+    txt(&format!("MAX {:+.1}G", ac.g_max), x - 6.0, bot + 24.0, 13.0, mc);
+    txt(&format!("MIN {:+.1}G", ac.g_min), x - 6.0, bot + 40.0, 13.0, mc);
+    txt(&format!("G {:+.2}", nz), x - 6.0, top - 14.0, 13.0, gc);
 }
 
 fn draw_altitude(ac: &Aircraft, r: Rect, s: Rect) {

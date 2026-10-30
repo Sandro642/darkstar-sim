@@ -111,9 +111,20 @@ pub fn panel(r: Rect, title: &str) {
     }
 }
 
-/// Bouton : vrai si cliqué cette image.
+thread_local! {
+    static CLICK_BLOCK: std::cell::Cell<Option<Rect>> = const { std::cell::Cell::new(None) };
+}
+
+/// Zone (fenêtre ouverte par-dessus) dans laquelle les clics ne traversent pas vers les widgets dessous.
+pub fn set_click_block(r: Option<Rect>) {
+    CLICK_BLOCK.with(|c| c.set(r));
+}
+
+/// Bouton : vrai si cliqué cette image (hors zone bloquée par une fenêtre ouverte).
 pub fn clicked(r: Rect) -> bool {
-    is_mouse_button_pressed(MouseButton::Left) && r.contains(mouse_position().into())
+    let m: Vec2 = mouse_position().into();
+    let blocked = CLICK_BLOCK.with(|c| c.get()).is_some_and(|b| b.contains(m));
+    is_mouse_button_pressed(MouseButton::Left) && r.contains(m) && !blocked
 }
 
 pub fn hovered(r: Rect) -> bool {
@@ -140,41 +151,6 @@ pub fn arc(cx: f32, cy: f32, r: f32, a0: f32, a1: f32, th: f32, c: Color) {
         draw_line(prev.x, prev.y, p.x, p.y, th, c);
         prev = p;
     }
-}
-
-/// Jauge circulaire style EICAS (210° d'ouverture).
-pub fn dial(cx: f32, cy: f32, r: f32, v: f32, vmin: f32, vmax: f32, caution: f32, warn: f32, label: &str, value: &str) {
-    let a0 = std::f32::consts::PI * 0.75;
-    let span = std::f32::consts::PI * 1.25;
-    let frac = |x: f32| ((x - vmin) / (vmax - vmin)).clamp(0.0, 1.0);
-    arc(cx, cy, r, a0, a0 + span * frac(caution), 2.0, WHITE);
-    arc(cx, cy, r, a0 + span * frac(caution), a0 + span * frac(warn), 2.5, AMBER);
-    arc(cx, cy, r, a0 + span * frac(warn), a0 + span, 2.5, RED);
-    let a = a0 + span * frac(v);
-    let col = if v >= warn { RED } else if v >= caution { AMBER } else { WHITE };
-    // secteur rempli
-    let n = 24;
-    for i in 0..n {
-        let t0 = a0 + (a - a0) * i as f32 / n as f32;
-        let t1 = a0 + (a - a0) * (i + 1) as f32 / n as f32;
-        draw_triangle(
-            vec2(cx, cy),
-            vec2(cx + r * 0.95 * t0.cos(), cy + r * 0.95 * t0.sin()),
-            vec2(cx + r * 0.95 * t1.cos(), cy + r * 0.95 * t1.sin()),
-            Color::new(col.r * 0.35, col.g * 0.35, col.b * 0.35, 0.6),
-        );
-    }
-    draw_line(cx, cy, cx + r * a.cos(), cy + r * a.sin(), 2.5, col);
-    draw_rectangle_lines(cx + 2.0, cy - 14.0, r + 6.0, 18.0, 1.0, DIM);
-    txt_r(value, cx + r + 6.0, cy, 16.0, col);
-    txt_c(label, cx, cy + r * 0.75 + 4.0, 14.0, DIM);
-}
-
-/// Barre verticale de progression.
-pub fn vbar(x: f32, y: f32, w: f32, h: f32, frac: f32, c: Color) {
-    draw_rectangle_lines(x, y, w, h, 1.0, DIM);
-    let f = frac.clamp(0.0, 1.0);
-    draw_rectangle(x + 1.0, y + h - h * f, w - 2.0, h * f, c);
 }
 
 pub fn wrap_text(s: &str, size: f32, max_w: f32) -> Vec<String> {

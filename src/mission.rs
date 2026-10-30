@@ -20,7 +20,7 @@ pub const STEPS: &[Step] = &[
     Step { title: "TP-03  MONTÉE SUBSONIQUE", text: "Monter au FL350 et accélérer à M0.90. Stabiliser 10 s.", hold: 10.0 },
     Step { title: "TP-04  PASSAGE SUPERSONIQUE", text: "PC plein. Accélérer à M2.0 au-dessus du FL450 (montée en 'zoom' déconseillée : garder q < 100 kPa).", hold: 3.0 },
     Step { title: "TP-05  ALLUMAGE STATORÉACTEUR", text: "Armer le stato (Y) à M>=2.0. Allumer (Y) à M>=2.5, au-dessus du FL400, q entre 15 et 95 kPa. Mode DUAL.", hold: 0.0 },
-    Step { title: "TP-06  TRANSFERT DE POUSSÉE", text: "Couper les turbines (T) puis fermer les entrées d'air turbine (I) AVANT M3.2 (sinon surchauffe et destruction).", hold: 0.0 },
+    Step { title: "TP-06  TRANSFERT DE POUSSÉE", text: "Couper les turbines (T) puis fermer les entrées d'air turbine (I) AVANT M3.2 (sinon coupure FADEC par surchauffe, ou destruction sous override).", hold: 0.0 },
     Step { title: "TP-07  ACCÉLÉRATION STATO", text: "Accélérer à M4.5 au-dessus de 80 000 ft. Surveiller q et la température de peau.", hold: 5.0 },
     Step { title: "TP-08  TRANSITION SCRAMJET", text: "Armer le scram (U) à M>=4.0. Allumer (U) à M>=4.8, q 25-90 kPa, AoA 0-7°. Le stato s'éteint : mode SCRAM.", hold: 0.0 },
     Step { title: "TP-09  CROISIÈRE HYPERSONIQUE", text: "Tenir M6.0+ entre 90 000 et 110 000 ft pendant 60 s. AoA < 7° sinon UNSTART. Pilote auto conseillé (P, O).", hold: 60.0 },

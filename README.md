@@ -80,3 +80,17 @@ Données carte : Natural Earth (domaine public).
   (peau / pression dynamique) inhibé. Les chambres s'usent en surrégime ; à 0 % : rupture, stato/scram perdus.
 - `OVERRIDE FBW ON` : protections d'incidence et de facteur de charge inhibées (unstart, rupture possibles).
 - `OVERRIDE OFF` réarme tout. `FUEL DUMP` / `H2 DUMP` : vidanges d'urgence.
+
+## Menu console (v1.2) — bouton MENU du PFD, touche 9 ou instruction `MENU`
+- **ENGINE/APU** : interrupteurs L ENG / R ENG (ON / OFF / MOTOR), boutons FADEC RESET (allumés en cas de
+  défaut), START (STBY / RDY), STOP (RUN / OFF), ALERT START ENABLE (démarrage rapide 8 s).
+  Turbines gauche et droite indépendantes ; un seul moteur = poussée dissymétrique (lacet) à compenser au YAW TRIM.
+  En surchauffe (M>3.2) le FADEC coupe les turbines (FADEC RESET requis) ; sous ENGINE OVERRIDE elles sont détruites.
+- **FLT CNTRL** : AIR DATA OVRD (au-delà de Mach 5.5 les sondes se dégradent : vitesse bruitée, drapeau ADC ;
+  l'override passe en données inertielles INS), INITIATE BIT (test intégré, ON puis FAIL/OK), SYSTEM RESET
+  (loi normale, trim centré, mémoire G), bouton YAW TRIM (clic gauche/droite ou molette).
+- Instructions équivalentes : `START`, `STOP`, `ENG L ON|OFF|MOTOR`, `FADEC RESET [L|R]`, `ALERT START ON|OFF`,
+  `AIR DATA OVRD ON|OFF`, `BIT`, `SYSTEM RESET`, `YAW TRIM -2.5`, `G RESET`.
+- PFD : mémoire G MAX / G MIN atteints (repères ambre sur le crochet de G).
+- Refroidissement : à 100 % de manette aucun capteur ne dépasse son seuil (EGT régulée ~800 °C,
+  refroidissement régénératif H2 du scramjet, régulation thermique FADEC du nez vers 1100 °C).
