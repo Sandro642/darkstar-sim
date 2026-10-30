@@ -20,7 +20,6 @@ pub enum MenuAction {
     Bit,
     SystemReset,
     YawTrim(f64),
-    Close,
 }
 
 pub struct BitState {
@@ -99,19 +98,13 @@ fn lit_square(r: Rect, lit: bool, time: f64) -> bool {
 pub fn draw_menu(ac: &Aircraft, bit: &BitState, r: Rect, time: f64) -> Option<MenuAction> {
     let mut out = None;
     let e = &ac.eng;
-    // Fond et cadre
-    rrect(r, 10.0, Color::new(0.02, 0.025, 0.025, 0.97));
-    rrect_lines(r, 10.0, 1.5, Color::new(0.3, 0.33, 0.32, 1.0));
-    txt("MENU - CONSOLE MOTEURS / COMMANDES DE VOL", r.x + 16.0, r.y + 22.0, 15.0, WHITE);
-    let close = Rect::new(r.x + r.w - 34.0, r.y + 8.0, 24.0, 22.0);
-    rrect(close, 4.0, Color::new(0.15, 0.16, 0.17, 1.0));
-    txt_c("X", close.x + 12.0, close.y + 16.0, 15.0, WHITE);
-    if clicked(close) {
-        out = Some(MenuAction::Close);
-    }
+    panel(r, "CONSOLE - ENGINE/APU  /  FLT CNTRL");
+    // Deux platines côte à côte (onglet de la colonne de droite)
+    let inner_w = r.w - 30.0;
+    let ph = r.h - 40.0;
 
     // --- Platine ENGINE/APU ---
-    let p1 = Rect::new(r.x + 12.0, r.y + 36.0, r.w - 24.0, (r.h - 60.0) * 0.56);
+    let p1 = Rect::new(r.x + 10.0, r.y + 30.0, (inner_w * 0.56).floor(), ph);
     plate(p1, "ENGINE/APU");
     let x0 = p1.x + 50.0;
     let w = p1.w - 70.0;
@@ -144,7 +137,7 @@ pub fn draw_menu(ac: &Aircraft, bit: &BitState, r: Rect, time: f64) -> Option<Me
     txt_c("MOTOR", col(0.5), y_sw + 26.0, 12.0, LEGEND);
 
     // FADEC RESET (un bouton lumineux par moteur)
-    let y_fr = p1.y + p1.h * 0.47;
+    let y_fr = p1.y + p1.h * 0.38;
     let sq = 40.0;
     for (i, f) in [(0usize, 0.24f32), (1, 0.76)] {
         if lit_square(Rect::new(col(f) - sq / 2.0, y_fr, sq, sq), e.fadec_fault[i], time) {
@@ -155,7 +148,7 @@ pub fn draw_menu(ac: &Aircraft, bit: &BitState, r: Rect, time: f64) -> Option<Me
     txt_c("RESET", col(0.5), y_fr + 32.0, 13.0, LEGEND);
 
     // START / STOP / ALERT START ENABLE
-    let y_ss = p1.y + p1.h * 0.76;
+    let y_ss = p1.y + p1.h * 0.70;
     let bw = 62.0;
     let bh = 44.0;
     txt_c("START", col(0.18), y_ss - 8.0, 13.0, LEGEND);
@@ -180,7 +173,7 @@ pub fn draw_menu(ac: &Aircraft, bit: &BitState, r: Rect, time: f64) -> Option<Me
     txt_c(if e.alert_start { "ON" } else { "OFF" }, col(0.83), y_ss + 64.0, 13.0, LEGEND);
 
     // --- Platine FLT CNTRL ---
-    let p2 = Rect::new(r.x + 12.0, p1.y + p1.h + 10.0, r.w - 24.0, r.y + r.h - 12.0 - (p1.y + p1.h + 10.0));
+    let p2 = Rect::new(p1.x + p1.w + 10.0, p1.y, inner_w - p1.w, ph);
     plate(p2, "FLT CNTRL");
     let x0 = p2.x + 50.0;
     let w = p2.w - 70.0;

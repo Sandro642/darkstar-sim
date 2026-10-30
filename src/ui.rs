@@ -111,20 +111,9 @@ pub fn panel(r: Rect, title: &str) {
     }
 }
 
-thread_local! {
-    static CLICK_BLOCK: std::cell::Cell<Option<Rect>> = const { std::cell::Cell::new(None) };
-}
-
-/// Zone (fenêtre ouverte par-dessus) dans laquelle les clics ne traversent pas vers les widgets dessous.
-pub fn set_click_block(r: Option<Rect>) {
-    CLICK_BLOCK.with(|c| c.set(r));
-}
-
-/// Bouton : vrai si cliqué cette image (hors zone bloquée par une fenêtre ouverte).
+/// Bouton : vrai si cliqué cette image.
 pub fn clicked(r: Rect) -> bool {
-    let m: Vec2 = mouse_position().into();
-    let blocked = CLICK_BLOCK.with(|c| c.get()).is_some_and(|b| b.contains(m));
-    is_mouse_button_pressed(MouseButton::Left) && r.contains(m) && !blocked
+    is_mouse_button_pressed(MouseButton::Left) && r.contains(mouse_position().into())
 }
 
 pub fn hovered(r: Rect) -> bool {

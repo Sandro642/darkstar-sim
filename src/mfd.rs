@@ -1,27 +1,24 @@
-//! Écran principal Darkstar : PFD en haut, volets carburant / caméra / HSI en bas.
+//! Écran principal Darkstar : PFD en haut, volets carburant et HSI en bas.
 
 use crate::aircraft::*;
 use crate::airports::AIRPORTS;
 use crate::geo::*;
 use crate::pfd::{self, PfdInfo};
-use crate::svs::{self, CamView, SvsStyle, View};
+use crate::svs::{self, SvsStyle, View};
 use crate::traffic::{Tcas, TrafficSys};
 use crate::ui::*;
 use crate::world::World;
 use macroquad::prelude::*;
 
-pub const CAM_ZOOMS: [f32; 4] = [1.0, 2.0, 4.0, 10.0];
 pub const HSI_RANGES: [f64; 7] = [10.0, 20.0, 40.0, 80.0, 160.0, 320.0, 640.0];
 
 pub struct MfdState {
-    pub cam_zoom: usize,
-    pub cam_elev: f64, // degrés
     pub hsi_range: usize,
 }
 
 impl MfdState {
     pub fn new() -> Self {
-        MfdState { cam_zoom: 1, cam_elev: -4.0, hsi_range: 2 }
+        MfdState { hsi_range: 2 }
     }
 }
 
@@ -44,17 +41,14 @@ fn bezel(r: Rect) -> Rect {
     d
 }
 
-pub fn layout(r: Rect) -> (Rect, Layout, [Rect; 3]) {
+pub fn layout(r: Rect) -> (Rect, Layout, [Rect; 2]) {
     let d = Rect::new(r.x + 12.0, r.y + 12.0, r.w - 24.0, r.h - 24.0);
     let pfd_r = Rect::new(d.x + 6.0, d.y + 6.0, d.w - 12.0, (d.h * 0.58).floor());
     let y0 = pfd_r.y + pfd_r.h + 8.0;
     let h = d.y + d.h - 6.0 - y0;
-    let w = (d.w - 12.0 - 12.0) / 3.0;
-    let panes = [
-        Rect::new(d.x + 6.0, y0, w, h),
-        Rect::new(d.x + 12.0 + w, y0, w, h),
-        Rect::new(d.x + 18.0 + 2.0 * w, y0, w, h),
-    ];
+    let w = d.w - 12.0 - 6.0;
+    let wf = (w * 0.44).floor();
+    let panes = [Rect::new(d.x + 6.0, y0, wf, h), Rect::new(d.x + 12.0 + wf, y0, w - wf, h)];
     (d, Layout { pfd: pfd_r, svs: pfd::svs_rect(pfd_r) }, panes)
 }
 
@@ -62,12 +56,11 @@ pub fn layout(r: Rect) -> (Rect, Layout, [Rect; 3]) {
 pub fn draw_mfd(world: &World, ac: &Aircraft, traffic: &TrafficSys, r: Rect, st: &mut MfdState, info: &PfdInfo, style: SvsStyle, time: f64) -> (View, MfdActions) {
     bezel(r);
     let (_, lay, panes) = layout(r);
-    let view = svs::draw_svs(world, ac, traffic, lay.svs, time, style, None);
+    let view = svs::draw_svs(world, ac, traffic, lay.svs, time, style);
     pfd::draw_pfd(ac, &view, lay.pfd, info);
     let mut act = MfdActions::default();
     act.fuel_dump = draw_fuel(ac, panes[0]);
-    draw_camera(world, ac, traffic, panes[1], st, style, time);
-    draw_hsi(ac, traffic, panes[2], st, info.dest);
+    draw_hsi(ac, traffic, panes[1], st, info.dest);
     (view, act)
 }
 
@@ -173,61 +166,6 @@ fn draw_fuel(ac: &Aircraft, r: Rect) -> bool {
     clicked(b)
 }
 
-/// Volet caméra : SVS stabilisé (cap, élévation) avec zoom, coordonnées en bas.
-fn draw_camera(world: &World, ac: &Aircraft, traffic: &TrafficSys, r: Rect, st: &mut MfdState, style: SvsStyle, time: f64) {
-    pane_frame(r);
-    let zoom = CAM_ZOOMS[st.cam_zoom];
-    txt_c(&format!("Camera Zoom {:.0}x  Elevation {:+.0}", zoom, st.cam_elev), r.x + r.w / 2.0, r.y + 17.0, 13.0, WHITE);
-    let img = Rect::new(r.x + 8.0, r.y + 24.0, r.w - 44.0, r.h - 50.0);
-    let cam = CamView { hdg: ac.psi, pitch: st.cam_elev.to_radians(), fovy: svs::FOVY_DEG / zoom };
-    if ac.crashed.is_some() {
-        txt_c("Camera unavailable", img.x + img.w / 2.0, img.y + img.h / 2.0, 18.0, WHITE);
-    } else {
-        let v = svs::draw_svs(world, ac, traffic, img, time, style, Some(cam));
-        let (cx, cy) = (img.x + img.w / 2.0, img.y + img.h / 2.0);
-        let c = Color::new(1.0, 1.0, 1.0, 0.8);
-        for (dx, dy) in [(-1.0f32, 0.0f32), (1.0, 0.0), (0.0, -1.0), (0.0, 1.0)] {
-            draw_line(cx + dx * 8.0, cy + dy * 8.0, cx + dx * 22.0, cy + dy * 22.0, 1.5, c);
-        }
-        let _ = v;
-    }
-    draw_rectangle_lines(img.x, img.y, img.w, img.h, 1.0, Color::new(0.4, 0.42, 0.45, 1.0));
-    // Boutons zoom (flèches) à droite
-    let bx = r.x + r.w - 30.0;
-    let up = Rect::new(bx, r.y + 30.0, 22.0, 22.0);
-    let dn = Rect::new(bx, r.y + 78.0, 22.0, 22.0);
-    let grey = Color::new(0.55, 0.57, 0.6, 1.0);
-    draw_triangle(vec2(up.x + 11.0, up.y + 2.0), vec2(up.x + 1.0, up.y + 20.0), vec2(up.x + 21.0, up.y + 20.0), grey);
-    draw_triangle(vec2(dn.x + 11.0, dn.y + 20.0), vec2(dn.x + 1.0, dn.y + 2.0), vec2(dn.x + 21.0, dn.y + 2.0), grey);
-    txt_c(&format!("1/{:.0}", zoom), bx + 11.0, r.y + 70.0, 11.0, WHITE);
-    if clicked(up) {
-        st.cam_zoom = (st.cam_zoom + 1).min(CAM_ZOOMS.len() - 1);
-    }
-    if clicked(dn) {
-        st.cam_zoom = st.cam_zoom.saturating_sub(1);
-    }
-    // Élévation : flèches basses
-    let eu = Rect::new(bx, r.y + r.h - 82.0, 22.0, 20.0);
-    let ed = Rect::new(bx, r.y + r.h - 56.0, 22.0, 20.0);
-    draw_triangle(vec2(eu.x + 11.0, eu.y + 2.0), vec2(eu.x + 3.0, eu.y + 18.0), vec2(eu.x + 19.0, eu.y + 18.0), grey);
-    draw_triangle(vec2(ed.x + 11.0, ed.y + 18.0), vec2(ed.x + 3.0, ed.y + 2.0), vec2(ed.x + 19.0, ed.y + 2.0), grey);
-    if clicked(eu) {
-        st.cam_elev = (st.cam_elev + 2.0).min(20.0);
-    }
-    if clicked(ed) {
-        st.cam_elev = (st.cam_elev - 2.0).max(-60.0);
-    }
-    // Coordonnées
-    let dms = |v: f64, pos: char, neg: char| {
-        let a = v.abs();
-        let d = a.floor();
-        let m = ((a - d) * 60.0).floor();
-        let s = ((a - d) * 60.0 - m) * 60.0;
-        format!("{d:.0}°{m:02.0}'{s:05.2}\" {}", if v >= 0.0 { pos } else { neg })
-    };
-    txt_c(&format!("{} / {}", dms(ac.lat, 'N', 'S'), dms(ac.lon, 'E', 'W')), r.x + r.w / 2.0, r.y + r.h - 8.0, 13.0, WHITE);
-}
-
 /// Volet HSI : rose des caps tournante, route magenta, cercles de distance, aérodromes et trafic.
 fn draw_hsi(ac: &Aircraft, traffic: &TrafficSys, r: Rect, st: &mut MfdState, dest: usize) {
     pane_frame(r);
@@ -251,8 +189,8 @@ fn draw_hsi(ac: &Aircraft, traffic: &TrafficSys, r: Rect, st: &mut MfdState, des
     }
 
     let cx = r.x + r.w / 2.0;
-    let cy = r.y + r.h * 0.60;
-    let rad = (r.w * 0.44).min(r.h * 0.48);
+    let rad = (r.w * 0.40).min(r.h * 0.40);
+    let cy = r.y + 40.0 + rad + 14.0;
     scissor(Some(Rect::new(r.x + 2.0, r.y + 26.0, r.w - 4.0, r.h - 28.0)));
     // Rose des caps
     let white = Color::new(0.92, 0.94, 0.95, 1.0);
@@ -330,4 +268,13 @@ fn draw_hsi(ac: &Aircraft, traffic: &TrafficSys, r: Rect, st: &mut MfdState, des
     draw_rectangle(cx - 2.0, cy + 6.0, 4.0, 5.0, y);
     scissor(None);
     txt_r(&format!("{} {:.0}NM", apt.icao, dist / NM), r.x + r.w - 8.0, r.y + r.h - 8.0, 12.0, MAGENTA_S);
+    let dms = |v: f64, pos: char, neg: char| {
+        let a = v.abs();
+        let d = a.floor();
+        let m = ((a - d) * 60.0).floor();
+        let s = ((a - d) * 60.0 - m) * 60.0;
+        format!("{d:.0}{}{m:02.0}'{s:04.1}\"", if v >= 0.0 { pos } else { neg })
+    };
+    txt(&dms(ac.lat, 'N', 'S'), r.x + 10.0, r.y + r.h - 24.0, 12.0, WHITE);
+    txt(&dms(ac.lon, 'E', 'W'), r.x + 10.0, r.y + r.h - 8.0, 12.0, WHITE);
 }

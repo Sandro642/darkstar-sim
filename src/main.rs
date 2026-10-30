@@ -70,7 +70,6 @@ struct Game {
     thermal: thermal::ThermalSys,
     style: svs::SvsStyle,
     tab: gcs::Tab,
-    menu_open: bool,
     bit_timer: f64,
     bit_fail: Option<bool>,
     mfd: mfd::MfdState,
@@ -166,7 +165,6 @@ impl Game {
             thermal: thermal::ThermalSys::new(),
             style: svs::SvsStyle::Darkstar,
             tab: gcs::Tab::Moteurs,
-            menu_open: false,
             bit_timer: 0.0,
             bit_fail: None,
             mfd: mfd::MfdState::new(),
@@ -279,7 +277,6 @@ impl Game {
             Bit => self.start_bit(),
             SystemReset => self.system_reset(),
             YawTrim(v) => self.ac.yaw_trim = v,
-            Close => self.menu_open = false,
         }
         self.cues.push(audio::Cue::Ack);
     }
@@ -577,16 +574,10 @@ impl Game {
         if is_key_pressed(KeyCode::C) {
             self.map.follow = true;
         }
-        for (k, tab) in [(KeyCode::Key4, gcs::Tab::Moteurs), (KeyCode::Key5, gcs::Tab::Thermique), (KeyCode::Key6, gcs::Tab::Essais), (KeyCode::Key7, gcs::Tab::Domaine), (KeyCode::Key8, gcs::Tab::Override)] {
+        for (k, tab) in [(KeyCode::Key4, gcs::Tab::Moteurs), (KeyCode::Key5, gcs::Tab::Thermique), (KeyCode::Key6, gcs::Tab::Essais), (KeyCode::Key7, gcs::Tab::Domaine), (KeyCode::Key8, gcs::Tab::Override), (KeyCode::Key9, gcs::Tab::Console)] {
             if is_key_pressed(k) {
                 self.tab = tab;
             }
-        }
-        if is_key_pressed(KeyCode::Key9) {
-            self.menu_open = !self.menu_open;
-        }
-        if is_key_pressed(KeyCode::Escape) {
-            self.menu_open = false;
         }
         if is_key_pressed(KeyCode::J) {
             self.muted = !self.muted;
@@ -861,9 +852,9 @@ impl Game {
                 ac.g_min = ac.d.nz.min(1.0);
                 reply = Ok("MÉMOIRE G MAX / MIN REMISE À ZÉRO".into());
             }
-            "MENU" => {
-                self.menu_open = !self.menu_open;
-                reply = Ok("MENU CONSOLE".into());
+            "MENU" | "CONSOLE" => {
+                self.tab = gcs::Tab::Console;
+                reply = Ok("CONSOLE MOTEURS / COMMANDES DE VOL".into());
             }
             "START" => {
                 ac.cmd_start();
@@ -957,14 +948,6 @@ impl Game {
                 }
                 reply = Ok(format!("JP-7 {:.1} T", ac.fuel / 1000.0));
             }
-            "CAMERA" | "CAM" => {
-                match (arg(1), num(2)) {
-                    ("ZOOM", Some(z)) => self.mfd.cam_zoom = mfd::CAM_ZOOMS.iter().position(|&v| v as f64 >= z).unwrap_or(mfd::CAM_ZOOMS.len() - 1),
-                    ("ELEV" | "ELEVATION", Some(e)) => self.mfd.cam_elev = e.clamp(-60.0, 20.0),
-                    _ => {}
-                }
-                reply = Ok(format!("CAMERA ZOOM {:.0}X ELEV {:+.0}", mfd::CAM_ZOOMS[self.mfd.cam_zoom], self.mfd.cam_elev));
-            }
             "HSI" | "RANGE" => {
                 let v = if w[0] == "HSI" { num(2).or(num(1)) } else { num(1) };
                 if let Some(rng) = v {
@@ -1030,7 +1013,7 @@ impl Game {
                     "DIRECT KEDW | ATTERRIR [KEDW] (autoland) | DECOLLAGE [15000]",
                     "TURB START/STOP | INLET OPEN/CLOSE | RAM ARM/IGN/OFF | SCRAM ENABLE/IGN/OFF",
                     "H2 DUMP [OFF] | FUEL DUMP [OFF] | OVERRIDE MOTEUR/FBW ON/OFF | OVERRIDE OFF",
-                    "CAMERA ZOOM 4 | CAMERA ELEV -10 | HSI 80 (portée NM)",
+                    "HSI 80 (portée NM)",
                     "MENU | START | STOP | ENG L ON/OFF/MOTOR | FADEC RESET [L|R] | ALERT START ON/OFF",
                     "AIR DATA OVRD ON/OFF | BIT | SYSTEM RESET | YAW TRIM -2.5 | G RESET (mémoire G max)",
                     "TRAIN UP/DOWN | FREINS ON/OFF | AP ON/OFF | MANUEL | WARP 8",
@@ -1107,10 +1090,10 @@ async fn main() {
             "6" => gcs::Tab::Essais,
             "7" => gcs::Tab::Domaine,
             "8" => gcs::Tab::Override,
+            "9" => gcs::Tab::Console,
             _ => gcs::Tab::Moteurs,
         };
     }
-    g.menu_open = std::env::var("DARKSTAR_MENU").is_ok();
     let mut show_help = scenario.is_empty();
     let mut map_full = false;
     let mut frame = 0u64;
@@ -1199,10 +1182,6 @@ async fn main() {
             // Écran principal Darkstar
             let mfd_w = (body.w * 0.56).floor();
             let mfd_r = Rect::new(body.x, body.y, mfd_w, body.h);
-            let menu_w = 520.0f32.min(mfd_w - 30.0);
-            let menu_h = 660.0f32.min(body.h - 30.0);
-            let menu_r = Rect::new(mfd_r.x + (mfd_w - menu_w) / 2.0, body.y + 15.0, menu_w, menu_h);
-            ui::set_click_block(if g.menu_open { Some(menu_r) } else { None });
             let info = pfd::PfdInfo { alerts: &alerts, ra: g.traffic.ra, link_name: ln, latency_ms: lat, dest: g.dest, warp: warp_eff, time };
             let (_, act) = mfd::draw_mfd(&world, &g.ac, &g.traffic, mfd_r, &mut g.mfd, &info, g.style, time);
             if act.fuel_dump {
@@ -1210,13 +1189,13 @@ async fn main() {
             }
             let svs_r = mfd::layout(mfd_r).1.svs;
             draw_console(&g, svs_r);
-            // Bouton MENU du PFD
+            // Bouton MENU du PFD : ouvre l'onglet CONSOLE
             let menu_btn = Rect::new(svs_r.x + 6.0, svs_r.y + svs_r.h + 7.0, 70.0, 18.0);
-            if g.menu_open {
+            if g.tab == gcs::Tab::Console {
                 draw_rectangle_lines(menu_btn.x - 1.0, menu_btn.y - 1.0, menu_btn.w + 2.0, menu_btn.h + 2.0, 2.0, ui::ACCENT);
             }
             if ui::clicked(menu_btn) {
-                g.menu_open = !g.menu_open;
+                g.tab = gcs::Tab::Console;
             }
 
             // Colonne de droite : carte, onglets, messages
@@ -1243,16 +1222,16 @@ async fn main() {
                         g.apply_switch(sw);
                     }
                 }
+                gcs::Tab::Console => {
+                    let bit = menu::BitState { running: g.bit_timer > 0.0, fail: g.bit_fail };
+                    if let Some(a) = menu::draw_menu(&g.ac, &bit, cr, time) {
+                        g.apply_menu(a);
+                    }
+                }
             }
             let my = cr.y + cr.h + 6.0;
             panels::draw_messages(&g.log, Rect::new(rx, my, rw, body.y + body.h - my));
-            ui::set_click_block(None);
-            if g.menu_open {
-                let bit = menu::BitState { running: g.bit_timer > 0.0, fail: g.bit_fail };
-                if let Some(a) = menu::draw_menu(&g.ac, &bit, menu_r, time) {
-                    g.apply_menu(a);
-                }
-            }
+
         }
         let top = gcs::draw_topbar(
             bar,

@@ -91,14 +91,16 @@ pub enum Tab {
     Essais,
     Domaine,
     Override,
+    Console,
 }
 
-pub const TABS: [(Tab, &str); 5] = [
+pub const TABS: [(Tab, &str); 6] = [
     (Tab::Moteurs, "MOTEURS"),
     (Tab::Thermique, "THERMIQUE"),
     (Tab::Essais, "ESSAIS"),
     (Tab::Domaine, "DOMAINE"),
     (Tab::Override, "OVERRIDE"),
+    (Tab::Console, "CONSOLE"),
 ];
 
 /// Barre d'onglets ; renvoie l'onglet cliqué.

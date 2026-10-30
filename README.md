@@ -71,9 +71,9 @@ Données carte : Natural Earth (domaine public).
 ## Interface (v1.1)
 - Barre de statut : temps simulé, chrono d'essai, **TEMPS x1..x32** (clic pour changer), liaison, WARNING/CAUTION (clic = acquitter), son, aide.
 - Écran Darkstar : PFD (tambours de vitesse/altitude, collines à l'horizon), volet carburant (débit PPH,
-  pressions pompes 1-4, réservoirs, CG, bouton DUMP), volet caméra (zoom 1x-10x, élévation), volet HSI
+  pressions pompes 1-4, réservoirs, CG, bouton DUMP), volet HSI
   (rose des caps, route magenta, portée 10-640 NM, trafic TCAS).
-- À droite : carte monde, onglets 4 MOTEURS / 5 THERMIQUE / 6 ESSAIS / 7 DOMAINE / 8 OVERRIDE, messages.
+- À droite : carte monde, onglets 4 MOTEURS / 5 THERMIQUE / 6 ESSAIS / 7 DOMAINE / 8 OVERRIDE / 9 CONSOLE, messages.
 
 ## Overrides
 - `OVERRIDE MOTEUR ON` (ou interrupteur ENGINE OVERRIDE) : manette jusqu'à 120 %, limiteur FADEC
@@ -81,7 +81,7 @@ Données carte : Natural Earth (domaine public).
 - `OVERRIDE FBW ON` : protections d'incidence et de facteur de charge inhibées (unstart, rupture possibles).
 - `OVERRIDE OFF` réarme tout. `FUEL DUMP` / `H2 DUMP` : vidanges d'urgence.
 
-## Menu console (v1.2) — bouton MENU du PFD, touche 9 ou instruction `MENU`
+## Onglet CONSOLE (v1.2.1) — 9e onglet à droite, bouton MENU du PFD, touche 9 ou instruction `MENU`
 - **ENGINE/APU** : interrupteurs L ENG / R ENG (ON / OFF / MOTOR), boutons FADEC RESET (allumés en cas de
   défaut), START (STBY / RDY), STOP (RUN / OFF), ALERT START ENABLE (démarrage rapide 8 s).
   Turbines gauche et droite indépendantes ; un seul moteur = poussée dissymétrique (lacet) à compenser au YAW TRIM.

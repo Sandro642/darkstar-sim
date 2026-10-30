@@ -72,14 +72,6 @@ pub fn basis(ac: &Aircraft) -> (Vec3, Vec3, Vec3) {
     (fwd, up, right)
 }
 
-/// Caméra indépendante de l'assiette (volet caméra) : cap, élévation (rad) et champ vertical (deg).
-#[derive(Clone, Copy)]
-pub struct CamView {
-    pub hdg: f64,
-    pub pitch: f64,
-    pub fovy: f32,
-}
-
 fn hash2(ix: i64, iy: i64) -> f64 {
     let mut h = (ix as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15) ^ (iy as u64).wrapping_mul(0xC2B2_AE3D_27D4_EB4F);
     h ^= h >> 31;
@@ -242,20 +234,11 @@ pub struct Lights {
     pub pts: Vec<(Vec3, Color, f32)>,
 }
 
-pub fn draw_svs(world: &World, ac: &Aircraft, traffic: &TrafficSys, rect: Rect, time: f64, style: SvsStyle, cam: Option<CamView>) -> View {
+pub fn draw_svs(world: &World, ac: &Aircraft, traffic: &TrafficSys, rect: Rect, time: f64, style: SvsStyle) -> View {
     let dark = style == SvsStyle::Darkstar;
     let dpi = screen_dpi_scale();
-    let (fwd, up, fovy) = match cam {
-        Some(c) => {
-            let f = dir(c.hdg, c.pitch);
-            let r0 = vec3(c.hdg.cos() as f32, 0.0, c.hdg.sin() as f32);
-            (f, r0.cross(f).normalize(), c.fovy)
-        }
-        None => {
-            let (f, u, _) = basis(ac);
-            (f, u, FOVY_DEG)
-        }
-    };
+    let (fwd, up, _) = basis(ac);
+    let fovy = FOVY_DEG;
     let proj = Mat4::perspective_rh_gl(fovy.to_radians(), rect.w / rect.h, 1.0, 5.0e6);
     let view = Mat4::look_at_rh(Vec3::ZERO, fwd, up);
     let mat = proj * view;
