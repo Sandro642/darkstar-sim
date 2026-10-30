@@ -5,8 +5,10 @@ mod airports;
 mod atmosphere;
 mod audio;
 mod autoflight;
+mod gcs;
 mod geo;
 mod map;
+mod mfd;
 mod mission;
 mod panels;
 mod pfd;
@@ -66,6 +68,8 @@ struct Game {
     muted: bool,
     thermal: thermal::ThermalSys,
     style: svs::SvsStyle,
+    tab: gcs::Tab,
+    mfd: mfd::MfdState,
     cmd_hist: Vec<String>,
     hist_pos: usize,
 }
@@ -158,6 +162,8 @@ impl Game {
             muted: false,
             thermal: thermal::ThermalSys::new(),
             style: svs::SvsStyle::Darkstar,
+            tab: gcs::Tab::Moteurs,
+            mfd: mfd::MfdState::new(),
             cmd_hist: Vec::new(),
             hist_pos: 0,
         }
@@ -168,6 +174,45 @@ impl Game {
         if self.log.len() > 300 {
             self.log.remove(0);
         }
+    }
+
+    /// Accélération du temps effective (plafonnée près du sol) et indicateur de plafonnement.
+    fn effective_warp(&self) -> (f64, bool) {
+        let ac = &self.ac;
+        let max_warp = if ac.on_ground || ac.d.agl < 1500.0 { 2.0 } else { 32.0 };
+        let w = WARPS[self.warp_idx];
+        (w.min(max_warp), w > max_warp)
+    }
+
+    fn apply_switch(&mut self, sw: gcs::Switch) {
+        let ac = &mut self.ac;
+        match sw {
+            gcs::Switch::ScramEnable => {
+                if ac.eng.scram == ScramState::Off {
+                    ac.cmd_scram();
+                } else {
+                    ac.eng.scram = ScramState::Off;
+                    ac.msg(Level::Info, "SCRAM ENABLE OFF — SCRAMJET COUPÉ");
+                }
+            }
+            gcs::Switch::EngineOverride => {
+                let on = !ac.ovr_engine;
+                ac.cmd_override_engine(on);
+            }
+            gcs::Switch::FbwOverride => {
+                let on = !ac.ovr_fbw;
+                ac.cmd_override_fbw(on);
+            }
+            gcs::Switch::H2Dump => {
+                let on = !ac.h2_dump;
+                ac.cmd_h2_dump(on);
+            }
+            gcs::Switch::FuelDump => {
+                let on = !ac.fuel_dump;
+                ac.cmd_fuel_dump(on);
+            }
+        }
+        self.cues.push(audio::Cue::Ack);
     }
 
     fn link(&self) -> (&'static str, f64) {
@@ -236,6 +281,22 @@ impl Game {
         }
         if !ac.on_ground && ac.d.thrust < 1.0 && ac.d.mach > 0.3 {
             a.push((Level::Caution, "NO THRUST".to_string()));
+        }
+        if ac.eng.combustor_failed {
+            a.push((Level::Warning, "COMBUSTOR FAIL".to_string()));
+        } else if ac.eng.health < 0.3 {
+            a.push((Level::Caution, "ENGINE DEGRADED".to_string()));
+        }
+        if ac.ovr_engine {
+            a.push((Level::Caution, "ENG OVRD".to_string()));
+        } else if ac.fadec_limit < 0.995 {
+            a.push((Level::Caution, "FADEC LIMIT".to_string()));
+        }
+        if ac.ovr_fbw {
+            a.push((Level::Caution, "FBW OVRD".to_string()));
+        }
+        if ac.fuel_dump {
+            a.push((Level::Caution, "FUEL DUMP".to_string()));
         }
         a.extend(self.thermal.alerts());
         a
@@ -315,7 +376,7 @@ impl Game {
             }
         } else {
             if is_key_down(KeyCode::R) {
-                ac.throttle = (ac.throttle + 0.35 * real_dt).min(1.0);
+                ac.throttle = (ac.throttle + 0.35 * real_dt).min(ac.thr_max());
             }
             if is_key_down(KeyCode::F) {
                 ac.throttle = (ac.throttle - 0.35 * real_dt).max(0.0);
@@ -405,6 +466,11 @@ impl Game {
         if is_key_pressed(KeyCode::C) {
             self.map.follow = true;
         }
+        for (k, tab) in [(KeyCode::Key4, gcs::Tab::Moteurs), (KeyCode::Key5, gcs::Tab::Thermique), (KeyCode::Key6, gcs::Tab::Essais), (KeyCode::Key7, gcs::Tab::Domaine), (KeyCode::Key8, gcs::Tab::Override)] {
+            if is_key_pressed(k) {
+                self.tab = tab;
+            }
+        }
         if is_key_pressed(KeyCode::J) {
             self.muted = !self.muted;
         }
@@ -418,9 +484,7 @@ impl Game {
 
     fn update(&mut self, real_dt: f64) {
         // Limitation de l'accélération du temps près du sol
-        let ac = &self.ac;
-        let max_warp = if ac.on_ground || ac.d.agl < 1500.0 { 2.0 } else { 32.0 };
-        let warp = WARPS[self.warp_idx].min(max_warp);
+        let (warp, _) = self.effective_warp();
 
         // Latence de la liaison de données sur les commandes de vol
         let (_, lat_ms) = self.link();
@@ -674,6 +738,48 @@ impl Game {
                 }
                 reply = Ok("SCRAM".into());
             }
+            "OVERRIDE" | "OVRD" => {
+                let on = !matches!(arg(2), "OFF") && !matches!(arg(1), "OFF");
+                match arg(1) {
+                    "MOTEUR" | "MOTEURS" | "ENGINE" | "ENG" => ac.cmd_override_engine(on),
+                    "FBW" | "COMMANDES" => ac.cmd_override_fbw(on),
+                    "OFF" => {
+                        if ac.ovr_engine {
+                            ac.cmd_override_engine(false);
+                        }
+                        if ac.ovr_fbw {
+                            ac.cmd_override_fbw(false);
+                        }
+                    }
+                    "ALL" | "TOUT" => {
+                        ac.cmd_override_engine(on);
+                        ac.cmd_override_fbw(on);
+                    }
+                    _ => {}
+                }
+                reply = Ok(format!("OVERRIDE MOTEUR {} / FBW {}", if ac.ovr_engine { "ON" } else { "OFF" }, if ac.ovr_fbw { "ON" } else { "OFF" }));
+            }
+            "FUEL" | "CARBURANT" => {
+                if matches!(arg(1), "DUMP" | "VIDANGE") {
+                    ac.cmd_fuel_dump(!matches!(arg(2), "OFF" | "STOP"));
+                }
+                reply = Ok(format!("JP-7 {:.1} T", ac.fuel / 1000.0));
+            }
+            "CAMERA" | "CAM" => {
+                match (arg(1), num(2)) {
+                    ("ZOOM", Some(z)) => self.mfd.cam_zoom = mfd::CAM_ZOOMS.iter().position(|&v| v as f64 >= z).unwrap_or(mfd::CAM_ZOOMS.len() - 1),
+                    ("ELEV" | "ELEVATION", Some(e)) => self.mfd.cam_elev = e.clamp(-60.0, 20.0),
+                    _ => {}
+                }
+                reply = Ok(format!("CAMERA ZOOM {:.0}X ELEV {:+.0}", mfd::CAM_ZOOMS[self.mfd.cam_zoom], self.mfd.cam_elev));
+            }
+            "HSI" | "RANGE" => {
+                let v = if w[0] == "HSI" { num(2).or(num(1)) } else { num(1) };
+                if let Some(rng) = v {
+                    self.mfd.hsi_range = mfd::HSI_RANGES.iter().position(|&x| x >= rng).unwrap_or(mfd::HSI_RANGES.len() - 1);
+                }
+                reply = Ok(format!("HSI {:.0} NM", mfd::HSI_RANGES[self.mfd.hsi_range]));
+            }
             "H2" => {
                 match arg(1) {
                     "DUMP" | "VIDANGE" => ac.cmd_h2_dump(!matches!(arg(2), "OFF" | "STOP")),
@@ -731,7 +837,8 @@ impl Game {
                     "CAP 270 | ALT 90000 / FL350 | ASSIETTE 10 | MACH 6 | KEAS 300 | THR 80",
                     "DIRECT KEDW | ATTERRIR [KEDW] (autoland) | DECOLLAGE [15000]",
                     "TURB START/STOP | INLET OPEN/CLOSE | RAM ARM/IGN/OFF | SCRAM ENABLE/IGN/OFF",
-                    "H2 DUMP (vidange d'urgence H2) | H2 DUMP OFF",
+                    "H2 DUMP [OFF] | FUEL DUMP [OFF] | OVERRIDE MOTEUR/FBW ON/OFF | OVERRIDE OFF",
+                    "CAMERA ZOOM 4 | CAMERA ELEV -10 | HSI 80 (portée NM)",
                     "TRAIN UP/DOWN | FREINS ON/OFF | AP ON/OFF | MANUEL | WARP 8",
                 ] {
                     self.log.push((self.sim_time, Level::Info, l.into()));
@@ -800,6 +907,15 @@ async fn main() {
     let auto_update = std::env::var("DARKSTAR_AUTOUPDATE").is_ok();
     let mut last_upd_msg = String::new();
     let mut g = Game::new(&scenario);
+    if let Ok(t) = std::env::var("DARKSTAR_TAB") {
+        g.tab = match t.as_str() {
+            "5" => gcs::Tab::Thermique,
+            "6" => gcs::Tab::Essais,
+            "7" => gcs::Tab::Domaine,
+            "8" => gcs::Tab::Override,
+            _ => gcs::Tab::Moteurs,
+        };
+    }
     let mut show_help = scenario.is_empty();
     let mut map_full = false;
     let mut frame = 0u64;
@@ -874,51 +990,82 @@ async fn main() {
         }
 
         // --- Mise en page ---
-        clear_background(BLACK);
+        clear_background(ui::BG);
         let (sw, sh) = (screen_width(), screen_height());
-        let top_h = (sh * 0.62).floor();
-        let pfd_w = (sw * 0.58).floor();
         let time = get_time();
+        let (warp_eff, warp_capped) = g.effective_warp();
+        let (ln, lat) = g.link();
+        let bar = Rect::new(0.0, 0.0, sw, 34.0);
+        let body = Rect::new(6.0, 40.0, sw - 12.0, sh - 46.0);
         if map_full {
-            let r = Rect::new(0.0, 0.0, sw, sh);
-            g.map.input(r);
-            g.map.draw(&world, &g.ac, &g.traffic, r, g.dest, time);
+            g.map.input(body);
+            g.map.draw(&world, &g.ac, &g.traffic, body, g.dest, time);
         } else {
-            let pr = Rect::new(0.0, 0.0, pfd_w, top_h);
-            let sr = pfd::svs_rect(pr);
-            let view = svs::draw_svs(&world, &g.ac, &g.traffic, sr, time, g.style);
-            let (ln, lat) = g.link();
-            pfd::draw_pfd(
-                &g.ac,
-                &view,
-                pr,
-                &pfd::PfdInfo {
-                    alerts: &alerts,
-                    ra: g.traffic.ra,
-                    link_name: ln,
-                    latency_ms: lat,
-                    dest: g.dest,
-                    warp: WARPS[g.warp_idx],
-                    time,
-                },
-            );
-            draw_console(&g, sr);
-            let mh = (top_h * 0.68).floor();
-            let mr = Rect::new(pfd_w + 2.0, 0.0, sw - pfd_w - 2.0, mh);
+            // Écran principal Darkstar
+            let mfd_w = (body.w * 0.56).floor();
+            let mfd_r = Rect::new(body.x, body.y, mfd_w, body.h);
+            let info = pfd::PfdInfo { alerts: &alerts, ra: g.traffic.ra, link_name: ln, latency_ms: lat, dest: g.dest, warp: warp_eff, time };
+            let (_, act) = mfd::draw_mfd(&world, &g.ac, &g.traffic, mfd_r, &mut g.mfd, &info, g.style, time);
+            if act.fuel_dump {
+                g.apply_switch(gcs::Switch::FuelDump);
+            }
+            let svs_r = mfd::layout(mfd_r).1.svs;
+            draw_console(&g, svs_r);
+
+            // Colonne de droite : carte, onglets, messages
+            let rx = mfd_r.x + mfd_r.w + 8.0;
+            let rw = body.x + body.w - rx;
+            let map_h = (body.h * 0.42).floor();
+            let mr = Rect::new(rx, body.y, rw, map_h);
             g.map.input(mr);
             g.map.draw(&world, &g.ac, &g.traffic, mr, g.dest, time);
-            panels::draw_messages(&g.log, Rect::new(pfd_w + 2.0, mh + 2.0, sw - pfd_w - 2.0, top_h - mh - 2.0));
-
-            let by = top_h + 2.0;
-            let bh = sh - by;
-            let ew = (sw * 0.33).floor();
-            let tw = (sw * 0.29).floor();
-            let cw = (sw * 0.21).floor();
-            panels::draw_eicas(&g.ac, Rect::new(0.0, by, ew, bh), master_warn, master_caut, time);
-            thermal::draw_thermal(&g.thermal, Rect::new(ew + 2.0, by, tw, bh), time);
-            panels::draw_card(&g.ac, &g.mission, Rect::new(ew + tw + 4.0, by, cw, bh));
-            let rx = ew + tw + cw + 6.0;
-            panels::draw_envelope(&g.ac, Rect::new(rx, by, sw - rx, bh), &g.history);
+            let tabs_r = Rect::new(rx, mr.y + mr.h + 6.0, rw, 28.0);
+            let ovr_alert = g.ac.ovr_engine || g.ac.ovr_fbw || g.ac.h2_dump || g.ac.fuel_dump;
+            if let Some(t) = gcs::draw_tabs(tabs_r, g.tab, ovr_alert) {
+                g.tab = t;
+            }
+            let content_h = (body.h * 0.39).floor();
+            let cr = Rect::new(rx, tabs_r.y + tabs_r.h + 4.0, rw, content_h);
+            match g.tab {
+                gcs::Tab::Moteurs => panels::draw_engines(&g.ac, cr, time),
+                gcs::Tab::Thermique => thermal::draw_thermal(&g.thermal, cr, time),
+                gcs::Tab::Essais => panels::draw_card(&g.ac, &g.mission, cr),
+                gcs::Tab::Domaine => panels::draw_envelope(&g.ac, cr, &g.history),
+                gcs::Tab::Override => {
+                    if let Some(sw) = gcs::draw_overrides(&g.ac, cr) {
+                        g.apply_switch(sw);
+                    }
+                }
+            }
+            let my = cr.y + cr.h + 6.0;
+            panels::draw_messages(&g.log, Rect::new(rx, my, rw, body.y + body.h - my));
+        }
+        let top = gcs::draw_topbar(
+            bar,
+            &gcs::TopBar {
+                sim_time: g.sim_time,
+                mission_t: g.mission.elapsed,
+                warp: warp_eff,
+                warp_capped,
+                link: ln,
+                latency_ms: lat,
+                master_warn,
+                master_caut,
+                muted: g.muted,
+                time,
+            },
+        );
+        if top.ack {
+            g.acked = alerts.iter().map(|(_, s)| s.clone()).collect();
+        }
+        if top.warp {
+            g.warp_idx = (g.warp_idx + 1) % WARPS.len();
+        }
+        if top.mute {
+            g.muted = !g.muted;
+        }
+        if top.help {
+            show_help = !show_help;
         }
         if show_help {
             panels::draw_help(Rect::new(0.0, 0.0, sw, sh));
@@ -989,8 +1136,12 @@ fn draw_console(g: &Game, r: Rect) {
                 (_, Some(_)) => "DÉCOLLAGE AUTOMATIQUE EN COURS".to_string(),
                 _ => "ENTRÉE : saisir une instruction (CAP, ALT, MACH, DIRECT, ATTERRIR...)".to_string(),
             };
-            let c = if g.ac.autoland.is_some() || g.ac.autotakeoff.is_some() { ui::GREEN_S } else { ui::DIM };
-            ui::txt_c(&s, r.x + r.w / 2.0, y + 21.0, 15.0, c);
+            let active = g.ac.autoland.is_some() || g.ac.autotakeoff.is_some();
+            let c = if active { ui::GREEN_S } else { Color::new(0.75, 0.8, 0.85, 0.55) };
+            // Rappel discret en bas de la vue (hors échelle de tangage), sauf pendant une approche ILS
+            if active || g.ac.approach.is_none() {
+                ui::txt_c(&s, r.x + r.w / 2.0, r.y + r.h - 10.0, if active { 15.0 } else { 12.0 }, c);
+            }
         }
     }
 }

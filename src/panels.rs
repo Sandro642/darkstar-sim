@@ -77,24 +77,11 @@ fn nacelle(r: Rect, side: &str, ac: &Aircraft, egt_off: f64, time: f64) {
     txt_c("CIT", x + w * 0.50, cy + h * 0.30, 10.0, DIM);
 }
 
-pub fn draw_eicas(ac: &Aircraft, r: Rect, master_warn: bool, master_caut: bool, time: f64) {
-    panel(r, "EICAS - PROPULSION DARKSTAR");
+pub fn draw_engines(ac: &Aircraft, r: Rect, time: f64) {
+    panel(r, "MOTEURS - TBCC DARKSTAR");
     let e = &ac.eng;
-
-    // Voyants maîtres
-    let blink = (time * 2.5).fract() < 0.6;
-    let mw = Rect::new(r.x + r.w - 196.0, r.y + 2.0, 92.0, 18.0);
-    let mc = Rect::new(r.x + r.w - 100.0, r.y + 2.0, 92.0, 18.0);
-    draw_rectangle(mw.x, mw.y, mw.w, mw.h, if master_warn && blink { RED } else { Color::new(0.25, 0.0, 0.0, 1.0) });
-    txt_c("WARNING", mw.x + mw.w / 2.0, mw.y + 14.0, 13.0, if master_warn { WHITE } else { DIM });
-    draw_rectangle(mc.x, mc.y, mc.w, mc.h, if master_caut { AMBER } else { Color::new(0.25, 0.18, 0.0, 1.0) });
-    txt_c("CAUTION", mc.x + mc.w / 2.0, mc.y + 14.0, 13.0, if master_caut { BLACK } else { DIM });
-
-    let left_w = r.w * 0.60;
-    let x = r.x + 8.0;
-    let y = r.y + 26.0;
-
-    // Mode et poussée
+    let x = r.x + 10.0;
+    let w = r.w - 20.0;
     let m = ac.mode_name();
     let mcol = match m {
         "SCRAMJET" => MAGENTA_S,
@@ -102,116 +89,73 @@ pub fn draw_eicas(ac: &Aircraft, r: Rect, master_warn: bool, master_caut: bool, 
         "TURBINE" => GREEN_S,
         _ => AMBER,
     };
-    txt(&format!("MODE {m}"), x, y + 12.0, 16.0, mcol);
-    txt_r(&format!("T {:.0} kN  D {:.0} kN", ac.d.thrust / 1000.0, ac.d.drag / 1000.0), x + left_w - 8.0, y + 12.0, 13.0, WHITE);
+    txt_r(&format!("MODE {m}"), r.x + r.w - 12.0, r.y + 19.0, 15.0, mcol);
 
-    // Deux nacelles
-    let nh = ((r.h - 150.0) / 2.0).clamp(70.0, 110.0);
+    // Nacelles gauche / droite
+    let top = r.y + 30.0;
+    let nh = ((r.h - 140.0) / 2.0).clamp(60.0, 110.0);
     let tstate = match e.turb {
         TurbState::Off => "OFF",
         TurbState::Starting => "START",
         TurbState::Running => "RUN",
         TurbState::Failed => "FAIL",
     };
-    let nr1 = Rect::new(x, y + 20.0, left_w - 8.0, nh);
-    let nr2 = Rect::new(x, y + 24.0 + nh, left_w - 8.0, nh);
-    draw_rectangle(nr1.x, nr1.y, nr1.w, nr1.h, Color::new(0.06, 0.07, 0.09, 1.0));
-    draw_rectangle(nr2.x, nr2.y, nr2.w, nr2.h, Color::new(0.06, 0.07, 0.09, 1.0));
-    nacelle(nr1, &format!("ENG L  {tstate}"), ac, 8.0, time);
-    nacelle(nr2, &format!("ENG R  {tstate}"), ac, -6.0, time + 0.37);
+    for (i, (side, off)) in [("ENG L", 8.0), ("ENG R", -6.0)].iter().enumerate() {
+        let nr = Rect::new(x, top + i as f32 * (nh + 6.0), w * 0.66, nh);
+        rrect(nr, 6.0, Color::new(0.035, 0.04, 0.05, 1.0));
+        nacelle(nr, &format!("{side}  {tstate}"), ac, *off, time + i as f64 * 0.37);
+    }
 
-    // Statoréacteur / scramjet
-    let sy = nr2.y + nr2.h + 16.0;
+    // Colonne droite : poussée, stato, scram
+    let cx = x + w * 0.69;
+    let mut y = top + 14.0;
+    let line = |y: &mut f32, l: &str, v: String, c: Color| {
+        txt(l, cx, *y, 13.0, DIM);
+        txt_r(&v, x + w, *y, 14.0, c);
+        *y += 19.0;
+    };
+    line(&mut y, "POUSSEE", format!("{:.0} kN", ac.d.thrust / 1000.0), WHITE);
+    line(&mut y, "TRAINEE", format!("{:.0} kN", ac.d.drag / 1000.0), WHITE);
     let rs = match e.ram {
         RamState::Off => ("OFF", DIM),
         RamState::Armed => ("ARME", AMBER),
         RamState::Lit => ("ALLUME", CYAN_S),
     };
+    line(&mut y, "STATO", format!("{} {:.0}kN", rs.0, e.t_ram / 1000.0), rs.1);
     let ss = match e.scram {
         ScramState::Off => ("OFF", DIM),
         ScramState::Armed => ("ENABLE", AMBER),
         ScramState::Lit => ("ALLUME", MAGENTA_S),
         ScramState::Unstart => ("UNSTART", RED),
     };
-    txt("STATO", x, sy, 13.0, DIM);
-    txt(rs.0, x + 52.0, sy, 13.0, rs.1);
-    txt(&format!("{:.0} kN", e.t_ram / 1000.0), x + 120.0, sy, 13.0, WHITE);
-    txt("SCRAM", x, sy + 17.0, 13.0, DIM);
-    txt(ss.0, x + 52.0, sy + 17.0, 13.0, ss.1);
-    txt(&format!("{:.0} kN", e.t_scram / 1000.0), x + 120.0, sy + 17.0, 13.0, WHITE);
-    let a = ac.d.alpha.to_degrees();
+    line(&mut y, "SCRAM", format!("{} {:.0}kN", ss.0, e.t_scram / 1000.0), ss.1);
     let ok = |b: bool| if b { GREEN_S } else { AMBER };
-    let cx2 = x + 190.0;
-    txt(&format!("M{:.2}", ac.d.mach), cx2, sy + 17.0, 13.0, ok(ac.d.mach >= 4.8));
-    txt(&format!("q{:.0}", ac.d.q / 1000.0), cx2 + 58.0, sy + 17.0, 13.0, ok((25_000.0..=90_000.0).contains(&ac.d.q)));
-    txt(&format!("a{a:+.1}"), cx2 + 100.0, sy + 17.0, 13.0, ok((0.0..=7.0).contains(&a)));
-    vbar(cx2 + 150.0, sy + 4.0, 40.0 * 0.0 + 8.0, 16.0, e.scram_margin as f32, ok(e.scram_margin > 0.3));
-    let ram_ok = ac.ram_ignition_check().is_ok();
-    txt(if ram_ok { "IGN OK" } else { "" }, cx2, sy, 13.0, GREEN_S);
+    let a = ac.d.alpha.to_degrees();
+    line(&mut y, "MACH >= 4.8", format!("{:.2}", ac.d.mach), ok(ac.d.mach >= 4.8));
+    line(&mut y, "q 25-90 kPa", format!("{:.0}", ac.d.q / 1000.0), ok((25_000.0..=90_000.0).contains(&ac.d.q)));
+    line(&mut y, "AoA 0-7", format!("{a:+.1}"), ok((0.0..=7.0).contains(&a)));
+    txt("MARGE INLET", cx, y, 13.0, DIM);
+    draw_rectangle_lines(cx, y + 6.0, x + w - cx, 9.0, 1.0, DIM);
+    draw_rectangle(cx + 1.0, y + 7.0, (x + w - cx - 2.0) * e.scram_margin as f32, 7.0, ok(e.scram_margin > 0.3));
 
-    // Page carburant (droite)
-    let fx = r.x + left_w + 4.0;
-    let fw = r.w - left_w - 12.0;
-    let fy = y + 18.0;
-    draw_rectangle(fx, fy, fw, r.h - (fy - r.y) - 8.0, Color::new(0.03, 0.05, 0.04, 1.0));
-    draw_rectangle_lines(fx, fy, fw, r.h - (fy - r.y) - 8.0, 1.0, Color::new(0.2, 0.5, 0.25, 1.0));
-    let gr = (fw * 0.16).min(24.0);
-    let pph = e.fuel_flow * 3600.0 * 2.2046 / 1000.0;
-    txt("FUEL FLOW", fx + 6.0, fy + 14.0, 11.0, WHITE);
-    dial(fx + 8.0 + gr, fy + 26.0 + gr, gr, pph as f32, 0.0, 300.0, 260.0, 290.0, "", "");
-    txt(&format!("PPH {pph:03.0}"), fx + 6.0, fy + 38.0 + gr * 2.0, 12.0, WHITE);
-    txt("x1000", fx + 6.0, fy + 50.0 + gr * 2.0, 10.0, DIM);
-    if e.h2_flow > 0.0 {
-        txt(&format!("H2 {:.1} kg/s", e.h2_flow), fx + 50.0, fy + 50.0 + gr * 2.0, 11.0, CYAN_S);
+    // Ligne basse
+    let by = r.y + r.h - 28.0;
+    let hc = if e.combustor_failed { RED } else if e.health < 0.3 { AMBER } else { GREEN_S };
+    txt(&format!("CHAMBRES {:.0}%", e.health * 100.0), x, by, 13.0, hc);
+    let thr = format!("MANETTE {:.0}%{}", ac.throttle * 100.0, if e.ab_frac > 0.0 { " PC" } else { "" });
+    txt(&thr, x + 130.0, by, 13.0, if ac.throttle > 1.0 { RED } else if ac.throttle > 0.8 { AMBER } else { WHITE });
+    if ac.ovr_engine {
+        txt("ENG OVRD", x + 280.0, by, 13.0, AMBER);
+    } else if ac.fadec_limit < 0.995 {
+        txt(&format!("FADEC {:.0}%", ac.fadec_limit * 100.0), x + 280.0, by, 13.0, AMBER);
     }
-    let fp = ac.fuel_psi();
-    txt_r("FUEL PRES", fx + fw - 6.0, fy + 14.0, 11.0, WHITE);
-    dial(fx + fw - 10.0 - gr * 2.2, fy + 26.0 + gr, gr, fp as f32, 0.0, 120.0, 105.0, 115.0, "", "");
-    txt_r(&format!("PSI {fp:.0}"), fx + fw - 6.0, fy + 38.0 + gr * 2.0, 12.0, if fp < 40.0 { AMBER } else { WHITE });
-
-    // Silhouette réservoirs : JP-7 (vert) et H2 (cyan)
-    let sy0 = fy + 64.0 + gr * 2.0;
-    let sh = (r.y + r.h - 70.0 - sy0).max(60.0);
-    let scx = fx + fw * 0.5;
-    let sw2 = fw * 0.30;
-    let outline = [(0.0, 0.0), (0.18, 0.45), (1.0, 0.95), (0.25, 1.0), (-0.25, 1.0), (-1.0, 0.95), (-0.18, 0.45)];
-    for i in 0..outline.len() {
-        let (a0, b0) = (outline[i], outline[(i + 1) % outline.len()]);
-        draw_line(scx + a0.0 * sw2, sy0 + a0.1 * sh, scx + b0.0 * sw2, sy0 + b0.1 * sh, 1.5, GREEN_S);
-    }
-    let jp = (ac.fuel / FUEL_MAX) as f32;
-    let h2f = (ac.h2 / H2_MAX) as f32;
-    let tanks = [(0.30, jp, GREEN_S), (0.50, h2f, CYAN_S), (0.70, jp, GREEN_S), (0.86, jp, GREEN_S)];
-    for (ty, f, c) in tanks {
-        let tw = sw2 * (0.25 + ty * 0.5);
-        let ty = sy0 + ty * sh;
-        draw_rectangle_lines(scx - tw / 2.0, ty - 7.0, tw, 14.0, 1.0, c);
-        draw_rectangle(scx - tw / 2.0 + 1.0, ty - 6.0, (tw - 2.0) * f, 12.0, Color::new(c.r, c.g, c.b, 0.75));
-    }
-    let cg = ac.cg();
-    txt(&format!("CG {cg:.0}%"), fx + 6.0, sy0 + sh * 0.55, 14.0, if (21.0..=29.0).contains(&cg) { GREEN_S } else { AMBER });
-    txt(&format!("JP7 {:.1}t", ac.fuel / 1000.0), fx + 6.0, sy0 + sh * 0.55 + 16.0, 12.0, GREEN_S);
-    let h2p = ac.h2_psi();
-    txt_r(&format!("H2 {:.1}t", ac.h2 / 1000.0), fx + fw - 6.0, sy0 + sh * 0.55, 12.0, CYAN_S);
-    txt_r(&format!("{h2p:.0} psi"), fx + fw - 6.0, sy0 + sh * 0.55 + 16.0, 12.0, if h2p < 40.0 { AMBER } else { CYAN_S });
-    if ac.h2_dump {
-        draw_rectangle(fx + 6.0, sy0 - 18.0, fw - 12.0, 16.0, Color::new(0.5, 0.0, 0.0, 1.0));
-        txt_c("EMER H2 DUMP", fx + fw / 2.0, sy0 - 6.0, 12.0, WHITE);
-    }
-
-    // Ligne basse : manette, train, freins, peau
-    let by = r.y + r.h - 40.0;
-    txt(&format!("THR {:.0}%{}", ac.throttle * 100.0, if e.ab_frac > 0.0 { " PC" } else { "" }), fx + 6.0, by + 4.0, 13.0, if ac.throttle > 0.8 { AMBER } else { WHITE });
     let endu = if e.fuel_flow > 0.01 { ac.fuel / e.fuel_flow } else { 0.0 };
-    txt(&format!("ENDUR {}", fmt_time(endu)), fx + 6.0, by + 20.0, 12.0, WHITE);
-    let skin = ac.skin_temp - 273.15;
-    let sk_c = if skin > SKIN_LIMIT_C { RED } else if skin > SKIN_LIMIT_C - 100.0 { AMBER } else { WHITE };
-    txt(&format!("PEAU {skin:.0}°C"), x, by + 4.0, 13.0, sk_c);
+    txt(&format!("ENDUR {}", fmt_time(endu)), x, by + 17.0, 12.0, WHITE);
     let gear = if ac.gear_pos > 0.99 { ("TRAIN DOWN", GREEN_S) } else if ac.gear_pos < 0.01 { ("TRAIN UP", DIM) } else { ("TRAIN TRANSIT", AMBER) };
-    txt(gear.0, x, by + 20.0, 13.0, gear.1);
-    txt(if ac.brakes { "FREINS" } else { "" }, x + 120.0, by + 20.0, 13.0, AMBER);
-    txt(if ac.speedbrake { "AEROFREIN" } else { "" }, x + 180.0, by + 20.0, 13.0, AMBER);
-    txt(&format!("MASSE {:.1}t", ac.mass() / 1000.0), x + 120.0, by + 4.0, 13.0, WHITE);
+    txt(gear.0, x + 130.0, by + 17.0, 12.0, gear.1);
+    txt(if ac.brakes { "FREINS" } else { "" }, x + 240.0, by + 17.0, 12.0, AMBER);
+    txt(if ac.speedbrake { "AEROFREIN" } else { "" }, x + 300.0, by + 17.0, 12.0, AMBER);
+    txt_r(&format!("MASSE {:.1}t", ac.mass() / 1000.0), x + w, by + 17.0, 12.0, WHITE);
 }
 
 pub fn draw_card(ac: &Aircraft, mi: &Mission, r: Rect) {
@@ -371,28 +315,29 @@ pub fn draw_help(r: Rect) {
     let h = 560.0f32.min(r.h - 20.0);
     let x = r.x + (r.w - w) / 2.0;
     let y = r.y + (r.h - h) / 2.0;
-    draw_rectangle(x, y, w, h, Color::new(0.0, 0.02, 0.05, 0.93));
-    draw_rectangle_lines(x, y, w, h, 2.0, CYAN_S);
+    rrect(Rect::new(x, y, w, h), 12.0, Color::new(0.03, 0.04, 0.06, 0.96));
+    rrect_lines(Rect::new(x, y, w, h), 12.0, 1.5, ACCENT);
     let lines = [
-        ("STATION SOL DARKSTAR — PILOTAGE PAR INSTRUCTIONS", CYAN_S),
+        ("STATION SOL DARKSTAR - PILOTAGE PAR INSTRUCTIONS", CYAN_S),
         ("", WHITE),
-        ("ENTRÉE ouvre la console d'instructions :", WHITE),
+        ("ENTREE ouvre la console d'instructions :", WHITE),
         ("  CAP 270  ALT 90000 / FL350  ASSIETTE 10  MACH 6  KEAS 300  THR 80", GREEN_S),
         ("  DIRECT KEDW   ATTERRIR KEDW (autoland)   DECOLLAGE 15000", GREEN_S),
-        ("  TURB START/STOP  INLET OPEN/CLOSE  RAM ARM/IGN  SCRAM ARM/IGN", CYAN_S),
-        ("  TRAIN UP/DOWN   FREINS ON/OFF   AP OFF   MANUEL   WARP 8   AIDE", GREEN_S),
+        ("  TURB START/STOP  INLET OPEN/CLOSE  RAM ARM/IGN  SCRAM ENABLE/IGN", CYAN_S),
+        ("  OVERRIDE MOTEUR ON  OVERRIDE FBW ON  OVERRIDE OFF  H2/FUEL DUMP", AMBER),
+        ("  CAMERA ZOOM 4  CAMERA ELEV -10  HSI 80  SON OFF  WARP 8  AIDE", GREEN_S),
         ("", WHITE),
-        ("Raccourcis : T turbines  I entrées  Y stato  U scram  G train", WHITE),
-        ("  B freins  S aérofreins  P AP  O A/THR  N NAV  L ILS  D/K dest.", WHITE),
-        ("  AP actif : flèches = consignes alt (ou assiette)/cap, R/F = vitesse", DIM),
-        ("X  reprise en main manuelle (flèches = manche, R/F = manette)", AMBER),
+        ("Raccourcis : T turbines  I entrees  Y stato  U scram  G train", WHITE),
+        ("  B freins  S aerofreins  P AP  O A/THR  N NAV  L ILS  D/K dest.", WHITE),
+        ("  AP actif : fleches = consignes alt (ou assiette)/cap, R/F = vitesse", DIM),
+        ("X  reprise en main manuelle (fleches = manche, R/F = manette)", AMBER),
+        ("4-8 onglets MOTEURS / THERMIQUE / ESSAIS / DOMAINE / OVERRIDE", WHITE),
+        ("V carte plein ecran  C recentrer  H palette SVS  E temps (ou clic TEMPS)", WHITE),
+        ("ESPACE acquitter  J son  MAJ+ENTREE nouvel essai  TAB aide", WHITE),
         ("", WHITE),
-        ("V carte plein écran  C recentrer  H palette SVS  E temps x1..x32", WHITE),
-        ("ESPACE acquitter alarmes  J son on/off  MAJ+ENTRÉE nouvel essai  TAB aide", WHITE),
-        ("", WHITE),
-        ("Suivre la carte d'essais (bas centre). Le domaine de vol", AMBER),
-        ("(bas droite) montre couloirs moteurs, lignes de q, limite thermique.", AMBER),
-        ("Liaison : LOS 45 ms près d'Edwards, SATCOM 380 ms au-delà.", AMBER),
+        ("Ecran Darkstar : clic sur DUMP (vidange), fleches de zoom camera", DIM),
+        ("et de portee HSI. Onglet OVERRIDE : interrupteurs gardes.", DIM),
+        ("ENGINE OVERRIDE debride les moteurs (120 %) au prix de leur usure.", AMBER),
     ];
     txt_r(&format!("v{}", crate::updater::VERSION), x + w - 16.0, y + 24.0, 14.0, DIM);
     let mut yy = y + 30.0;

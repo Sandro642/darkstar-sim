@@ -72,6 +72,37 @@ pub fn basis(ac: &Aircraft) -> (Vec3, Vec3, Vec3) {
     (fwd, up, right)
 }
 
+/// Caméra indépendante de l'assiette (volet caméra) : cap, élévation (rad) et champ vertical (deg).
+#[derive(Clone, Copy)]
+pub struct CamView {
+    pub hdg: f64,
+    pub pitch: f64,
+    pub fovy: f32,
+}
+
+fn hash2(ix: i64, iy: i64) -> f64 {
+    let mut h = (ix as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15) ^ (iy as u64).wrapping_mul(0xC2B2_AE3D_27D4_EB4F);
+    h ^= h >> 31;
+    h = h.wrapping_mul(0x94D0_49BB_1331_11EB);
+    ((h >> 11) as f64) / ((1u64 << 53) as f64)
+}
+
+fn vnoise(x: f64, y: f64) -> f64 {
+    let (ix, iy) = (x.floor() as i64, y.floor() as i64);
+    let (fx, fy) = (x - x.floor(), y - y.floor());
+    let (sx, sy) = (fx * fx * (3.0 - 2.0 * fx), fy * fy * (3.0 - 2.0 * fy));
+    let a = hash2(ix, iy) + (hash2(ix + 1, iy) - hash2(ix, iy)) * sx;
+    let b = hash2(ix, iy + 1) + (hash2(ix + 1, iy + 1) - hash2(ix, iy + 1)) * sx;
+    a + (b - a) * sy
+}
+
+/// Relief visuel (collines à l'horizon) : uniquement sur terre et loin de l'avion.
+fn hill(lat: f64, lon: f64) -> f64 {
+    let n = vnoise(lon * 6.0, lat * 6.0);
+    let m = vnoise(lon * 25.0, lat * 25.0);
+    (n * n * 900.0 + m * 160.0).max(0.0)
+}
+
 fn lerpc(a: [f32; 3], b: [f32; 3], t: f32) -> [f32; 3] {
     let t = t.clamp(0.0, 1.0);
     [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t, a[2] + (b[2] - a[2]) * t]
@@ -211,11 +242,21 @@ pub struct Lights {
     pub pts: Vec<(Vec3, Color, f32)>,
 }
 
-pub fn draw_svs(world: &World, ac: &Aircraft, traffic: &TrafficSys, rect: Rect, time: f64, style: SvsStyle) -> View {
+pub fn draw_svs(world: &World, ac: &Aircraft, traffic: &TrafficSys, rect: Rect, time: f64, style: SvsStyle, cam: Option<CamView>) -> View {
     let dark = style == SvsStyle::Darkstar;
     let dpi = screen_dpi_scale();
-    let (fwd, up, _right) = basis(ac);
-    let proj = Mat4::perspective_rh_gl(FOVY_DEG.to_radians(), rect.w / rect.h, 1.0, 5.0e6);
+    let (fwd, up, fovy) = match cam {
+        Some(c) => {
+            let f = dir(c.hdg, c.pitch);
+            let r0 = vec3(c.hdg.cos() as f32, 0.0, c.hdg.sin() as f32);
+            (f, r0.cross(f).normalize(), c.fovy)
+        }
+        None => {
+            let (f, u, _) = basis(ac);
+            (f, u, FOVY_DEG)
+        }
+    };
+    let proj = Mat4::perspective_rh_gl(fovy.to_radians(), rect.w / rect.h, 1.0, 5.0e6);
     let view = Mat4::look_at_rh(Vec3::ZERO, fwd, up);
     let mat = proj * view;
     let vp = (
@@ -289,6 +330,15 @@ pub fn draw_svs(world: &World, ac: &Aircraft, traffic: &TrafficSys, rect: Rect, 
                 let az = s as f64 / n_az as f64 * 360.0;
                 let (la, lo) = destination(ac.lat, ac.lon, az, d);
                 let mut c = world.sample(la, lo);
+                let water = c[2] > c[0] + 0.08 && c[2] > c[1];
+                let mut vert = vert;
+                let mut hill_k = 0.0f32;
+                if !water && d > 6_000.0 {
+                    let fade = ((d - 6_000.0) / 24_000.0).clamp(0.0, 1.0);
+                    let hgt = hill(la, lo) * fade;
+                    vert += hgt;
+                    hill_k = (hgt / 900.0) as f32;
+                }
                 if dark {
                     // Terre verte / mer bleue, modulée par la luminance de la texture
                     let water = c[2] > c[0] + 0.08 && c[2] > c[1];
@@ -301,6 +351,8 @@ pub fn draw_svs(world: &World, ac: &Aircraft, traffic: &TrafficSys, rect: Rect, 
                         lerpc([0.16, 0.48, 0.10], [0.50, 0.76, 0.28], (lum - 0.2) * 1.8)
                     };
                 }
+                // Collines plus claires au sommet, comme sur le SVS Darkstar
+                c = lerpc(c, [c[0] * 1.25 + 0.05, c[1] * 1.18 + 0.05, c[2] * 1.1], hill_k);
                 // Brume atmosphérique
                 let fog_k = if dark { 0.55 } else { 0.85 };
                 let fog = ((d / vis).min(1.0) * fog_k + (d / d_h).powi(4) * 0.15) as f32;

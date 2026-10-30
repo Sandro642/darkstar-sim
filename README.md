@@ -67,3 +67,16 @@ Données carte : Natural Earth (domaine public).
   manche STALL, claquoir de survitesse (q), klaxon de train, tons TCAS (TA puis RA), arpège de
   déconnexion AP, détonation d'unstart scram, impact du toucher, bips d'instruction acceptée/refusée.
 - ESPACE acquitte (coupe le carillon), J ou `SON OFF` / `SON ON` coupe ou rétablit le son.
+
+## Interface (v1.1)
+- Barre de statut : temps simulé, chrono d'essai, **TEMPS x1..x32** (clic pour changer), liaison, WARNING/CAUTION (clic = acquitter), son, aide.
+- Écran Darkstar : PFD (tambours de vitesse/altitude, collines à l'horizon), volet carburant (débit PPH,
+  pressions pompes 1-4, réservoirs, CG, bouton DUMP), volet caméra (zoom 1x-10x, élévation), volet HSI
+  (rose des caps, route magenta, portée 10-640 NM, trafic TCAS).
+- À droite : carte monde, onglets 4 MOTEURS / 5 THERMIQUE / 6 ESSAIS / 7 DOMAINE / 8 OVERRIDE, messages.
+
+## Overrides
+- `OVERRIDE MOTEUR ON` (ou interrupteur ENGINE OVERRIDE) : manette jusqu'à 120 %, limiteur FADEC
+  (peau / pression dynamique) inhibé. Les chambres s'usent en surrégime ; à 0 % : rupture, stato/scram perdus.
+- `OVERRIDE FBW ON` : protections d'incidence et de facteur de charge inhibées (unstart, rupture possibles).
+- `OVERRIDE OFF` réarme tout. `FUEL DUMP` / `H2 DUMP` : vidanges d'urgence.

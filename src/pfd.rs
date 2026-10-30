@@ -22,13 +22,45 @@ const LABEL: Color = Color::new(0.85, 0.88, 0.9, 1.0);
 
 /// Fenêtre de la vision synthétique dans l'écran PFD.
 pub fn svs_rect(r: Rect) -> Rect {
-    Rect::new((r.x + r.w * 0.15).round(), (r.y + r.h * 0.085).round(), (r.w * 0.70).round(), (r.h * 0.80).round())
+    Rect::new((r.x + r.w * 0.155).round(), (r.y + r.h * 0.09).round(), (r.w * 0.66).round(), (r.h * 0.79).round())
+}
+
+/// Tambour de chiffres roulants : `step` = pas d'un cran, `modulo` = valeur bouclée affichée.
+fn drum(x_right: f32, cy: f32, w: f32, h: f32, value: f64, step: f64, modulo: f64, digits: usize, size: f32) {
+    let row = size * 0.95;
+    scissor_push(Rect::new(x_right - w, cy - h / 2.0, w, h));
+    let base = (value / step).floor() * step;
+    let frac = ((value - base) / step) as f32;
+    for k in -2i32..=2 {
+        let v = (base + k as f64 * step).rem_euclid(modulo);
+        let y = cy + (frac - k as f32) * row + size * 0.36;
+        txt_r(&format!("{:0width$.0}", v, width = digits), x_right - 3.0, y, size, WHITE);
+    }
+    scissor_pop();
+}
+
+thread_local! {
+    static CLIP: std::cell::RefCell<Vec<Option<Rect>>> = const { std::cell::RefCell::new(Vec::new()) };
+}
+
+fn scissor_push(r: Rect) {
+    CLIP.with(|c| c.borrow_mut().push(Some(r)));
+    scissor(Some(r));
+}
+
+fn scissor_pop() {
+    let prev = CLIP.with(|c| {
+        let mut v = c.borrow_mut();
+        v.pop();
+        v.last().copied().flatten()
+    });
+    scissor(prev);
 }
 
 pub fn draw_pfd(ac: &Aircraft, v: &View, r: Rect, info: &PfdInfo) {
     let s = v.rect;
-    draw_rectangle_lines(r.x + 3.0, r.y + 3.0, r.w - 6.0, r.h - 6.0, 2.0, Color::new(0.35, 0.38, 0.42, 1.0));
-    draw_rectangle_lines(s.x - 1.0, s.y - 1.0, s.w + 2.0, s.h + 2.0, 1.0, Color::new(0.5, 0.5, 0.5, 1.0));
+    rrect_lines(r, 10.0, 1.5, Color::new(0.78, 0.80, 0.82, 0.85));
+    draw_rectangle_lines(s.x - 1.0, s.y - 1.0, s.w + 2.0, s.h + 2.0, 1.0, Color::new(0.45, 0.47, 0.5, 1.0));
 
     draw_svs_overlay(ac, v, info);
     draw_speed(ac, r, s);
@@ -130,9 +162,15 @@ fn draw_svs_overlay(ac: &Aircraft, v: &View, info: &PfdInfo) {
         draw_line(p.x - 6.0, p.y - 4.0, p.x, p.y, 2.0, GREEN_S);
         draw_line(p.x - 6.0, p.y + 4.0, p.x, p.y, 2.0, GREEN_S);
     }
-    // Axe de visée
-    draw_line(cx - 6.0, cy, cx + 6.0, cy, 1.5, Color::new(1.0, 1.0, 1.0, 0.5));
-    draw_line(cx, cy - 6.0, cx, cy + 6.0, 1.5, Color::new(1.0, 1.0, 1.0, 0.5));
+    // Symbole avion fixe (barres de référence avec crochets), comme sur le PFD Darkstar
+    for (w, col) in [(4.0, Color::new(0.0, 0.0, 0.0, 0.55)), (2.0, LINE)] {
+        for sd in [-1.0f32, 1.0] {
+            let (x0, x1) = (cx + sd * 34.0, cx + sd * 112.0);
+            draw_line(x0, cy, x1, cy, w, col);
+            draw_line(x1, cy, x1, cy + 9.0, w, col);
+        }
+        draw_line(cx, cy - 4.0, cx, cy - 18.0, w, col);
+    }
 
     // Inclinaison : graduations en bas, triangle mobile
     {
@@ -197,6 +235,19 @@ fn draw_svs_overlay(ac: &Aircraft, v: &View, info: &PfdInfo) {
         draw_circle(s.x + 12.0, s.y + 13.0, 4.0, RED);
     }
     txt("REC  FTV-01", s.x + 20.0, s.y + 18.0, 13.0, Color::new(0.9, 0.9, 0.9, 0.8));
+    // Annonces d'override et de limitation FADEC
+    let mut oy = s.y + 36.0;
+    let blink = (info.time * 2.0).fract() < 0.65;
+    for (on, label) in [(ac.ovr_engine, "ENG OVRD"), (ac.ovr_fbw, "FBW OVRD"), (!ac.ovr_engine && ac.fadec_limit < 0.995, "FADEC LIMIT")] {
+        if on {
+            draw_rectangle(s.x + 8.0, oy - 13.0, 92.0, 17.0, Color::new(0.0, 0.0, 0.0, 0.6));
+            draw_rectangle_lines(s.x + 8.0, oy - 13.0, 92.0, 17.0, 1.0, AMBER);
+            if blink || label == "FADEC LIMIT" {
+                txt_c(label, s.x + 54.0, oy, 13.0, AMBER);
+            }
+            oy += 21.0;
+        }
+    }
 
     // Alertes
     if let Some(ra) = info.ra {
@@ -327,13 +378,19 @@ fn draw_speed(ac: &Aircraft, r: Rect, s: Rect) {
         draw_line(lx + 3.0, cy, lx + 3.0, cy - trend * ppk, 2.0, GREEN_S);
     }
     scissor(None);
-    // Fenêtre de lecture
-    let bw = 62.0;
+    // Fenêtre de lecture : centaines/dizaines fixes + tambour des unités
+    let bw = 64.0;
     let bx = lx - 8.0 - bw;
     draw_rectangle(bx, cy - 15.0, bw, 30.0, BLACK);
     draw_rectangle_lines(bx, cy - 15.0, bw, 30.0, 1.5, LINE);
+    draw_rectangle(bx + bw - 20.0, cy - 24.0, 20.0, 48.0, BLACK);
+    draw_rectangle_lines(bx + bw - 20.0, cy - 24.0, 20.0, 48.0, 1.5, LINE);
     draw_triangle(vec2(lx - 1.0, cy), vec2(lx - 9.0, cy - 7.0), vec2(lx - 9.0, cy + 7.0), LINE);
-    txt_r(&format!("{:.0}", spd), bx + bw - 6.0, cy + 9.0, 24.0, WHITE);
+    let s10 = (spd / 10.0).floor();
+    if s10 > 0.0 {
+        txt_r(&format!("{s10:.0}"), bx + bw - 21.0, cy + 9.0, 24.0, WHITE);
+    }
+    drum(bx + bw, cy, 20.0, 46.0, spd as f64, 1.0, 10.0, 1, 22.0);
     // Sous l'échelle
     let y = s.y + s.h + 20.0;
     let a = d.alpha.to_degrees();
@@ -405,13 +462,23 @@ fn draw_altitude(ac: &Aircraft, r: Rect, s: Rect) {
         }
         scissor(None);
     }
-    // Fenêtre de lecture
-    let bw = 72.0;
-    let bx = lx + 6.0;
+    // Trait ambre le long de l'échelle (bande de surveillance du sol)
+    draw_line(lx - 3.0, s.y + 2.0, lx - 3.0, s.y + s.h - 2.0, 2.0, Color::new(0.95, 0.6, 0.15, 0.85));
+    // Fenêtre de lecture en flèche : milliers/centaines fixes + tambour des dizaines (pas de 20 ft)
+    let bw = 80.0;
+    let bx = lx + 8.0;
+    let pts = [vec2(lx + 1.0, cy), vec2(bx, cy - 15.0), vec2(bx + bw, cy - 15.0), vec2(bx + bw, cy + 15.0), vec2(bx, cy + 15.0)];
+    draw_triangle(pts[0], pts[1], pts[4], BLACK);
     draw_rectangle(bx, cy - 15.0, bw, 30.0, BLACK);
-    draw_rectangle_lines(bx, cy - 15.0, bw, 30.0, 1.5, LINE);
-    draw_triangle(vec2(lx + 1.0, cy), vec2(bx + 1.0, cy - 7.0), vec2(bx + 1.0, cy + 7.0), LINE);
-    txt_r(&format!("{:.0}", alt), bx + bw - 5.0, cy + 9.0, 22.0, WHITE);
+    for i in 0..pts.len() {
+        let (a, b) = (pts[i], pts[(i + 1) % pts.len()]);
+        draw_line(a.x, a.y, b.x, b.y, 1.5, LINE);
+    }
+    draw_rectangle(bx + bw - 30.0, cy - 24.0, 30.0, 48.0, BLACK);
+    draw_rectangle_lines(bx + bw - 30.0, cy - 24.0, 30.0, 48.0, 1.5, LINE);
+    let a100 = (alt / 100.0).floor();
+    txt_r(&format!("{a100:.0}"), bx + bw - 31.0, cy + 9.0, 22.0, WHITE);
+    drum(bx + bw, cy, 30.0, 46.0, alt as f64, 20.0, 100.0, 2, 18.0);
     let y = s.y + s.h + 20.0;
     txt("GPS ALT", lx, y, 14.0, LABEL);
     txt(&format!("FL{:03.0}", alt / 100.0), lx, y + 18.0, 14.0, LABEL);

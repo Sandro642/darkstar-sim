@@ -91,6 +91,9 @@ pub struct Engines {
     pub h2_flow: f64,
     /// Portes d'entrée d'air turbine : 0 = ouvertes, 1 = fermées.
     pub doors: f64,
+    /// Santé des chambres de combustion (1 = neuf, 0 = rupture).
+    pub health: f64,
+    pub combustor_failed: bool,
 }
 
 /// Grandeurs dérivées, recalculées à chaque pas, pour l'affichage.
@@ -123,6 +126,13 @@ pub struct Aircraft {
     pub fuel: f64,
     pub h2: f64,
     pub h2_dump: bool,
+    pub fuel_dump: bool,
+    /// Override moteur : manette jusqu'à 120 %, limiteur FADEC (peau / q) désactivé.
+    pub ovr_engine: bool,
+    /// Override FBW : protections d'incidence et de facteur de charge désactivées.
+    pub ovr_fbw: bool,
+    /// Facteur de limitation FADEC appliqué à la manette (1 = aucune limitation).
+    pub fadec_limit: f64,
     pub throttle: f64,
     pub gear_down: bool,
     pub gear_pos: f64,
@@ -236,6 +246,10 @@ impl Aircraft {
             fuel: FUEL_MAX,
             h2: H2_MAX,
             h2_dump: false,
+            fuel_dump: false,
+            ovr_engine: false,
+            ovr_fbw: false,
+            fadec_limit: 1.0,
             throttle: 0.0,
             gear_down: true,
             gear_pos: 1.0,
@@ -260,6 +274,8 @@ impl Aircraft {
                 ab_frac: 0.0,
                 h2_flow: 0.0,
                 doors: 0.0,
+                health: 1.0,
+                combustor_failed: false,
             },
             skin_temp: 293.0,
             ap: Autopilot {
@@ -313,6 +329,42 @@ impl Aircraft {
             100.0 - (1.0 - (self.fuel / FUEL_MAX / 0.05).min(1.0)) * 70.0
         } else {
             12.0
+        }
+    }
+
+    pub fn thr_max(&self) -> f64 {
+        if self.ovr_engine {
+            1.2
+        } else {
+            1.0
+        }
+    }
+
+    pub fn cmd_override_engine(&mut self, on: bool) {
+        self.ovr_engine = on;
+        if on {
+            self.msg(Level::Warning, "ENGINE OVERRIDE : FADEC LIMITEUR INHIBÉ, MANETTE JUSQU'À 120 % — USURE DES CHAMBRES");
+        } else {
+            self.throttle = self.throttle.min(1.0);
+            self.msg(Level::Info, "ENGINE OVERRIDE OFF : LIMITEUR FADEC RÉARMÉ");
+        }
+    }
+
+    pub fn cmd_override_fbw(&mut self, on: bool) {
+        self.ovr_fbw = on;
+        if on {
+            self.msg(Level::Warning, "FBW OVERRIDE : PROTECTIONS D'INCIDENCE ET DE FACTEUR DE CHARGE INHIBÉES");
+        } else {
+            self.msg(Level::Info, "FBW OVERRIDE OFF : LOI NORMALE");
+        }
+    }
+
+    pub fn cmd_fuel_dump(&mut self, on: bool) {
+        self.fuel_dump = on;
+        if on {
+            self.msg(Level::Caution, "FUEL DUMP : VIDANGE JP-7 EN COURS");
+        } else {
+            self.msg(Level::Info, "FUEL DUMP : ARRÊT");
         }
     }
 
@@ -397,6 +449,10 @@ impl Aircraft {
     }
 
     pub fn cmd_ram(&mut self) {
+        if self.eng.combustor_failed {
+            self.msg(Level::Warning, "STATO INOPÉRANT : CHAMBRE DE COMBUSTION DÉTRUITE");
+            return;
+        }
         match self.eng.ram {
             RamState::Off => {
                 if self.d.mach < 2.0 {
@@ -438,6 +494,10 @@ impl Aircraft {
     }
 
     pub fn cmd_scram(&mut self) {
+        if self.eng.combustor_failed {
+            self.msg(Level::Warning, "SCRAM INOPÉRANT : CHAMBRE DE COMBUSTION DÉTRUITE");
+            return;
+        }
         match self.eng.scram {
             ScramState::Off => {
                 if self.d.mach < 4.0 {
@@ -602,7 +662,7 @@ impl Aircraft {
             };
             let err_kt = (tas_tgt - v) / KT;
             let rate = (0.006 * err_kt - 0.08 * self.d.accel).clamp(-0.3, 0.3);
-            self.throttle = (self.throttle + rate * dt).clamp(0.0, 1.0);
+            self.throttle = (self.throttle + rate * dt).clamp(0.0, self.thr_max());
         }
 
         // --- Assiette (loi de vol FBW : commande en vitesse de tangage, protections) ---
@@ -624,12 +684,14 @@ impl Aircraft {
             let nmax = if mach > 4.0 { 2.0 } else { 3.0 };
             let alpha_g = nmax * mass * g / (q.max(1.0) * S_WING * cla);
             let mut amax = alpha_g.min(20f64.to_radians());
-            if self.eng.scram == ScramState::Lit {
+            if self.ovr_fbw {
+                amax = 25f64.to_radians();
+            } else if self.eng.scram == ScramState::Lit {
                 // Loi FBW : protection d'incidence de l'entrée d'air (plus stricte sous AP)
                 let lim: f64 = if self.ap.on { 6.5 } else { 9.0 };
                 amax = amax.min(lim.to_radians());
             }
-            let amin = -5f64.to_radians();
+            let amin = if self.ovr_fbw { -10f64.to_radians() } else { -5f64.to_radians() };
             self.theta = self.theta.clamp(self.gamma + amin, self.gamma + amax);
             self.phi = (self.phi + roll_rate * dt).clamp(-80f64.to_radians(), 80f64.to_radians());
         }
@@ -770,7 +832,17 @@ impl Aircraft {
     }
 
     fn engines(&mut self, dt: f64, mach: f64, air: &Air, q: f64, alpha: f64) -> f64 {
-        let th = self.throttle;
+        // Limiteur FADEC : réduit la poussée près des limites de peau et de q (sauf override)
+        let skin_c = self.skin_temp - 273.15;
+        let mut lim = self.thr_max();
+        if !self.ovr_engine {
+            lim = lim.min(1.0 - ((skin_c - (SKIN_LIMIT_C - 60.0)) / 60.0).clamp(0.0, 0.8));
+            lim = lim.min(1.0 - ((q - 92_000.0) / 8_000.0).clamp(0.0, 0.8));
+        }
+        self.fadec_limit = lim;
+        let th = self.throttle.min(lim);
+        let overboost = (th - 1.0).max(0.0);
+        let ovr = self.ovr_engine;
         let sigma = air.rho / RHO0;
         let has_fuel = self.fuel > 0.0;
         let has_h2 = self.h2 > 0.0;
@@ -805,7 +877,7 @@ impl Aircraft {
         e.t_turb = if e.turb == TurbState::Running && e.inlet_open {
             let nf = ((e.n2 - 0.62) / 0.38).clamp(0.0, 1.0).powf(1.5) * 0.92 + 0.08;
             let mf = (1.0 + 0.7 * mach.min(2.6)) * ((3.3 - mach) / 0.7).clamp(0.0, 1.0);
-            2.0 * 120_000.0 * sigma.powf(0.75) * mf * nf * (1.0 + 0.65 * e.ab_frac)
+            2.0 * 120_000.0 * sigma.powf(0.75) * mf * nf * (1.0 + 0.65 * e.ab_frac) * (1.0 + 0.5 * overboost)
         } else {
             0.0
         };
@@ -825,7 +897,7 @@ impl Aircraft {
         e.egt += (egt_tgt - e.egt) * (dt / 2.0).min(1.0);
         if e.turb == TurbState::Running && mach > 3.2 {
             e.overtemp_t += dt;
-            if e.overtemp_t > 8.0 {
+            if e.overtemp_t > if ovr { 25.0 } else { 8.0 } {
                 e.turb = TurbState::Failed;
                 ev.push((Level::Warning, "SURCHAUFFE TURBINES — MOTEURS DÉTRUITS (COUPER AVANT M3.2 !)".into()));
             }
@@ -863,6 +935,25 @@ impl Aircraft {
         }
         e.t_scram = if e.scram == ScramState::Lit { th * q * scram_k(mach) } else { 0.0 };
 
+        // Usure en surrégime : rupture de la chambre quand la santé tombe à zéro
+        let burning = e.scram == ScramState::Lit || e.ram == RamState::Lit || e.turb == TurbState::Running;
+        if overboost > 0.0 && burning {
+            let before = e.health;
+            e.health = (e.health - overboost * 0.012 * dt).max(0.0);
+            if before >= 0.3 && e.health < 0.3 {
+                ev.push((Level::Caution, "ENGINE DEGRADED : SANTÉ DES CHAMBRES < 30 %".into()));
+            }
+            if e.health <= 0.0 && !e.combustor_failed {
+                e.combustor_failed = true;
+                e.scram = ScramState::Off;
+                e.ram = RamState::Off;
+                e.t_scram = 0.0;
+                e.t_ram = 0.0;
+                self.jolt = 2.5;
+                ev.push((Level::Warning, "RUPTURE CHAMBRE DE COMBUSTION — STATO/SCRAM PERDUS".into()));
+            }
+        }
+
         // Débit carburant (Isp effectifs)
         let isp_turb = 3800.0 + (1700.0 - 3800.0) * e.ab_frac;
         let mut ff = e.t_turb / (isp_turb * G0) + e.t_ram / (1600.0 * G0);
@@ -881,6 +972,12 @@ impl Aircraft {
         }
         let total = e.t_turb + e.t_ram + e.t_scram;
         self.fuel = (self.fuel - self.eng.fuel_flow * dt).max(0.0);
+        if self.fuel_dump {
+            self.fuel = (self.fuel - 30.0 * dt).max(0.0);
+            if self.fuel <= 0.0 {
+                self.fuel_dump = false;
+            }
+        }
         let dump = if self.h2_dump { 40.0 } else { 0.0 };
         self.h2 = (self.h2 - (self.eng.h2_flow + dump) * dt).max(0.0);
         if self.h2 <= 0.0 && self.h2_dump {
@@ -1053,5 +1150,40 @@ mod tests {
             println!("consigne {target:+.0}° -> assiette {th:+.2}°");
             assert!((th - target).abs() < 0.5, "assiette {th} pour consigne {target}");
         }
+    }
+
+    #[test]
+    fn engine_override_unlocks_and_wears() {
+        let run = |ovr: bool| {
+            let mut ac = Aircraft::new_on_runway(0);
+            ac.on_ground = false;
+            ac.gear_down = false;
+            ac.gear_pos = 0.0;
+            ac.brakes = false;
+            ac.alt = 105_000.0 * FT;
+            ac.tas = 9.8 * crate::atmosphere::isa(ac.alt).a;
+            ac.eng.inlet_open = false;
+            ac.eng.scram = ScramState::Lit;
+            ac.ap.on = true;
+            ac.ap.alt_tgt_ft = 105_000.0;
+            ac.ap.hdg_tgt = ac.hdg_deg();
+            ac.skin_temp = skin_equilibrium(ac.alt, ac.tas);
+            if ovr {
+                ac.cmd_override_engine(true);
+            }
+            ac.throttle = ac.thr_max();
+            for _ in 0..(240 * 120) {
+                ac.step(1.0 / 120.0, 0.0, 0.0);
+                if ac.crashed.is_some() || ac.eng.combustor_failed {
+                    break;
+                }
+            }
+            (ac.max_mach, ac.eng.health)
+        };
+        let (m_norm, h_norm) = run(false);
+        let (m_ovr, h_ovr) = run(true);
+        println!("normal : Mach max {m_norm:.2} santé {h_norm:.2} | override : Mach max {m_ovr:.2} santé {h_ovr:.2}");
+        assert!(m_ovr > m_norm + 0.1);
+        assert!(h_norm == 1.0 && h_ovr < 1.0);
     }
 }
