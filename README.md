@@ -26,7 +26,8 @@ Mac Apple Silicon (arm64), macOS 11+.
     TURB START/STOP · INLET OPEN/CLOSE · RAM ARM/IGN/OFF · SCRAM ENABLE/IGN/OFF · H2 DUMP [OFF]
     TRAIN UP/DOWN · FREINS ON/OFF · AP ON/OFF · MANUEL · WARP 8 · AIDE
 
-Autoland : ralliement de l'IAF à 15 NM, capture LOC puis G/S, sortie du train à 9 NM,
+Autoland : ralliement de l'IAF à 15 NM (attente en orbite si l'avion arrive trop haut ou trop vite),
+capture LOC puis G/S, remise des gaz automatique si l'approche n'est pas stabilisée, sortie du train à 9 NM,
 Vapp 170 KEAS, arrondi, réduction des gaz, toucher, aérofreins, freinage auto, maintien sur l'axe.
 Il faut que les turbines tournent (sous Mach 2.5 : `INLET OPEN` puis `TURB START`).
 

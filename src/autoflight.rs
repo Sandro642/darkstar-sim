@@ -29,6 +29,9 @@ pub struct Autoland {
     pub iaf: (f64, f64),
     pub phase: AlPhase,
     pub gs_captured: bool,
+    /// Attente (orbite) à l'IAF pour perdre altitude / vitesse avant l'approche.
+    pub holding: bool,
+    pub go_arounds: u32,
 }
 
 impl Autoland {
@@ -40,7 +43,7 @@ impl Autoland {
             let (tla, tlo) = a.point(along_thr, 0.0);
             let iaf = destination(tla, tlo, wrap360(hdg + 180.0), IAF_DIST);
             let (d, _) = dist_brg(lat, lon, iaf.0, iaf.1);
-            let al = Autoland { apt: apt_idx, thr_lat: tla, thr_lon: tlo, hdg, elev: a.elev, iaf, phase: AlPhase::ToIaf, gs_captured: false };
+            let al = Autoland { apt: apt_idx, thr_lat: tla, thr_lon: tlo, hdg, elev: a.elev, iaf, phase: AlPhase::ToIaf, gs_captured: false, holding: false, go_arounds: 0 };
             if best.as_ref().map_or(true, |(bd, _)| d < *bd) {
                 best = Some((d, al));
             }
@@ -154,15 +157,36 @@ impl Aircraft {
             AlPhase::ToIaf => {
                 let (iaf_lat, iaf_lon) = self.autoland.as_ref().unwrap().iaf;
                 let (d, brg) = dist_brg(self.lat, self.lon, iaf_lat, iaf_lon);
+                let iaf_alt_ft = elev / FT + IAF_HGT_FT;
                 self.ap.on = true;
                 self.ap.at_on = true;
                 self.ap.lat = LatMode::Hdg;
-                self.ap.hdg_tgt = brg;
                 self.ap.vert = VertMode::Alt;
-                self.ap.alt_tgt_ft = elev / FT + IAF_HGT_FT;
+                self.ap.alt_tgt_ft = iaf_alt_ft;
                 self.ap.spd_keas = Some(if d < 40.0 * NM { 230.0 } else { 300.0 });
+                // Prêt pour l'approche : altitude et vitesse d'IAF atteintes
+                let ready = self.alt / FT < iaf_alt_ft + 1_200.0 && self.d.keas < 255.0 && self.d.mach < 0.9;
+                self.speedbrake = !ready && (self.alt / FT > iaf_alt_ft + 3_000.0 || self.d.keas > 280.0);
+                let holding = self.autoland.as_ref().unwrap().holding;
+                if d < 3.0 * NM && !ready && !holding {
+                    self.autoland.as_mut().unwrap().holding = true;
+                    say = Some("AUTOLAND : ATTENTE (HOLD) À L'IAF — DESCENTE / DÉCÉLÉRATION".into());
+                }
+                if self.autoland.as_ref().unwrap().holding {
+                    // Orbite autour de l'IAF (rayon ~3 NM) : cap tangent, recentré selon la distance
+                    let corr = ((d - 3.0 * NM) / NM * 20.0).clamp(-40.0, 40.0);
+                    self.ap.hdg_tgt = wrap360(brg + 90.0 - corr);
+                } else {
+                    self.ap.hdg_tgt = brg;
+                }
                 let aligned = wrap180(self.hdg_deg() - hdg).abs() < 70.0;
-                if d < 2.5 * NM || (along > 2.0 * NM && along < IAF_DIST + NM && cross.abs() < 3.0 * NM && aligned) {
+                let near_iaf = d < 2.5 * NM && !self.autoland.as_ref().unwrap().holding;
+                let on_axis = along > 4.0 * NM && along < IAF_DIST + NM && cross.abs() < 3.0 * NM && aligned;
+                let hold_done = self.autoland.as_ref().unwrap().holding && ready && d < 4.0 * NM;
+                if ready && (near_iaf || on_axis || hold_done) {
+                    let al = self.autoland.as_mut().unwrap();
+                    al.holding = false;
+                    al.gs_captured = false;
                     next = AlPhase::Approach;
                     say = Some("AUTOLAND : LOC CAPTURE".into());
                 }
@@ -173,24 +197,40 @@ impl Aircraft {
                 self.ap.lat = LatMode::Loc;
                 let path_alt = elev + (along + 300.0) * 3f64.to_radians().tan();
                 let captured = self.autoland.as_ref().unwrap().gs_captured;
-                if !captured && self.alt >= path_alt - 20.0 {
+                // Capture du plan de descente par en dessous (ou à son niveau) uniquement
+                // Capture : par en dessous, ou par au-dessus si l'écart reste rattrapable par la loi G/S (pente ~6° max)
+                if !captured && self.alt <= path_alt + 300.0 && self.alt >= path_alt - 150.0 {
                     self.autoland.as_mut().unwrap().gs_captured = true;
                     say = Some("AUTOLAND : G/S CAPTURE".into());
                 }
                 if self.autoland.as_ref().unwrap().gs_captured {
                     self.ap.vert = VertMode::Gs;
                 } else {
+                    // Au-dessus du plan : descendre vers lui ; en dessous : palier jusqu'à l'interception
                     self.ap.vert = VertMode::Alt;
-                    self.ap.alt_tgt_ft = (elev / FT + IAF_HGT_FT).min(self.ap.alt_tgt_ft);
+                    self.ap.alt_tgt_ft = (path_alt / FT).min(elev / FT + IAF_HGT_FT);
                 }
                 let va = vapp(self);
                 let tgt = if along > 9.0 * NM { va.max(220.0) } else { va };
                 self.ap.spd_keas = Some(tgt);
-                self.speedbrake = self.d.keas > tgt + 25.0;
+                self.speedbrake = self.d.keas > tgt + 25.0 || self.alt > path_alt + 150.0;
                 if along < 9.0 * NM && !self.gear_down {
                     self.cmd_gear();
                 }
-                if agl < 18.0 && along < 2.0 * NM {
+                // Approche non stabilisée : remise des gaz
+                let too_high = along < 3.0 * NM && self.alt > path_alt + 180.0;
+                let off_axis = along < 3.0 * NM && cross.abs() > 250.0;
+                if too_high || off_axis {
+                    next = AlPhase::ToIaf;
+                    let al = self.autoland.as_mut().unwrap();
+                    al.go_arounds += 1;
+                    al.gs_captured = false;
+                    al.holding = false;
+                    self.speedbrake = false;
+                    self.throttle = self.thr_max().min(1.0);
+                    self.ap.vert = VertMode::Alt;
+                    say = Some(format!("AUTOLAND : REMISE DES GAZ — APPROCHE NON STABILISÉE ({})", if too_high { "TROP HAUT" } else { "HORS AXE" }));
+                } else if agl < 18.0 && along < 2.0 * NM {
                     next = AlPhase::Flare;
                     say = Some("AUTOLAND : FLARE".into());
                     self.speedbrake = false;
@@ -205,7 +245,16 @@ impl Aircraft {
                 if !self.ap.at_on {
                     self.throttle = (self.throttle - 0.5 / 120.0).max(0.0);
                 }
-                if self.on_ground {
+                let half = AIRPORTS[apt].len * 0.5;
+                if !self.on_ground && along < -half {
+                    next = AlPhase::ToIaf;
+                    let al = self.autoland.as_mut().unwrap();
+                    al.go_arounds += 1;
+                    al.gs_captured = false;
+                    self.ap.at_on = true;
+                    self.throttle = 1.0;
+                    say = Some("AUTOLAND : REMISE DES GAZ — ATTERRISSAGE LONG".into());
+                } else if self.on_ground {
                     next = AlPhase::Rollout;
                     say = Some("AUTOLAND : ROLLOUT — AÉROFREINS, AUTOBRAKE".into());
                 }
@@ -237,5 +286,82 @@ impl Aircraft {
             al.phase = next;
         }
         out
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Lance un autoland depuis une position donnée (relative au centre de piste de KEDW).
+    fn run_case(name: &str, brg_from_apt: f64, dist_nm: f64, alt_ft: f64, mach: f64, hdg: f64, fuel: f64) -> Result<String, String> {
+        let edw = AIRPORTS.iter().position(|a| a.icao == "KEDW").unwrap();
+        let apt = &AIRPORTS[edw];
+        let mut ac = Aircraft::new_on_runway(0);
+        let (la, lo) = destination(apt.lat, apt.lon, brg_from_apt, dist_nm * NM);
+        ac.lat = la;
+        ac.lon = lo;
+        ac.alt = alt_ft * FT;
+        ac.tas = mach * crate::atmosphere::isa(ac.alt).a;
+        ac.psi = hdg.to_radians();
+        ac.theta = 3f64.to_radians();
+        ac.on_ground = false;
+        ac.gear_down = false;
+        ac.gear_pos = 0.0;
+        ac.brakes = false;
+        ac.fuel = fuel;
+        ac.set_turbines(TurbState::Running, 0.8);
+        ac.throttle = 0.6;
+        ac.engage_autoland(edw)?;
+        let dt = 1.0 / 60.0;
+        let mut t: f64 = 0.0;
+        let mut log = Vec::new();
+        while t < 3600.0 {
+            let c = ac.autoflight().unwrap_or((0.0, 0.0));
+            ac.step(dt, c.0, c.1);
+            for (_, m) in ac.events.drain(..) {
+                if m.contains("AUTOLAND") || m.contains("TOUCHER") || m.contains("PERTE") || m.contains("REMISE") {
+                    log.push(format!("{t:.0}s {m}"));
+                }
+            }
+            if ac.crashed.is_some() || (ac.autoland.is_none() && ac.on_ground) {
+                break;
+            }
+            if std::env::var("AL_TRACE").is_ok() && name.contains("FL350") && (t as i64) % 15 == 0 && (t - t.floor()) < dt {
+                if let Some(al) = &ac.autoland {
+                    let along = crate::aircraft::along_before(al.thr_lat, al.thr_lon, al.hdg, ac.lat, ac.lon);
+                    let cross = crate::aircraft::cross_track(al.thr_lat, al.thr_lon, al.hdg, ac.lat, ac.lon);
+                    let path = al.elev + (along + 300.0) * 3f64.to_radians().tan();
+                    println!("  t={t:4.0} {:?} hold={} gs={} along={:5.1}NM cross={:5.0}m alt-path={:5.0}m agl={:5.0}ft keas={:3.0} hdg={:3.0} vert={:?}", al.phase, al.holding, al.gs_captured, along / NM, cross, ac.alt - path, (ac.alt - al.elev) / FT, ac.d.keas, ac.hdg_deg(), ac.ap.vert);
+                }
+            }
+            t += dt;
+        }
+        let res = format!("{name}: {:.0}s crash={:?} sol={} tas={:.0} | {}", t, ac.crashed, ac.on_ground, ac.tas, log.join(" / "));
+        if ac.crashed.is_none() && ac.on_ground && ac.tas < 3.0 { Ok(res) } else { Err(res) }
+    }
+
+    #[test]
+    fn autoland_cases() {
+        let cases = [
+            ("finale alignée 10NM", 231.0, 12.0, 3_800.0, 0.30, 51.0, 8_000.0),
+            ("travers 40NM FL150", 320.0, 40.0, 15_000.0, 0.60, 140.0, 15_000.0),
+            ("arrivée haute FL350 M0.95 40NM", 180.0, 40.0, 35_000.0, 0.95, 0.0, 20_000.0),
+            ("arrivée très haute FL450 M1.6 80NM", 250.0, 80.0, 45_000.0, 1.6, 70.0, 20_000.0),
+            ("mauvais côté 8NM cap opposé", 51.0, 8.0, 6_000.0, 0.35, 51.0, 10_000.0),
+            ("au-dessus du terrain FL100", 0.0, 1.0, 10_000.0, 0.45, 300.0, 12_000.0),
+            ("lourd 30NM", 140.0, 30.0, 12_000.0, 0.55, 300.0, 36_000.0),
+        ];
+        let mut fails = Vec::new();
+        for (n, b, d, a, m, h, f) in cases {
+            match run_case(n, b, d, a, m, h, f) {
+                Ok(s) => println!("OK   {s}"),
+                Err(s) => {
+                    println!("FAIL {s}");
+                    fails.push(n);
+                }
+            }
+        }
+        assert!(fails.is_empty(), "échecs : {fails:?}");
     }
 }
