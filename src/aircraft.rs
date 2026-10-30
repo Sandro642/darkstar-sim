@@ -86,6 +86,9 @@ pub struct Autopilot {
     pub spd_managed: bool,
     /// Aérofreins sortis par l'auto-manette (décélération en approche).
     pub at_speedbrake: bool,
+    /// ILS armé : capture LOC dans l'axe, capture G/S par en dessous (le mode courant est conservé d'ici là).
+    pub loc_armed: bool,
+    pub gs_armed: bool,
 }
 
 pub struct Engines {
@@ -335,6 +338,8 @@ impl Aircraft {
                 q_tgt: 50_000.0,
                 spd_managed: false,
                 at_speedbrake: false,
+                loc_armed: false,
+                gs_armed: false,
             },
             d: Derived { elev: a.elev, oat: 15.0, ..Default::default() },
             crashed: None,

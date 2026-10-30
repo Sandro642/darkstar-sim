@@ -297,6 +297,8 @@ fn draw_header(ac: &Aircraft, r: Rect, s: Rect, info: &PfdInfo) {
     if ac.ap.on {
         parts.push((
             match ac.ap.lat {
+                LatMode::Hdg if ac.ap.loc_armed => format!("HDG {:03.0} LOC*", ac.ap.hdg_tgt),
+                LatMode::Nav if ac.ap.loc_armed => format!("NAV {} LOC*", AIRPORTS[info.dest].icao),
                 LatMode::Hdg => format!("HDG {:03.0}", ac.ap.hdg_tgt),
                 LatMode::Nav => format!("NAV {}", AIRPORTS[info.dest].icao),
                 LatMode::Loc => "LOC".into(),
@@ -305,6 +307,7 @@ fn draw_header(ac: &Aircraft, r: Rect, s: Rect, info: &PfdInfo) {
         ));
         parts.push((
             match ac.ap.vert {
+                VertMode::Alt if ac.ap.gs_armed => "ALT G/S*".into(),
                 VertMode::Alt => "ALT".into(),
                 VertMode::Gs => "G/S".into(),
                 VertMode::Flare => "FLARE".into(),

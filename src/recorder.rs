@@ -344,6 +344,14 @@ pub fn analyze(s: &[Sample], events: &[(f64, String)], reason: &str) -> Vec<Stri
         } else {
             diag.push(format!("Pilote automatique engagé ({}) : vérifier la consigne d'altitude / le mode.", last.ap));
         }
+        let recent_gs: Vec<&Sample> = s.iter().filter(|x| x.t >= t0 - 600.0 && x.ap.contains(" GS")).collect();
+        let max_descent = recent_gs.iter().filter(|x| x.gamma < -5.5).count();
+        if recent_gs.len() > 20 && max_descent * 2 > recent_gs.len() {
+            diag.push("Approche ILS non stabilisée : G/S engagé très au-dessus du plan, l'avion est resté à la pente maximale (~-6°) sans rejoindre le plan.".into());
+        }
+        if win.iter().filter(|x| x.bank.abs() > 25.0).count() * 2 > win.len() {
+            diag.push("Inclinaison soutenue > 25° dans la dernière minute : l'avion tournait au lieu d'être aligné.".into());
+        }
         let pull_up = events.iter().filter(|(t, m)| *t >= t0 - 60.0 && m.contains("PULL UP")).count();
         if pull_up > 0 || win.iter().any(|x| x.alerts.contains("PULL UP")) {
             diag.push("Alarme PULL UP active avant l'impact.".into());

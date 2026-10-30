@@ -104,6 +104,44 @@ impl Aircraft {
         Ok(())
     }
 
+    /// ILS manuel (touche L) : capture LOC puis G/S selon des critères réalistes, remise des gaz si long.
+    fn ils_logic(&mut self) {
+        let Some((apt, tla, tlo, hdg, elev)) = self.approach else {
+            self.ap.loc_armed = false;
+            self.ap.gs_armed = false;
+            return;
+        };
+        if self.on_ground || !self.ap.on {
+            return;
+        }
+        let along = along_before(tla, tlo, hdg, self.lat, self.lon);
+        let cross = cross_track(tla, tlo, hdg, self.lat, self.lon);
+        let herr = wrap180(self.hdg_deg() - hdg).abs();
+        if self.ap.loc_armed && along > 0.5 * NM && along < 25.0 * NM && cross.abs() < 3.0 * NM && herr < 100.0 {
+            self.ap.loc_armed = false;
+            self.ap.lat = LatMode::Loc;
+            self.msg(Level::Info, "LOC CAPTURE");
+        }
+        let path_alt = elev + (along + 300.0) * 3f64.to_radians().tan();
+        if self.ap.gs_armed && self.ap.lat == LatMode::Loc && along > 0.3 * NM && self.alt <= path_alt + 60.0 && self.alt >= path_alt - 250.0 {
+            self.ap.gs_armed = false;
+            self.ap.vert = VertMode::Gs;
+            self.msg(Level::Info, "G/S CAPTURE");
+        }
+        // Approche interrompue : au-delà de la mi-piste sans toucher, remise des gaz (cap piste, 3000 ft sol)
+        let half = AIRPORTS[apt].len * 0.5;
+        if (self.ap.lat == LatMode::Loc || self.ap.vert == VertMode::Gs) && along < -half {
+            self.ap.lat = LatMode::Hdg;
+            self.ap.hdg_tgt = hdg;
+            self.ap.vert = VertMode::Alt;
+            self.ap.alt_tgt_ft = elev / FT + 3_000.0;
+            self.ap.loc_armed = false;
+            self.ap.gs_armed = false;
+            self.throttle = self.throttle.max(0.9);
+            self.msg(Level::Caution, "REMISE DES GAZ — APPROCHE ILS INTERROMPUE (L POUR RÉARMER)");
+        }
+    }
+
     /// Exécuté à chaque pas avant step() : pilote les modes AP et renvoie
     /// éventuellement des ordres manche (au sol) qui remplacent ceux du pilote.
     pub fn autoflight(&mut self) -> Option<(f64, f64)> {
@@ -111,6 +149,9 @@ impl Aircraft {
             self.autoland = None;
             self.autotakeoff = None;
             return None;
+        }
+        if self.autoland.is_none() {
+            self.ils_logic();
         }
         if let Some(to) = &self.autotakeoff {
             let (hdg, alt_ft, tla, tlo) = (to.hdg, to.alt_ft, to.thr_lat, to.thr_lon);
@@ -418,5 +459,100 @@ mod tests {
         let (_, k4, va) = keas_at.iter().find(|(m, _, _)| *m == 4.0).copied().expect("passage à 4 NM");
         assert!((k4 - va).abs() < 12.0, "à 4 NM : {k4:.0} KEAS pour Vapp {va:.0}");
         assert!(retard, "RETARD attendu à l'arrondi");
+    }
+
+    /// Reproduction du crash du 30/10 (KSFO) : ILS armé à M2.7 / FL500 à 37 NM, 14.6 km hors axe.
+    /// L'ILS ne doit ni capturer le G/S très au-dessus du plan, ni faire tourner l'avion au-dessus du terrain.
+    #[test]
+    fn ils_armed_high_and_fast_no_crash() {
+        let sfo = AIRPORTS.iter().position(|a| a.icao == "KSFO").unwrap();
+        let apt = &AIRPORTS[sfo];
+        let mut ac = Aircraft::new_on_runway(0);
+        let (la, lo) = apt.point(-apt.len / 2.0 - 37.0 * NM, 14_600.0);
+        ac.lat = la;
+        ac.lon = lo;
+        ac.alt = 50_000.0 * FT;
+        ac.tas = 2.7 * crate::atmosphere::isa(ac.alt).a;
+        ac.psi = (apt.hdg - 10.0).to_radians();
+        ac.on_ground = false;
+        ac.gear_down = false;
+        ac.gear_pos = 0.0;
+        ac.brakes = false;
+        ac.fuel = 20_000.0;
+        ac.set_turbines(TurbState::Running, 0.9);
+        ac.ap.on = true;
+        ac.ap.lat = LatMode::Hdg;
+        ac.ap.hdg_tgt = ac.hdg_deg();
+        ac.ap.vert = VertMode::Alt;
+        ac.ap.alt_tgt_ft = 50_000.0;
+        let a = apt.approach_for(ac.lat, ac.lon);
+        ac.approach = Some((sfo, a.thr_lat, a.thr_lon, a.hdg, apt.elev));
+        ac.ap.loc_armed = true;
+        ac.ap.gs_armed = true;
+        ac.ap.at_on = true;
+        ac.ap.spd_managed = true;
+        let dt = 1.0 / 60.0;
+        let mut gs_high = false;
+        for _ in 0..(900 * 60) {
+            let c = ac.autoflight().unwrap_or((0.0, 0.0));
+            ac.step(dt, c.0, c.1);
+            let along = crate::aircraft::along_before(a.thr_lat, a.thr_lon, a.hdg, ac.lat, ac.lon);
+            let path = apt.elev + (along + 300.0) * 3f64.to_radians().tan();
+            if ac.ap.vert == VertMode::Gs && ac.alt > path + 600.0 {
+                gs_high = true;
+            }
+            if ac.crashed.is_some() {
+                break;
+            }
+        }
+        println!("ILS armé haut/rapide : crash={:?} alt={:.0} ft M{:.2} modes {:?}/{:?} G/S très haut={gs_high}", ac.crashed, ac.alt / FT, ac.d.mach, ac.ap.lat, ac.ap.vert);
+        assert!(ac.crashed.is_none());
+        assert!(!gs_high, "G/S ne doit pas être capturé très au-dessus du plan");
+    }
+
+    /// ILS armé correctement (aligné, sous le plan) : capture LOC puis G/S et arrivée alignée aux minimums.
+    #[test]
+    fn ils_armed_normal_capture() {
+        let edw = AIRPORTS.iter().position(|a| a.icao == "KEDW").unwrap();
+        let apt = &AIRPORTS[edw];
+        let mut ac = Aircraft::new_on_runway(0);
+        let (la, lo) = apt.point(-apt.len / 2.0 - 18.0 * NM, 2_500.0);
+        ac.lat = la;
+        ac.lon = lo;
+        ac.psi = (apt.hdg + 25.0).to_radians();
+        ac.alt = apt.elev + 4_000.0 * FT;
+        ac.tas = 120.0;
+        ac.on_ground = false;
+        ac.gear_down = true;
+        ac.brakes = false;
+        ac.fuel = 10_000.0;
+        ac.set_turbines(TurbState::Running, 0.8);
+        ac.ap.on = true;
+        ac.ap.lat = LatMode::Hdg;
+        ac.ap.hdg_tgt = ac.hdg_deg();
+        ac.ap.vert = VertMode::Alt;
+        ac.ap.alt_tgt_ft = (ac.alt / FT).round();
+        let a = apt.approach_for(ac.lat, ac.lon);
+        ac.approach = Some((edw, a.thr_lat, a.thr_lon, a.hdg, apt.elev));
+        ac.ap.loc_armed = true;
+        ac.ap.gs_armed = true;
+        ac.ap.at_on = true;
+        ac.ap.spd_managed = true;
+        let dt = 1.0 / 60.0;
+        let mut at_minimums = None;
+        for _ in 0..(900 * 60) {
+            let c = ac.autoflight().unwrap_or((0.0, 0.0));
+            ac.step(dt, c.0, c.1);
+            if ac.d.agl < 70.0 && at_minimums.is_none() {
+                at_minimums = Some(crate::aircraft::cross_track(a.thr_lat, a.thr_lon, a.hdg, ac.lat, ac.lon));
+                break;
+            }
+            if ac.crashed.is_some() {
+                break;
+            }
+        }
+        println!("ILS normal : écart latéral aux minimums {:?} m, modes {:?}/{:?}", at_minimums, ac.ap.lat, ac.ap.vert);
+        let c = at_minimums.expect("minimums atteints");
+        assert!(c.abs() < 40.0, "aligné à ±40 m aux minimums");
     }
 }

@@ -552,13 +552,32 @@ impl Game {
             msgs.push((Level::Info, format!("NAV — DIRECT {}", AIRPORTS[self.dest].icao)));
         }
         if is_key_pressed(KeyCode::L) && !ac.on_ground {
-            if ac.approach.is_some() {
-                ac.ap.on = true;
-                ac.ap.lat = LatMode::Loc;
-                ac.ap.vert = VertMode::Gs;
+            if let Some((_, tla, tlo, th, tel)) = ac.approach {
+                if !ac.ap.on {
+                    // AP engagé sur le cap et l'altitude du moment jusqu'à la capture
+                    ac.ap.on = true;
+                    ac.ap.lat = LatMode::Hdg;
+                    ac.ap.hdg_tgt = ac.hdg_deg().round();
+                    ac.ap.vert = VertMode::Alt;
+                    ac.ap.alt_tgt_ft = (ac.alt / FT / 100.0).round() * 100.0;
+                }
+                ac.ap.loc_armed = true;
+                ac.ap.gs_armed = true;
                 ac.ap.at_on = true;
                 ac.ap.spd_managed = true;
-                msgs.push((Level::Info, "APPROCHE ILS ARMÉE — LOC / G/S, A/THR VITESSE GÉRÉE".into()));
+                msgs.push((Level::Info, "ILS ARMÉ (LOC* G/S*) — CAPTURE LOC DANS L'AXE < 25 NM, G/S PAR EN DESSOUS ; A/THR VITESSE GÉRÉE".into()));
+                let along = along_before(tla, tlo, th, ac.lat, ac.lon);
+                let path = tel + (along + 300.0) * 3f64.to_radians().tan();
+                if ac.d.mach > 0.9 || ac.alt > path + 3_000.0 * FT {
+                    msgs.push((
+                        Level::Caution,
+                        format!(
+                            "ATTENTION : {:.0} FT AU-DESSUS DU PLAN À M{:.2} — DESCENDRE (DESCENTE / ALT) OU UTILISER ATTERRIR (L'AUTOLAND GÈRE L'ÉNERGIE)",
+                            (ac.alt - path) / FT,
+                            ac.d.mach
+                        ),
+                    ));
+                }
             } else {
                 msgs.push((Level::Caution, "ILS HORS PORTÉE (< 80 km de la destination)".into()));
             }
@@ -613,7 +632,9 @@ impl Game {
         // Approche / destination
         let apt = &AIRPORTS[self.dest];
         let (dd, brg) = dist_brg(self.ac.lat, self.ac.lon, apt.lat, apt.lon);
-        self.ac.approach = if self.ac.autoland.is_some() {
+        // Sens d'approche figé pendant l'autoland et dès qu'un ILS est armé ou capturé
+        let ils_active = self.ac.ap.loc_armed || self.ac.ap.gs_armed || self.ac.ap.lat == LatMode::Loc || matches!(self.ac.ap.vert, VertMode::Gs | VertMode::Flare);
+        self.ac.approach = if self.ac.autoland.is_some() || (ils_active && self.ac.approach.is_some()) {
             self.ac.approach
         } else if dd < 80_000.0 {
             let a = apt.approach_for(self.ac.lat, self.ac.lon);

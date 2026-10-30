@@ -127,3 +127,9 @@ Données carte : Natural Earth (domaine public).
   sauvegardé toutes les 30 s. Au crash : analyse automatique (cause, état au crash, 60 dernières secondes,
   diagnostic et recommandations) affichée sur le PFD et écrite dans `<date>_CRASH.txt`.
 - Instructions : `FDR` (enregistrer maintenant), `ANALYSE` (analyse du vol ou du dernier crash).
+
+## ILS manuel (v1.2.12)
+- Touche L : l'ILS est **armé** (FMA « LOC* » / « G/S* »), le pilote auto garde son cap et son altitude.
+  LOC capturé dans l'axe, devant la piste, à moins de 25 NM ; G/S capturé en arrivant par en dessous du plan.
+  Sens d'approche figé dès l'armement. Au-delà de la mi-piste sans toucher : remise des gaz automatique.
+- Trop haut ou trop rapide à l'armement : avertissement ; descendre d'abord (DESCENTE / ALT) ou utiliser ATTERRIR.
