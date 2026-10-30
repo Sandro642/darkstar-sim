@@ -76,8 +76,9 @@ Données carte : Natural Earth (domaine public).
 - À droite : carte monde, onglets 4 MOTEURS / 5 THERMIQUE / 6 ESSAIS / 7 DOMAINE / 8 OVERRIDE / 9 CONSOLE, messages.
 
 ## Overrides
-- `OVERRIDE MOTEUR ON` (ou interrupteur ENGINE OVERRIDE) : manette jusqu'à 120 %, limiteur FADEC
-  (peau / pression dynamique) inhibé. Les chambres s'usent en surrégime ; à 0 % : rupture, stato/scram perdus.
+- `OVERRIDE MOTEUR ON` (ou interrupteur ENGINE OVERRIDE) : FADEC inhibé et **manette sans butée**. La limite
+  est celle du moteur : la poussée sature (~137 %) quand le mélange devient stœchiométrique ; au-delà, le
+  carburant en excès ne fait que chauffer et user les chambres. À 0 % : rupture, stato/scram perdus.
 - `OVERRIDE FBW ON` : protections d'incidence et de facteur de charge inhibées (unstart, rupture possibles).
 - `OVERRIDE OFF` réarme tout. `FUEL DUMP` / `H2 DUMP` : vidanges d'urgence.
 
@@ -94,3 +95,7 @@ Données carte : Natural Earth (domaine public).
 - PFD : mémoire G MAX / G MIN atteints (repères ambre sur le crochet de G).
 - Refroidissement : à 100 % de manette aucun capteur ne dépasse son seuil (EGT régulée ~800 °C,
   refroidissement régénératif H2 du scramjet, régulation thermique FADEC du nez vers 1100 °C).
+
+## Train d'atterrissage
+- Trois voyants nez / gauche / droite (PFD, en bas à droite de la vue SVS, et onglet MOTEURS) :
+  vert = sorti et verrouillé, rouge = en transit, éteint = rentré, rouge clignotant = train rentré trop bas.

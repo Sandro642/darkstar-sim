@@ -153,8 +153,12 @@ pub fn draw_engines(ac: &Aircraft, r: Rect, time: f64) {
     }
     let endu = if e.fuel_flow > 0.01 { ac.fuel / e.fuel_flow } else { 0.0 };
     txt(&format!("ENDUR {}", fmt_time(endu)), x, by + 17.0, 12.0, WHITE);
-    let gear = if ac.gear_pos > 0.99 { ("TRAIN DOWN", GREEN_S) } else if ac.gear_pos < 0.01 { ("TRAIN UP", DIM) } else { ("TRAIN TRANSIT", AMBER) };
-    txt(gear.0, x + 130.0, by + 17.0, 12.0, gear.1);
+    // Train : trois voyants (nez, gauche, droite)
+    txt("TRAIN", x + 130.0, by + 17.0, 12.0, DIM);
+    for (i, l) in ac.gear_legs().iter().enumerate() {
+        let c = if *l >= 0.999 { GREEN_S } else if *l > 0.001 { RED } else { Color::new(0.2, 0.21, 0.22, 1.0) };
+        draw_circle(x + 182.0 + i as f32 * 14.0, by + 13.0, 5.0, c);
+    }
     txt(if ac.brakes { "FREINS" } else { "" }, x + 240.0, by + 17.0, 12.0, AMBER);
     txt(if ac.speedbrake { "AEROFREIN" } else { "" }, x + 300.0, by + 17.0, 12.0, AMBER);
     txt_r(&format!("MASSE {:.1}t", ac.mass() / 1000.0), x + w, by + 17.0, 12.0, WHITE);

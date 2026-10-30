@@ -198,11 +198,14 @@ pub fn draw_overrides(ac: &Aircraft, r: Rect) -> Option<Switch> {
     txt(&if e.combustor_failed { "DETRUITES".to_string() } else { format!("SANTE {:.0}%", e.health * 100.0) }, x + 4.0, y + 50.0, 13.0, hc);
     let lim = if ac.ovr_engine { "FADEC : INHIBE".to_string() } else if ac.fadec_limit < 0.995 { format!("FADEC : LIMITE {:.0}%", ac.fadec_limit * 100.0) } else { "FADEC : NOMINAL".to_string() };
     txt(&lim, x + 4.0, y + 68.0, 13.0, if ac.ovr_engine || ac.fadec_limit < 0.995 { AMBER } else { GREEN_S });
-    txt(&format!("MANETTE {:.0}% / {:.0}%", ac.throttle * 100.0, ac.thr_max() * 100.0), x + 4.0, y + 86.0, 13.0, WHITE);
+    let sat = ac.throttle > 1.6;
+    let max_s = if ac.ovr_engine { "LIMITE MOTEUR" } else { "100%" };
+    txt(&format!("MANETTE {:.0}% (MAX {max_s})", ac.throttle * 100.0), x + 4.0, y + 86.0, 13.0, if ac.throttle > 1.0 { AMBER } else { WHITE });
+    txt(&format!("POUSSEE EFFECTIVE {:.0}%{}", ac.eng.th_eff * 100.0, if sat { " - SATUREE" } else { "" }), x + 4.0, y + 104.0, 13.0, if sat { RED } else { DIM });
 
     let ty = r.y + 30.0 + 2.0 * (h + gap) + 6.0;
     let notes = [
-        "ENGINE OVERRIDE : manette jusqu'a 120 %, limiteur FADEC (peau/q) inhibe. Les chambres s'usent en surregime : rupture a 0 %.",
+        "ENGINE OVERRIDE : FADEC inhibe, manette sans butee. La poussee sature a la limite physique du moteur (~137 %) ; au-dela le carburant en exces ne fait que chauffer et user les chambres (rupture a 0 %).",
         "FBW OVERRIDE : protections d'incidence (entree d'air scram) et de facteur de charge inhibees. Unstart et rupture possibles.",
     ];
     let mut yy = ty;

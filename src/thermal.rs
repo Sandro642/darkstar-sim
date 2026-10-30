@@ -103,7 +103,9 @@ impl ThermalSys {
         let avion = self.reading("TC-601");
         let ram_w = self.reading("TC-301");
         let scram_w = self.reading("TC-401");
-        let th = ac.throttle.min(ac.fadec_limit);
+        let th = e_th_eff(ac);
+        // Surplus de carburant au-delà de la saturation moteur (override) : points chauds en chambre
+        let rich = ((ac.throttle - 1.0).max(0.0) - (th - 1.0).max(0.0)).max(0.0);
 
         for s in &mut self.sensors {
             let target = match s.kind {
@@ -139,7 +141,7 @@ impl ThermalSys {
                 }
                 Kind::RamWall => {
                     if e.ram == RamState::Lit {
-                        600.0 + 650.0 * th
+                        600.0 + 650.0 * th + 350.0 * rich
                     } else if e.scram == ScramState::Lit {
                         // Conduit commun dual-mode, refroidi avec la chambre scram
                         scram_w * 0.75
@@ -150,7 +152,7 @@ impl ThermalSys {
                 Kind::ScramWall => {
                     if e.scram == ScramState::Lit {
                         // Refroidissement régénératif par l'hydrogène liquide
-                        850.0 + 600.0 * th + 900.0 * (th - 1.0).max(0.0) - 55.0 * e.h2_flow
+                        850.0 + 600.0 * th + 900.0 * (th - 1.0).max(0.0) + 350.0 * rich - 55.0 * e.h2_flow
                     } else {
                         oat + (stag - oat).min(rise) * 0.6
                     }
@@ -218,6 +220,10 @@ impl ThermalSys {
         }
         a
     }
+}
+
+fn e_th_eff(ac: &Aircraft) -> f64 {
+    ac.eng.th_eff
 }
 
 fn temp_color(v: f64, caution: f64, limit: f64) -> Color {

@@ -99,6 +99,8 @@ pub struct Engines {
     pub h2_flow: f64,
     /// Portes d'entrée d'air turbine : 0 = ouvertes, 1 = fermées.
     pub doors: f64,
+    /// Manette effective après saturation physique du moteur (1 = 100 %).
+    pub th_eff: f64,
     /// Turbines gauche / droite : interrupteur, état, N2, défaut FADEC.
     pub sw: [EngSw; 2],
     pub side: [TurbState; 2],
@@ -301,6 +303,7 @@ impl Aircraft {
                 ab_frac: 0.0,
                 h2_flow: 0.0,
                 doors: 0.0,
+                th_eff: 0.0,
                 sw: [EngSw::Off; 2],
                 side: [TurbState::Off; 2],
                 n2s: [0.0; 2],
@@ -367,18 +370,25 @@ impl Aircraft {
         }
     }
 
+    /// Course de manette : 100 % en normal ; sous override, pas de butée logicielle (course mécanique 200 %).
     pub fn thr_max(&self) -> f64 {
         if self.ovr_engine {
-            1.2
+            2.0
         } else {
             1.0
         }
     }
 
+    /// Train : position de chaque jambe (nez, gauche, droite), la jambe de nez précède les principales.
+    pub fn gear_legs(&self) -> [f64; 3] {
+        let g = self.gear_pos;
+        [(g * 1.12).clamp(0.0, 1.0), ((g - 0.06) * 1.1).clamp(0.0, 1.0), ((g - 0.10) * 1.12).clamp(0.0, 1.0)]
+    }
+
     pub fn cmd_override_engine(&mut self, on: bool) {
         self.ovr_engine = on;
         if on {
-            self.msg(Level::Warning, "ENGINE OVERRIDE : FADEC LIMITEUR INHIBÉ, MANETTE JUSQU'À 120 % — USURE DES CHAMBRES");
+            self.msg(Level::Warning, "ENGINE OVERRIDE : FADEC INHIBÉ, MANETTE SANS BUTÉE — LIMITE = MOTEUR (SATURATION ~137 %), USURE DES CHAMBRES");
         } else {
             self.throttle = self.throttle.min(1.0);
             self.msg(Level::Info, "ENGINE OVERRIDE OFF : LIMITEUR FADEC RÉARMÉ");
@@ -978,13 +988,18 @@ impl Aircraft {
             lim = lim.min(1.0 - ((q - 92_000.0) / 8_000.0).clamp(0.0, 0.8));
         }
         self.fadec_limit = lim;
-        let th = self.throttle.min(lim);
+        let th_cmd = self.throttle.min(lim);
+        // Limite physique : au-delà du mélange stœchiométrique la poussée sature (~+37 % max)
+        let th = if th_cmd <= 1.0 { th_cmd } else { 1.0 + 0.4 * (1.0 - (-(th_cmd - 1.0) / 0.4).exp()) };
         let overboost = (th - 1.0).max(0.0);
+        // Carburant en excès (manette au-delà de la saturation) : chaleur et usure sans poussée
+        let rich = (th_cmd - 1.0).max(0.0) - overboost;
         let ovr = self.ovr_engine;
         let sigma = air.rho / RHO0;
         let has_fuel = self.fuel > 0.0;
         let has_h2 = self.h2 > 0.0;
         let e = &mut self.eng;
+        e.th_eff = th;
         let dt_door = if e.inlet_open { 0.0 } else { 1.0 };
         e.doors += (dt_door - e.doors).clamp(-dt / 6.0, dt / 6.0);
         let mut ev: Vec<(Level, String)> = Vec::new();
@@ -1006,7 +1021,7 @@ impl Aircraft {
                     }
                 }
                 TurbState::Running => {
-                    let tgt = 0.62 + 0.38 * (th / 0.8).min(1.0);
+                    let tgt = 0.62 + 0.38 * (th / 0.8).min(1.0) + 0.08 * overboost;
                     e.n2s[i] += (tgt - e.n2s[i]) * (dt / 3.0).min(1.0);
                     if e.sw[i] == EngSw::Off {
                         e.side[i] = TurbState::Off;
@@ -1121,7 +1136,7 @@ impl Aircraft {
         let burning = e.scram == ScramState::Lit || e.ram == RamState::Lit || e.turb == TurbState::Running;
         if overboost > 0.0 && burning {
             let before = e.health;
-            e.health = (e.health - overboost * 0.012 * dt).max(0.0);
+            e.health = (e.health - (overboost + 1.5 * rich) * 0.012 * dt).max(0.0);
             if before >= 0.3 && e.health < 0.3 {
                 ev.push((Level::Caution, "ENGINE DEGRADED : SANTÉ DES CHAMBRES < 30 %".into()));
             }
@@ -1333,7 +1348,7 @@ mod tests {
 
     #[test]
     fn engine_override_unlocks_and_wears() {
-        let run = |ovr: bool| {
+        let run = |ovr: bool, lever: f64| {
             let mut ac = Aircraft::new_on_runway(0);
             ac.on_ground = false;
             ac.gear_down = false;
@@ -1350,7 +1365,7 @@ mod tests {
             if ovr {
                 ac.cmd_override_engine(true);
             }
-            ac.throttle = ac.thr_max();
+            ac.throttle = lever.min(ac.thr_max());
             for _ in 0..(240 * 120) {
                 ac.step(1.0 / 120.0, 0.0, 0.0);
                 if ac.crashed.is_some() || ac.eng.combustor_failed {
@@ -1359,11 +1374,13 @@ mod tests {
             }
             (ac.max_mach, ac.eng.health)
         };
-        let (m_norm, h_norm) = run(false);
-        let (m_ovr, h_ovr) = run(true);
-        println!("normal : Mach max {m_norm:.2} santé {h_norm:.2} | override : Mach max {m_ovr:.2} santé {h_ovr:.2}");
+        let (m_norm, h_norm) = run(false, 1.0);
+        let (m_ovr, h_ovr) = run(true, 1.2);
+        let (_, h_stop) = run(true, 2.0);
+        println!("normal : Mach max {m_norm:.2} santé {h_norm:.2} | override 120 % : Mach max {m_ovr:.2} santé {h_ovr:.2} | manette en butée : santé {h_stop:.2}");
         assert!(m_ovr > m_norm + 0.1);
-        assert!(h_norm == 1.0 && h_ovr < 1.0);
+        assert!(h_norm == 1.0 && h_ovr < 1.0 && h_ovr > 0.0);
+        assert!(h_stop == 0.0, "en butée, le surplus de carburant doit détruire les chambres");
     }
 
     #[test]

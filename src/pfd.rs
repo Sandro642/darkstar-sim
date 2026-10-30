@@ -249,6 +249,10 @@ fn draw_svs_overlay(ac: &Aircraft, v: &View, info: &PfdInfo) {
         }
     }
 
+    // Voyants de train (nez, gauche, droite)
+    let unsafe_gear = info.alerts.iter().any(|(_, a)| a == "TOO LOW — GEAR");
+    draw_gear(ac, s.x + s.w - 54.0, s.y + s.h - 62.0, info.time, unsafe_gear);
+
     // Alertes
     if let Some(ra) = info.ra {
         if (info.time * 3.0).fract() < 0.6 {
@@ -576,4 +580,42 @@ fn draw_heading(ac: &Aircraft, s: Rect, info: &PfdInfo) {
     txt_r(&format!("DIST {:.2} NM", dist / NM), dx, y + 16.0, 15.0, MAGENTA_S);
     let gs = (ac.tas * ac.gamma.cos()).max(1.0);
     txt_r(&format!("{} {:03.0}°  ETE {}", apt.icao, brg, crate::mission::fmt_time(dist / gs)), dx, y + 33.0, 13.0, MAGENTA_S);
+}
+
+/// Indicateur de train « trois vertes » : vert = sorti verrouillé, rouge = en transit ou configuration
+/// dangereuse (train rentré trop bas), éteint = rentré verrouillé.
+pub fn draw_gear(ac: &Aircraft, cx: f32, cy: f32, time: f64, unsafe_gear: bool) {
+    let legs = ac.gear_legs();
+    let box_r = Rect::new(cx - 40.0, cy - 36.0, 80.0, 78.0);
+    rrect(box_r, 8.0, Color::new(0.0, 0.0, 0.0, 0.7));
+    rrect_lines(box_r, 8.0, 1.0, Color::new(0.5, 0.52, 0.55, 0.8));
+    txt_c("GEAR", cx, cy - 22.0, 12.0, LABEL);
+    let blink = (time * 3.0).fract() < 0.55;
+    let pos = [(cx, cy - 6.0), (cx - 21.0, cy + 16.0), (cx + 21.0, cy + 16.0)];
+    for (i, (x, y)) in pos.iter().enumerate() {
+        let l = legs[i];
+        let (c, lit) = if l >= 0.999 {
+            (GREEN_S, true)
+        } else if l > 0.001 {
+            (RED, true)
+        } else if unsafe_gear {
+            (RED, blink)
+        } else {
+            (Color::new(0.15, 0.16, 0.17, 1.0), false)
+        };
+        let col = if lit { c } else { Color::new(0.12, 0.13, 0.14, 1.0) };
+        if lit {
+            draw_circle(*x, *y, 12.0, Color::new(c.r, c.g, c.b, 0.22));
+        }
+        draw_circle(*x, *y, 8.0, col);
+        draw_circle_lines(*x, *y, 8.0, 1.0, Color::new(0.4, 0.42, 0.45, 1.0));
+    }
+    let (label, c) = if legs.iter().all(|l| *l >= 0.999) {
+        ("DOWN", GREEN_S)
+    } else if legs.iter().all(|l| *l <= 0.001) {
+        if unsafe_gear { ("UP !", RED) } else { ("UP", DIM) }
+    } else {
+        ("TRANSIT", RED)
+    };
+    txt_c(label, cx, cy + 37.0, 11.0, c);
 }
