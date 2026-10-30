@@ -54,6 +54,8 @@ pub enum VertMode {
     Alt,
     Gs,
     Flare,
+    /// Tenue d'assiette (instruction ASSIETTE).
+    Pitch,
 }
 
 pub struct Autopilot {
@@ -66,6 +68,8 @@ pub struct Autopilot {
     pub mach_tgt: f64,
     /// Consigne de vitesse en KEAS (sinon Mach).
     pub spd_keas: Option<f64>,
+    /// Consigne d'assiette en degrés (mode Pitch).
+    pub pitch_tgt: f64,
 }
 
 pub struct Engines {
@@ -267,6 +271,7 @@ impl Aircraft {
                 at_on: false,
                 mach_tgt: 0.9,
                 spd_keas: None,
+                pitch_tgt: 0.0,
             },
             d: Derived { elev: a.elev, oat: 15.0, ..Default::default() },
             crashed: None,
@@ -543,6 +548,7 @@ impl Aircraft {
                     let vs_cmd = -(agl * 0.18).clamp(0.45, 4.0);
                     (vs_cmd / v).asin()
                 }
+                VertMode::Pitch => self.gamma,
             };
             // Protection basse vitesse : on rend de l'altitude si l'incidence approche la butée
             let a_deg = alpha.to_degrees();
@@ -551,7 +557,12 @@ impl Aircraft {
             let (wn, zeta) = (0.6, 0.8);
             let k = (wn * wn / c).min(5.0);
             let kd = ((2.0 * zeta * wn) / c - 1.0).clamp(0.0, 20.0);
-            let mut pr = (k * (gamma_cmd - self.gamma) - kd * self.d.gamma_dot).clamp(-qmax * 0.6, qmax * 0.6);
+            let mut pr = if self.ap.vert == VertMode::Pitch {
+                // Tenue d'assiette : les protections d'incidence de la loi FBW restent actives
+                (0.8 * (self.ap.pitch_tgt.to_radians() - self.theta)).clamp(-qmax * 0.6, qmax * 0.6)
+            } else {
+                (k * (gamma_cmd - self.gamma) - kd * self.d.gamma_dot).clamp(-qmax * 0.6, qmax * 0.6)
+            };
             // Confort : facteur de charge limité à [0.4, 1.7] g sous AP
             if (self.d.nz > 1.7 && pr > 0.0) || (self.d.nz < 0.4 && pr < 0.0) {
                 pr = 0.0;
@@ -1016,5 +1027,31 @@ mod tests {
         println!("crash={:?} sol={} tas={:.1}", ac.crashed, ac.on_ground, ac.tas);
         assert!(ac.crashed.is_none(), "{:?}", ac.crashed);
         assert!(ac.on_ground && ac.tas < 3.0);
+    }
+
+    #[test]
+    fn pitch_hold() {
+        let mut ac = Aircraft::new_on_runway(0);
+        ac.on_ground = false;
+        ac.alt = 6_000.0;
+        ac.tas = 220.0;
+        ac.gear_down = false;
+        ac.gear_pos = 0.0;
+        ac.brakes = false;
+        ac.eng.turb = TurbState::Running;
+        ac.eng.n2 = 0.9;
+        ac.throttle = 0.9;
+        ac.ap.on = true;
+        ac.ap.vert = VertMode::Pitch;
+        ac.ap.hdg_tgt = ac.hdg_deg();
+        for target in [10.0, -5.0] {
+            ac.ap.pitch_tgt = target;
+            for _ in 0..(25 * 120) {
+                ac.step(1.0 / 120.0, 0.0, 0.0);
+            }
+            let th = ac.theta.to_degrees();
+            println!("consigne {target:+.0}° -> assiette {th:+.2}°");
+            assert!((th - target).abs() < 0.5, "assiette {th} pour consigne {target}");
+        }
     }
 }

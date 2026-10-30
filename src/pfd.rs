@@ -100,6 +100,16 @@ fn draw_svs_overlay(ac: &Aircraft, v: &View, info: &PfdInfo) {
         }
     }
 
+    // Consigne d'assiette (mode PITCH) : repères magenta
+    if ac.ap.on && ac.ap.vert == VertMode::Pitch {
+        let c = dir(ac.psi, ac.ap.pitch_tgt.to_radians()) * big;
+        for side in [-1.0f32, 1.0] {
+            if let (Some(a), Some(b)) = (v.project(c + hr * big * side * 0.032), v.project(c + hr * big * side * 0.07)) {
+                draw_line(a.x, a.y, b.x, b.y, 3.0, MAGENTA_S);
+            }
+        }
+    }
+
     // Marqueur de trajectoire : cercle, ailes et dérive
     let fpv = if !ac.on_ground && ac.tas > 20.0 { v.project_dir(dir(ac.psi, ac.gamma)) } else { v.project_dir(dir(ac.psi, ac.theta)) };
     if let Some(f) = fpv {
@@ -246,6 +256,7 @@ fn draw_header(ac: &Aircraft, r: Rect, s: Rect, info: &PfdInfo) {
                 VertMode::Alt => "ALT".into(),
                 VertMode::Gs => "G/S".into(),
                 VertMode::Flare => "FLARE".into(),
+                VertMode::Pitch => format!("PITCH {:+.0}", ac.ap.pitch_tgt),
             },
             GREEN_S,
         ));

@@ -274,13 +274,23 @@ impl Game {
         // Consignes AP
         if ac.ap.on && ac.autoland.is_none() {
             let k = if shift { 10_000.0 } else { 1_000.0 };
-            if is_key_pressed(KeyCode::Up) {
-                ac.ap.alt_tgt_ft = (ac.ap.alt_tgt_ft + k).min(130_000.0);
-                ac.ap.vert = VertMode::Alt;
-            }
-            if is_key_pressed(KeyCode::Down) {
-                ac.ap.alt_tgt_ft = (ac.ap.alt_tgt_ft - k).max(1_000.0);
-                ac.ap.vert = VertMode::Alt;
+            if ac.ap.vert == VertMode::Pitch {
+                let pk = if shift { 5.0 } else { 1.0 };
+                if is_key_pressed(KeyCode::Up) {
+                    ac.ap.pitch_tgt = (ac.ap.pitch_tgt + pk).min(30.0);
+                }
+                if is_key_pressed(KeyCode::Down) {
+                    ac.ap.pitch_tgt = (ac.ap.pitch_tgt - pk).max(-20.0);
+                }
+            } else {
+                if is_key_pressed(KeyCode::Up) {
+                    ac.ap.alt_tgt_ft = (ac.ap.alt_tgt_ft + k).min(130_000.0);
+                    ac.ap.vert = VertMode::Alt;
+                }
+                if is_key_pressed(KeyCode::Down) {
+                    ac.ap.alt_tgt_ft = (ac.ap.alt_tgt_ft - k).max(1_000.0);
+                    ac.ap.vert = VertMode::Alt;
+                }
             }
             let hk = if shift { 30.0 } else { 5.0 };
             if is_key_pressed(KeyCode::Right) && !ac.on_ground {
@@ -550,6 +560,16 @@ impl Game {
                 Some(_) => reply = Err("AU SOL".into()),
                 None => reply = Err("USAGE : ALT 90000  ou  FL350".into()),
             },
+            "ASSIETTE" | "PITCH" | "ASS" => match w.get(1).and_then(|s| s.trim_start_matches('+').parse::<f64>().ok()) {
+                Some(p) if airborne => {
+                    engage_ap(ac);
+                    ac.ap.vert = VertMode::Pitch;
+                    ac.ap.pitch_tgt = p.clamp(-20.0, 30.0);
+                    reply = Ok(format!("ASSIETTE {:+.1} DEG", ac.ap.pitch_tgt));
+                }
+                Some(_) => reply = Err("AU SOL".into()),
+                None => reply = Err("USAGE : ASSIETTE 10  (degrés, -20 à +30)".into()),
+            },
             "MACH" | "M" => match num(1) {
                 Some(m) => {
                     ac.ap.at_on = true;
@@ -708,7 +728,7 @@ impl Game {
             }
             "AIDE" | "HELP" | "?" => {
                 for l in [
-                    "CAP 270 | ALT 90000 / FL350 | MACH 6 | KEAS 300 | THR 80",
+                    "CAP 270 | ALT 90000 / FL350 | ASSIETTE 10 | MACH 6 | KEAS 300 | THR 80",
                     "DIRECT KEDW | ATTERRIR [KEDW] (autoland) | DECOLLAGE [15000]",
                     "TURB START/STOP | INLET OPEN/CLOSE | RAM ARM/IGN/OFF | SCRAM ENABLE/IGN/OFF",
                     "H2 DUMP (vidange d'urgence H2) | H2 DUMP OFF",
