@@ -97,5 +97,5 @@ Données carte : Natural Earth (domaine public).
   refroidissement régénératif H2 du scramjet, régulation thermique FADEC du nez vers 1100 °C).
 
 ## Train d'atterrissage
-- Trois voyants nez / gauche / droite (PFD, en bas à droite de la vue SVS, et onglet MOTEURS) :
+- Trois voyants nez / gauche / droite (bloc TRAIN dans la colonne de droite, à côté des messages, et onglet MOTEURS) :
   vert = sorti et verrouillé, rouge = en transit, éteint = rentré, rouge clignotant = train rentré trop bas.

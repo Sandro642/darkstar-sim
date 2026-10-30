@@ -1227,7 +1227,13 @@ async fn main() {
                 }
             }
             let my = cr.y + cr.h + 6.0;
-            panels::draw_messages(&g.log, Rect::new(rx, my, rw, body.y + body.h - my));
+            let mh = body.y + body.h - my;
+            // Bloc TRAIN (trois voyants) toujours visible, à gauche des messages
+            let gear_r = Rect::new(rx, my, 112.0, mh);
+            ui::panel(gear_r, "TRAIN");
+            let unsafe_gear = alerts.iter().any(|(_, a)| a == "TOO LOW — GEAR");
+            pfd::draw_gear(&g.ac, gear_r.x + gear_r.w / 2.0, gear_r.y + 24.0 + (gear_r.h - 24.0) / 2.0, time, unsafe_gear);
+            panels::draw_messages(&g.log, Rect::new(rx + 118.0, my, rw - 118.0, mh));
 
         }
         let top = gcs::draw_topbar(

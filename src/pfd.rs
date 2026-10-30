@@ -249,10 +249,6 @@ fn draw_svs_overlay(ac: &Aircraft, v: &View, info: &PfdInfo) {
         }
     }
 
-    // Voyants de train (nez, gauche, droite)
-    let unsafe_gear = info.alerts.iter().any(|(_, a)| a == "TOO LOW — GEAR");
-    draw_gear(ac, s.x + s.w - 54.0, s.y + s.h - 62.0, info.time, unsafe_gear);
-
     // Alertes
     if let Some(ra) = info.ra {
         if (info.time * 3.0).fract() < 0.6 {
