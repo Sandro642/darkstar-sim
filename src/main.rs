@@ -1,13 +1,16 @@
 //! DARKSTAR — simulateur d'essais en vol hypersoniques télépilotés.
 
 mod aircraft;
+mod alarms;
 mod airports;
 mod atmosphere;
+mod elec;
 mod audio;
 mod autoflight;
 mod fcs;
 mod gcs;
 mod geo;
+mod limits;
 mod map;
 mod menu;
 mod mfd;
@@ -16,6 +19,7 @@ mod panels;
 mod recorder;
 mod pfd;
 mod svs;
+mod systems;
 mod thermal;
 mod traffic;
 mod ui;
@@ -688,7 +692,9 @@ impl Game {
         if is_key_pressed(KeyCode::C) {
             self.map.follow = true;
         }
-        for (k, tab) in [(KeyCode::Key4, gcs::Tab::Moteurs), (KeyCode::Key5, gcs::Tab::Thermique), (KeyCode::Key6, gcs::Tab::Essais), (KeyCode::Key7, gcs::Tab::Domaine), (KeyCode::Key8, gcs::Tab::Override), (KeyCode::Key9, gcs::Tab::Console), (KeyCode::Key0, gcs::Tab::Fcs)] {
+        let page_keys = [KeyCode::Key4, KeyCode::Key5, KeyCode::Key6, KeyCode::Key7, KeyCode::Key8, KeyCode::Key9, KeyCode::Key0];
+        for (k, (tab, _)) in page_keys.iter().zip(gcs::TABS.iter()) {
+            let (k, tab) = (*k, *tab);
             if is_key_pressed(k) {
                 self.tab = tab;
             }
@@ -1071,6 +1077,27 @@ impl Game {
                 ac.g_min = ac.d.nz.min(1.0);
                 reply = Ok("MÉMOIRE G MAX / MIN REMISE À ZÉRO".into());
             }
+            "PANNE" | "FAIL" => {
+                let on = !matches!(arg(2), "OFF" | "REPARER");
+                match systems::fail_by_code(arg(1)) {
+                    Some(f) => {
+                        ac.set_failure(f, on);
+                        reply = Ok(format!("PANNE {} {}", arg(1), if on { "INJECTÉE" } else { "RÉPARÉE" }));
+                    }
+                    None => {
+                        let codes: Vec<&str> = systems::FAILS.iter().map(|(_, c, _)| *c).collect();
+                        reply = Err(format!("PANNE INCONNUE — CODES : {}", codes.join(" ")));
+                    }
+                }
+            }
+            "PANNES" | "REPARER" | "REPAIR" => {
+                for (f, _, _) in systems::FAILS {
+                    if ac.fails.has(f) {
+                        ac.set_failure(f, false);
+                    }
+                }
+                reply = Ok("TOUTES LES PANNES RÉPARÉES".into());
+            }
             "FIN" | "END" | "TERMINER" => {
                 self.end_flight();
                 return;
@@ -1206,6 +1233,10 @@ impl Game {
                 }
                 reply = Ok(format!("H2 {:.0} KG / {:.0} PSI", ac.h2, ac.h2_psi()));
             }
+            "GEAR" | "TRAIN" if matches!(arg(1), "SECOURS" | "ALTERNATE" | "ALT") => {
+                ac.cmd_gear_alt();
+                reply = Ok("SORTIE DE SECOURS DU TRAIN".into());
+            }
             "GEAR" | "TRAIN" => {
                 let want_down = matches!(arg(1), "DOWN" | "SORTIR" | "BAS");
                 if want_down != ac.gear_down {
@@ -1264,6 +1295,7 @@ impl Game {
                     "CAPTEUR 101 OFF|ON (inhiber/réactiver un capteur par son numéro) | CAPTEURS ON",
                     "FDR (enregistrer la trace) | ANALYSE (analyse du vol / du crash)",
                     "FIN (terminer le vol + débriefing) | QUITTER (sauvegarder et fermer)",
+                    "PANNE ENGL|ENGR|GENL|GENR|POMPE|ADC|FCS|HYD|REFROID|PORTES|TRAIN|FUITEH2 [OFF] | PANNES OFF | TRAIN SECOURS",
                     "TRAIN UP/DOWN | FREINS ON/OFF | AP ON/OFF | MANUEL | WARP 8",
                 ] {
                     self.log.push((self.sim_time, Level::Info, l.into()));
@@ -1333,15 +1365,9 @@ async fn main() {
     let mut last_upd_msg = String::new();
     let mut g = Game::new(&scenario);
     if let Ok(t) = std::env::var("DARKSTAR_TAB") {
-        g.tab = match t.as_str() {
-            "5" => gcs::Tab::Thermique,
-            "6" => gcs::Tab::Essais,
-            "7" => gcs::Tab::Domaine,
-            "8" => gcs::Tab::Override,
-            "9" => gcs::Tab::Console,
-            "0" => gcs::Tab::Fcs,
-            _ => gcs::Tab::Moteurs,
-        };
+        if let Some((tab, _)) = gcs::TABS.iter().find(|(_, l)| l.starts_with(t.to_uppercase().as_str())) {
+            g.tab = *tab;
+        }
     }
     // Instructions exécutées au démarrage (tests, scénarios) : DARKSTAR_CMD="CAPTEUR 101;ALT 30000"
     if let Ok(cmds) = std::env::var("DARKSTAR_CMD") {
@@ -1437,13 +1463,19 @@ async fn main() {
             g.map.input(body);
             g.map.draw(&world, &g.ac, &g.traffic, body, g.dest, time);
         } else {
-            // Écran principal Darkstar
-            let mfd_w = (body.w * 0.56).floor();
-            let mfd_r = Rect::new(body.x, body.y, mfd_w, body.h);
+            // Écran principal Darkstar, aux proportions de l'écran du cockpit
+            let mfd_w = (body.w * 0.60).min((body.h - 150.0) * mfd::COCKPIT_ASPECT).floor();
+            let mfd_h = (mfd_w / mfd::COCKPIT_ASPECT).floor();
+            let mfd_r = Rect::new(body.x, body.y, mfd_w, mfd_h);
+            const BEZEL_PAGES: [gcs::Tab; 6] = [gcs::Tab::Moteurs, gcs::Tab::Alarmes, gcs::Tab::Fcs, gcs::Tab::Limites, gcs::Tab::Elec, gcs::Tab::Thermique];
+            let lit: [bool; 6] = std::array::from_fn(|i| g.tab == BEZEL_PAGES[i]);
             let info = pfd::PfdInfo { alerts: &alerts, ra: g.traffic.ra, link_name: ln, latency_ms: lat, dest: g.dest, warp: warp_eff, time };
-            let (_, act) = mfd::draw_mfd(&world, &g.ac, &g.traffic, mfd_r, &mut g.mfd, &info, g.style, time);
+            let (_, act) = mfd::draw_mfd(&world, &g.ac, &g.traffic, mfd_r, &mut g.mfd, &info, g.style, time, lit);
             if act.fuel_dump {
                 g.apply_switch(gcs::Switch::FuelDump);
+            }
+            if let Some(b) = act.bezel {
+                g.tab = BEZEL_PAGES[b];
             }
             let svs_r = mfd::layout(mfd_r).1.svs;
             draw_console(&g, svs_r);
@@ -1460,22 +1492,58 @@ async fn main() {
                 g.tab = gcs::Tab::Console;
             }
 
-            // Colonne de droite : carte, onglets, messages
+            // Sous l'écran : bloc TRAIN et messages
+            let by = mfd_r.y + mfd_r.h + 6.0;
+            let bh = body.y + body.h - by;
+            let gear_r = Rect::new(body.x, by, 112.0, bh);
+            ui::panel(gear_r, "TRAIN");
+            let unsafe_gear = alerts.iter().any(|(_, a)| a == "TOO LOW — GEAR");
+            pfd::draw_gear(&g.ac, gear_r.x + gear_r.w / 2.0, gear_r.y + 24.0 + (gear_r.h - 24.0) / 2.0, time, unsafe_gear);
+            panels::draw_messages(&g.log, Rect::new(body.x + 118.0, by, mfd_w - 118.0, bh));
+
+            // Colonne de droite : carte, onglets (2 rangées), page sélectionnée
             let rx = mfd_r.x + mfd_r.w + 8.0;
             let rw = body.x + body.w - rx;
-            let map_h = (body.h * 0.42).floor();
+            let map_h = (body.h * 0.36).floor();
             let mr = Rect::new(rx, body.y, rw, map_h);
             g.map.input(mr);
             g.map.draw(&world, &g.ac, &g.traffic, mr, g.dest, time);
-            let tabs_r = Rect::new(rx, mr.y + mr.h + 6.0, rw, 28.0);
-            let ovr_alert = g.ac.ovr_engine || g.ac.ovr_fbw || g.ac.h2_dump || g.ac.fuel_dump;
-            if let Some(t) = gcs::draw_tabs(tabs_r, g.tab, ovr_alert) {
+            let tabs_r = Rect::new(rx, mr.y + mr.h + 6.0, rw, 54.0);
+            let mut alert_tabs = Vec::new();
+            if g.ac.ovr_engine || g.ac.ovr_fbw || g.ac.h2_dump || g.ac.fuel_dump {
+                alert_tabs.push(gcs::Tab::Override);
+            }
+            if alarms::lit_count(&g.ac, &alerts) > 0 {
+                alert_tabs.push(gcs::Tab::Alarmes);
+            }
+            if let Some(t) = gcs::draw_tabs(tabs_r, g.tab, &alert_tabs) {
                 g.tab = t;
             }
-            let content_h = (body.h * 0.39).floor();
-            let cr = Rect::new(rx, tabs_r.y + tabs_r.h + 4.0, rw, content_h);
+            let cr = Rect::new(rx, tabs_r.y + tabs_r.h + 4.0, rw, body.y + body.h - (tabs_r.y + tabs_r.h + 4.0));
             match g.tab {
                 gcs::Tab::Moteurs => panels::draw_engines(&g.ac, cr, time),
+                gcs::Tab::Alarmes => match alarms::draw_alarms(&g.ac, &alerts, cr, time) {
+                    Some(alarms::AlarmAction::Toggle(f)) => {
+                        let on = !g.ac.fails.has(f);
+                        g.ac.set_failure(f, on);
+                        g.cues.push(audio::Cue::Ack);
+                    }
+                    Some(alarms::AlarmAction::RepairAll) => g.exec_command("PANNES OFF"),
+                    None => {}
+                },
+                gcs::Tab::Limites => limits::draw_limits(&g.ac, cr),
+                gcs::Tab::Elec => {
+                    if let Some(a) = elec::draw_elec(&g.ac, cr, time) {
+                        let el = &mut g.ac.elec;
+                        match a {
+                            elec::EnvAction::TempKnob(v) => el.temp_knob = v,
+                            elec::EnvAction::FaceHeat(v) => el.faceheat = v,
+                            elec::EnvAction::SelToggle => el.sel_ebay = !el.sel_ebay,
+                            elec::EnvAction::AutoToggle => el.auto_temp = !el.auto_temp,
+                        }
+                        g.cues.push(audio::Cue::Ack);
+                    }
+                }
                 gcs::Tab::Thermique => {
                     if let Some(i) = thermal::draw_thermal(&g.thermal, cr, time) {
                         // Clic sur un capteur déjà sélectionné : désélection
@@ -1497,15 +1565,6 @@ async fn main() {
                     }
                 }
             }
-            let my = cr.y + cr.h + 6.0;
-            let mh = body.y + body.h - my;
-            // Bloc TRAIN (trois voyants) toujours visible, à gauche des messages
-            let gear_r = Rect::new(rx, my, 112.0, mh);
-            ui::panel(gear_r, "TRAIN");
-            let unsafe_gear = alerts.iter().any(|(_, a)| a == "TOO LOW — GEAR");
-            pfd::draw_gear(&g.ac, gear_r.x + gear_r.w / 2.0, gear_r.y + 24.0 + (gear_r.h - 24.0) / 2.0, time, unsafe_gear);
-            panels::draw_messages(&g.log, Rect::new(rx + 118.0, my, rw - 118.0, mh));
-
         }
         let top = gcs::draw_topbar(
             bar,

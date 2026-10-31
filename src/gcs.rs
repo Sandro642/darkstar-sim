@@ -87,38 +87,48 @@ pub fn draw_topbar(r: Rect, t: &TopBar) -> TopActions {
 #[derive(Clone, Copy, PartialEq)]
 pub enum Tab {
     Moteurs,
+    Alarmes,
+    Fcs,
+    Limites,
+    Elec,
     Thermique,
     Essais,
     Domaine,
     Override,
     Console,
-    Fcs,
 }
 
-pub const TABS: [(Tab, &str); 7] = [
+/// Pages, dans l'ordre : touches 4..9 et 0 pour les 7 premières, boutons de lunette pour les 6 premières.
+pub const TABS: [(Tab, &str); 10] = [
     (Tab::Moteurs, "MOTEURS"),
+    (Tab::Alarmes, "ALARMES"),
+    (Tab::Fcs, "FCS"),
+    (Tab::Limites, "LIMITES"),
+    (Tab::Elec, "ELEC/ENV"),
     (Tab::Thermique, "THERMIQUE"),
     (Tab::Essais, "ESSAIS"),
     (Tab::Domaine, "DOMAINE"),
     (Tab::Override, "OVERRIDE"),
     (Tab::Console, "CONSOLE"),
-    (Tab::Fcs, "FCS"),
 ];
 
-/// Barre d'onglets ; renvoie l'onglet cliqué.
-pub fn draw_tabs(r: Rect, cur: Tab, alert_override: bool) -> Option<Tab> {
-    let w = r.w / TABS.len() as f32;
+/// Barre d'onglets sur deux rangées ; renvoie l'onglet cliqué. `alert` : onglets à signaler en ambre.
+pub fn draw_tabs(r: Rect, cur: Tab, alert: &[Tab]) -> Option<Tab> {
+    let per_row = 5;
+    let w = r.w / per_row as f32;
+    let rh = r.h / 2.0;
     let mut out = None;
     for (i, (tab, label)) in TABS.iter().enumerate() {
-        let tr = Rect::new(r.x + i as f32 * w + 2.0, r.y, w - 4.0, r.h);
+        let tr = Rect::new(r.x + (i % per_row) as f32 * w + 2.0, r.y + (i / per_row) as f32 * rh + 1.0, w - 4.0, rh - 2.0);
         let active = *tab == cur;
         let bg = if active { Color::new(0.10, 0.16, 0.22, 1.0) } else if hovered(tr) { Color::new(0.08, 0.10, 0.13, 1.0) } else { Color::new(0.06, 0.075, 0.095, 1.0) };
         rrect(tr, 6.0, bg);
         if active {
             draw_rectangle(tr.x + 8.0, tr.y + tr.h - 3.0, tr.w - 16.0, 3.0, ACCENT);
         }
-        let c = if *tab == Tab::Override && alert_override { AMBER } else if active { WHITE } else { DIM };
-        txt_c(&format!("{} {}", (i + 4) % 10, label), tr.x + tr.w / 2.0, tr.y + tr.h / 2.0 + 5.0, 12.0, c);
+        let c = if alert.contains(tab) { AMBER } else if active { WHITE } else { DIM };
+        let key = if i < 7 { format!("{} ", (i + 4) % 10) } else { String::new() };
+        txt_c(&format!("{key}{label}"), tr.x + tr.w / 2.0, tr.y + tr.h / 2.0 + 5.0, 12.0, c);
         if clicked(tr) {
             out = Some(*tab);
         }

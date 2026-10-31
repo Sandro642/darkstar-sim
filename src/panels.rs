@@ -12,69 +12,121 @@ fn f_of(c: f64) -> f64 {
     c * 9.0 / 5.0 + 32.0
 }
 
-/// Nacelle moteur façon écran Darkstar : portes, GEN, RPM, EGT et température d'entrée (°F).
+/// Nacelle TBCC « over-under » façon écran Darkstar : turbine en haut, conduit stato/scram en bas.
+/// Les portes d'entrée basculent pour fermer la turbine quand le conduit inférieur prend le relais.
 fn nacelle(r: Rect, side: &str, ac: &Aircraft, i: usize, egt_off: f64, time: f64) {
     let e = &ac.eng;
     let running = e.side[i] == TurbState::Running;
     let (x, y, w, h) = (r.x, r.y, r.w, r.h);
-    let cy = y + h * 0.55;
-    txt("FWD", x + 4.0, y + 12.0, 12.0, DIM);
-    txt_r("AFT", x + w - 4.0, y + 12.0, 12.0, DIM);
-    txt(side, x + w * 0.45, y + 12.0, 12.0, DIM);
-    // Corps de nacelle
-    let body = [
-        vec2(x + w * 0.10, cy - h * 0.10),
-        vec2(x + w * 0.22, cy - h * 0.26),
-        vec2(x + w * 0.80, cy - h * 0.22),
-        vec2(x + w * 0.90, cy - h * 0.10),
-        vec2(x + w * 0.90, cy + h * 0.10),
-        vec2(x + w * 0.80, cy + h * 0.24),
-        vec2(x + w * 0.22, cy + h * 0.28),
-        vec2(x + w * 0.10, cy + h * 0.12),
+    let line_c = Color::new(0.80, 0.82, 0.85, 1.0);
+    txt("FWD", x + 6.0, y + 13.0, 11.0, DIM);
+    txt_r("AFT", x + w - 6.0, y + 13.0, 11.0, DIM);
+    txt_c(side, x + w * 0.5, y + 13.0, 11.0, WHITE);
+
+    // Géométrie : entrée (gauche) -> séparateur -> turbine (haut) / conduit (bas) -> tuyère commune
+    let x_in = x + w * 0.07;
+    let x_split = x + w * 0.20;
+    let x_mix = x + w * 0.80;
+    let x_noz = x + w * 0.90;
+    let top = y + h * 0.20;
+    let mid = y + h * 0.56;
+    let bot = y + h * 0.82;
+    let up_body = [
+        vec2(x_in, mid - h * 0.04),
+        vec2(x_split, top + h * 0.06),
+        vec2(x + w * 0.28, top),
+        vec2(x + w * 0.74, top),
+        vec2(x_mix, top + h * 0.08),
+        vec2(x_noz, mid - h * 0.08),
     ];
-    let col = Color::new(0.62, 0.66, 0.70, 1.0);
-    for i in 0..body.len() {
-        let (p, q) = (body[i], body[(i + 1) % body.len()]);
-        draw_line(p.x, p.y, q.x, q.y, 1.5, col);
+    for k in 0..up_body.len() - 1 {
+        draw_line(up_body[k].x, up_body[k].y, up_body[k + 1].x, up_body[k + 1].y, 1.5, line_c);
     }
-    // Arbre moteur
-    draw_rectangle(x + w * 0.28, cy - 5.0, w * 0.46, 10.0, Color::new(0.30, 0.32, 0.35, 1.0));
-    // Portes d'entrée d'air (angle)
-    let door_deg = e.doors * 90.0;
-    let pivot = vec2(x + w * 0.12, cy - h * 0.12);
-    let a = (door_deg as f32).to_radians();
-    let tip = pivot + vec2(a.cos(), a.sin()) * (h * 0.24);
-    draw_line(pivot.x, pivot.y, tip.x, tip.y, 2.5, if e.doors > 0.01 && e.doors < 0.99 { AMBER } else { col });
-    txt("DOORS", x + 4.0, cy + h * 0.30, 11.0, DIM);
-    txt(&format!("{:02.0}°", door_deg), x + 8.0, cy + h * 0.30 + 14.0, 15.0, WHITE);
-    // GEN + RPM
-    let gen_on = running && e.n2s[i] > 0.55;
-    let bx = x + w * 0.36;
-    draw_rectangle(bx, cy - 9.0, 58.0, 18.0, Color::new(0.20, 0.12, 0.05, 1.0));
-    draw_rectangle_lines(bx, cy - 9.0, 58.0, 18.0, 1.0, if gen_on { AMBER } else { DIM });
-    txt_c(if gen_on { "GEN ON" } else { "GEN OFF" }, bx + 29.0, cy + 5.0, 12.0, if gen_on { AMBER } else { DIM });
-    txt("RPM", bx + 64.0, cy - 2.0, 10.0, DIM);
+    // Conduit inférieur (stato / scram)
+    let low_body = [vec2(x_in, mid + h * 0.02), vec2(x_split, bot), vec2(x_mix, bot), vec2(x_noz, mid + h * 0.10)];
+    for k in 0..low_body.len() - 1 {
+        draw_line(low_body[k].x, low_body[k].y, low_body[k + 1].x, low_body[k + 1].y, 1.5, line_c);
+    }
+    draw_line(x_noz, mid - h * 0.08, x_noz, mid + h * 0.10, 1.5, line_c);
+    // Cloison entre les deux veines
+    draw_line(x_split + w * 0.04, mid, x_mix - w * 0.02, mid, 1.0, Color::new(0.5, 0.52, 0.55, 1.0));
+
+    // Veine inférieure active : flux animé coloré + flamme en sortie
+    let lower = if e.scram == ScramState::Lit {
+        Some((MAGENTA_S, "SCRAM", e.t_scram, e.scram_wall))
+    } else if e.ram == RamState::Lit {
+        Some((CYAN_S, "STATO", e.t_ram, e.ram_wall))
+    } else {
+        None
+    };
+    if let Some((c, name, thrust, wall)) = lower {
+        let fill = Color::new(c.r * 0.25, c.g * 0.25, c.b * 0.25, 1.0);
+        draw_rectangle(x_split + w * 0.03, mid + 2.0, x_mix - x_split - w * 0.05, bot - mid - 4.0, fill);
+        let phase = (time * 2.5).fract() as f32;
+        let n = 9;
+        for k in 0..n {
+            let fx = x_split + w * 0.04 + ((k as f32 + phase) / n as f32) * (x_mix - x_split - w * 0.08);
+            draw_line(fx, mid + (bot - mid) * 0.3, fx + w * 0.03, mid + (bot - mid) * 0.5, 2.0, c);
+            draw_line(fx + w * 0.03, mid + (bot - mid) * 0.5, fx, mid + (bot - mid) * 0.7, 2.0, c);
+        }
+        let fl = 0.8 + 0.2 * ((time * 19.0 + i as f64).sin() as f32);
+        for k in -2..=2 {
+            let yy = mid + h * 0.01 + k as f32 * 3.0;
+            draw_line(x_noz, yy, x_noz + w * 0.08 * fl * (1.0 - (k as f32).abs() * 0.15), yy + k as f32, 2.0, Color::new(c.r, c.g, c.b, 0.85));
+        }
+        txt(&format!("{name} {:.0} kN", thrust / 2000.0), x_split + w * 0.06, bot - 4.0, 11.0, c);
+        let wc = if wall > if name == "SCRAM" { crate::systems::SCRAM_WALL_CAUTION } else { crate::systems::RAM_WALL_CAUTION } { AMBER } else { WHITE };
+        txt_r(&format!("{:.0}F", f_of(wall)), x_mix - w * 0.02, bot - 4.0, 11.0, wc);
+    } else {
+        txt("RAM / SCRAM", x_split + w * 0.06, bot - 4.0, 10.0, Color::new(0.4, 0.42, 0.45, 1.0));
+    }
+
+    // Turbine : arbre, aubes (rotation), GEN, RPM
+    let shaft_y = (top + mid) * 0.5 + h * 0.02;
+    draw_rectangle(x + w * 0.30, shaft_y - 4.0, w * 0.42, 8.0, Color::new(0.28, 0.30, 0.33, 1.0));
+    let spin = (e.n2s[i] * time * 6.0).fract() as f32;
+    for stage in 0..5 {
+        let bx = x + w * (0.32 + stage as f32 * 0.035);
+        let off = (spin + stage as f32 * 0.2).fract();
+        let blade_c = if running { Color::new(0.75, 0.78, 0.82, 1.0) } else { Color::new(0.35, 0.37, 0.4, 1.0) };
+        draw_line(bx, top + h * 0.05 + off * 4.0, bx + 3.0, mid - h * 0.05 - off * 4.0, 1.5, blade_c);
+    }
+    let gen_fail = ac.fails.has(if i == 0 { crate::systems::Fail::GenL } else { crate::systems::Fail::GenR });
+    let gen_on = running && e.n2s[i] > 0.55 && !gen_fail;
+    let gx = x + w * 0.50;
+    draw_rectangle(gx, shaft_y - 9.0, 62.0, 18.0, Color::new(0.20, 0.12, 0.05, 1.0));
+    draw_rectangle_lines(gx, shaft_y - 9.0, 62.0, 18.0, 1.0, if gen_fail { RED } else if gen_on { AMBER } else { DIM });
+    txt_c(if gen_fail { "GEN FAIL" } else if gen_on { "GEN ON" } else { "GEN OFF" }, gx + 31.0, shaft_y + 5.0, 11.0, if gen_fail { RED } else if gen_on { AMBER } else { DIM });
+    txt("RPM", gx + 66.0, shaft_y - 3.0, 9.0, DIM);
     let rpm = e.n2s[i] * 104.0;
-    let rc = if rpm > 106.0 { RED } else if rpm > 102.0 { AMBER } else { WHITE };
-    txt(&format!("{rpm:.0}%"), bx + 64.0, cy + 11.0, 15.0, rc);
-    // Flamme de post-combustion
+    txt(&format!("{rpm:.0}%"), gx + 66.0, shaft_y + 9.0, 13.0, if rpm > 106.0 { RED } else if rpm > 102.0 { AMBER } else { WHITE });
+    // Post-combustion
     if e.ab_frac > 0.0 && running {
         let fl = 0.85 + 0.15 * ((time * 23.0).sin() as f32);
         for k in -2..=2 {
-            let yy = cy + k as f32 * 4.0;
-            let len = (18.0 + 14.0 * e.ab_frac as f32) * fl * (1.0 - (k as f32).abs() * 0.15);
-            draw_line(x + w * 0.90, yy, x + w * 0.90 + len, yy + k as f32 * 2.0, 2.0, Color::new(1.0, 0.55, 0.1, 0.9));
+            let yy = mid - h * 0.12 + k as f32 * 3.0;
+            draw_line(x_noz, yy, x_noz + (w * 0.06 + w * 0.04 * e.ab_frac as f32) * fl, yy + k as f32 * 2.0, 2.0, Color::new(1.0, 0.55, 0.1, 0.9));
         }
     }
-    // EGT et température d'entrée (°F, comme sur le Darkstar)
+    // Portes d'entrée : 0° = turbine ouverte, 90° = turbine fermée (flux vers le conduit inférieur)
+    let door_deg = e.doors * 90.0;
+    let pivot = vec2(x_split, mid - h * 0.02);
+    let a = (-(door_deg as f32)).to_radians();
+    let len = h * 0.30;
+    let tip = vec2(pivot.x - len * a.cos(), pivot.y + len * a.sin() * 1.0);
+    let moving = e.doors > 0.01 && e.doors < 0.99;
+    draw_line(pivot.x, pivot.y, tip.x, tip.y, 3.0, if ac.fails.has(crate::systems::Fail::InletJam) { RED } else if moving { AMBER } else { Color::new(0.9, 0.9, 0.9, 1.0) });
+    draw_circle(pivot.x, pivot.y, 2.5, WHITE);
+    txt("DOORS", x + 6.0, y + h - 18.0, 10.0, DIM);
+    txt(&format!("{:02.0}°", door_deg), x + 8.0, y + h - 4.0, 13.0, WHITE);
+    // Températures (°F, comme sur le Darkstar)
     let egt_f = f_of(e.egt + egt_off);
     let ec = if e.egt > 1000.0 { RED } else if e.egt > 900.0 { AMBER } else { WHITE };
-    txt_r(&format!("{egt_f:.0}°F"), x + w - 4.0, cy - h * 0.30, 15.0, ec);
+    txt_r(&format!("{egt_f:.0}F"), x + w - 6.0, top + 2.0, 13.0, ec);
     let cit_c = (ac.d.oat + 273.15) * (1.0 + 0.2 * ac.d.mach * ac.d.mach) - 273.15;
     let cit_show = ac.d.oat + (cit_c - ac.d.oat) * (1.0 - e.doors * 0.94);
     let cc = if cit_show > 430.0 { RED } else if cit_show > 400.0 { AMBER } else { WHITE };
-    txt_c(&format!("{:.0}°F", f_of(cit_show)), x + w * 0.50, cy + h * 0.30 + 14.0, 15.0, cc);
-    txt_c("CIT", x + w * 0.50, cy + h * 0.30, 10.0, DIM);
+    txt_c(&format!("CIT {:.0}F", f_of(cit_show)), x + w * 0.5, y + h - 4.0, 11.0, cc);
 }
 
 pub fn draw_engines(ac: &Aircraft, r: Rect, time: f64) {
@@ -341,14 +393,16 @@ pub fn draw_help(r: Rect) {
         ("  TURB START/STOP  INLET OPEN/CLOSE  RAM ARM/IGN  SCRAM ENABLE/IGN", CYAN_S),
         ("  OVERRIDE MOTEUR ON  OVERRIDE FBW ON  OVERRIDE OFF  H2/FUEL DUMP", AMBER),
         ("  HSI 80  SON OFF  WARP 8  MENU  CAPTEUR 101 OFF  FIN  QUITTER  AIDE", GREEN_S),
+        ("  PANNE ENGL/GENL/POMPE/ADC/FCS/HYD/REFROID/PORTES/TRAIN/FUITEH2 [OFF]", RED),
+        ("  PANNES OFF (tout reparer)  TRAIN SECOURS (sortie de secours)", RED),
         ("", WHITE),
         ("Raccourcis : T turbines  I entrees  Y stato  U scram  G train", WHITE),
         ("  B freins  S aerofreins  P AP  O A/THR  N NAV  L ILS", WHITE),
         ("  AP actif : fleches = consignes alt (ou assiette)/cap", DIM),
         ("  R/F = manette (coupe l'A/THR) ; vitesse auto : MACH 2.7 / KEAS 300", DIM),
         ("X  reprise en main manuelle (fleches = manche, R/F = manette)", AMBER),
-        ("4-9, 0 onglets MOTEURS/THERMIQUE/ESSAIS/DOMAINE/OVERRIDE/CONSOLE/FCS", WHITE),
-        ("CONSOLE (9 ou bouton MENU du PFD) : ENGINE/APU + FLT CNTRL", WHITE),
+        ("4-9, 0 pages MOTEURS/ALARMES/FCS/LIMITES/ELEC-ENV/THERMIQUE/ESSAIS", WHITE),
+        ("6 boutons de l'ecran Darkstar = 6 premieres pages ; CONSOLE : bouton MENU", WHITE),
         ("V carte plein ecran  C recentrer  H palette SVS  E temps (ou clic TEMPS)", WHITE),
         ("ESPACE acquitter  J son  MAJ+ENTREE nouvel essai  TAB aide", WHITE),
         ("", WHITE),

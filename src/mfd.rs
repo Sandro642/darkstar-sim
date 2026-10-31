@@ -1,4 +1,5 @@
-//! Écran principal Darkstar : PFD en haut, volets carburant et HSI en bas.
+//! Écran principal Darkstar, proportions du cockpit : rangée de 6 boutons, PFD en haut,
+//! volets carburant / caméra / HSI en bas.
 
 use crate::aircraft::*;
 use crate::airports::AIRPORTS;
@@ -26,42 +27,91 @@ impl MfdState {
 #[derive(Default)]
 pub struct MfdActions {
     pub fuel_dump: bool,
+    /// Bouton de lunette cliqué (0..5).
+    pub bezel: Option<usize>,
 }
+
+/// Hauteur de la rangée de boutons au-dessus de l'écran.
+const BEZEL_TOP: f32 = 58.0;
 
 pub struct Layout {
     pub pfd: Rect,
     pub svs: Rect,
 }
 
-fn bezel(r: Rect) -> Rect {
-    rrect(r, 18.0, Color::new(0.13, 0.14, 0.15, 1.0));
-    rrect_lines(r, 18.0, 1.5, Color::new(0.26, 0.27, 0.29, 1.0));
-    let d = Rect::new(r.x + 12.0, r.y + 12.0, r.w - 24.0, r.h - 24.0);
+/// Lunette : fond, 6 boutons carrés (allumés en turquoise) et voyant ; renvoie le bouton cliqué.
+fn bezel(r: Rect, lit: [bool; 6], time: f64) -> Option<usize> {
+    rrect(r, 18.0, Color::new(0.11, 0.115, 0.12, 1.0));
+    rrect_lines(r, 18.0, 1.5, Color::new(0.24, 0.25, 0.27, 1.0));
+    let mut out = None;
+    let s = 40.0;
+    for i in 0..6 {
+        let b = Rect::new(r.x + 34.0 + i as f32 * (s + 14.0), r.y + (BEZEL_TOP - s) / 2.0 + 4.0, s, s);
+        let c = if lit[i] { Color::new(0.45, 0.95, 0.85, 1.0) } else { Color::new(0.16, 0.30, 0.27, 1.0) };
+        if lit[i] {
+            draw_rectangle(b.x - 3.0, b.y - 3.0, b.w + 6.0, b.h + 6.0, Color::new(0.4, 0.95, 0.85, 0.18));
+        }
+        rrect(b, 4.0, c);
+        draw_rectangle(b.x + 4.0, b.y + 4.0, b.w - 8.0, b.h * 0.3, Color::new(1.0, 1.0, 1.0, if lit[i] { 0.25 } else { 0.06 }));
+        if clicked(b) {
+            out = Some(i);
+        }
+    }
+    let glow = 0.85 + 0.15 * (time * 1.5).sin() as f32;
+    draw_circle(r.x + r.w - 40.0, r.y + BEZEL_TOP / 2.0 + 4.0, 6.0, Color::new(0.9 * glow, 1.0 * glow, 0.5 * glow, 1.0));
+    let d = display_rect(r);
     rrect(d, 8.0, BLACK);
-    d
+    out
 }
 
-pub fn layout(r: Rect) -> (Rect, Layout, [Rect; 2]) {
-    let d = Rect::new(r.x + 12.0, r.y + 12.0, r.w - 24.0, r.h - 24.0);
-    let pfd_r = Rect::new(d.x + 6.0, d.y + 6.0, d.w - 12.0, (d.h * 0.58).floor());
-    let y0 = pfd_r.y + pfd_r.h + 8.0;
-    let h = d.y + d.h - 6.0 - y0;
-    let w = d.w - 12.0 - 6.0;
-    let wf = (w * 0.44).floor();
-    let panes = [Rect::new(d.x + 6.0, y0, wf, h), Rect::new(d.x + 12.0 + wf, y0, w - wf, h)];
+fn display_rect(r: Rect) -> Rect {
+    Rect::new(r.x + 14.0, r.y + BEZEL_TOP, r.w - 28.0, r.h - BEZEL_TOP - 14.0)
+}
+
+/// Rapport largeur / hauteur de l'écran du cockpit (lunette comprise).
+pub const COCKPIT_ASPECT: f32 = 1.30;
+
+pub fn layout(r: Rect) -> (Rect, Layout, [Rect; 3]) {
+    let d = display_rect(r);
+    let pfd_r = Rect::new(d.x + 5.0, d.y + 5.0, d.w - 10.0, (d.h * 0.575).floor());
+    let y0 = pfd_r.y + pfd_r.h + 6.0;
+    let h = d.y + d.h - 5.0 - y0;
+    let w = (d.w - 10.0 - 12.0) / 3.0;
+    let panes = [Rect::new(d.x + 5.0, y0, w, h), Rect::new(d.x + 11.0 + w, y0, w, h), Rect::new(d.x + 17.0 + 2.0 * w, y0, w, h)];
     (d, Layout { pfd: pfd_r, svs: pfd::svs_rect(pfd_r) }, panes)
 }
 
 #[allow(clippy::too_many_arguments)]
-pub fn draw_mfd(world: &World, ac: &Aircraft, traffic: &TrafficSys, r: Rect, st: &mut MfdState, info: &PfdInfo, style: SvsStyle, time: f64) -> (View, MfdActions) {
-    bezel(r);
+pub fn draw_mfd(world: &World, ac: &Aircraft, traffic: &TrafficSys, r: Rect, st: &mut MfdState, info: &PfdInfo, style: SvsStyle, time: f64, lit: [bool; 6]) -> (View, MfdActions) {
+    let mut act = MfdActions { bezel: bezel(r, lit, time), ..Default::default() };
     let (_, lay, panes) = layout(r);
     let view = svs::draw_svs(world, ac, traffic, lay.svs, time, style);
     pfd::draw_pfd(ac, &view, lay.pfd, info);
-    let mut act = MfdActions::default();
     act.fuel_dump = draw_fuel(ac, panes[0]);
-    draw_hsi(ac, traffic, panes[1], st, info.dest);
+    draw_camera(ac, panes[1]);
+    draw_hsi(ac, traffic, panes[2], st, info.dest);
     (view, act)
+}
+
+fn dms(v: f64, pos: char, neg: char) -> String {
+    let a = v.abs();
+    let d = a.floor();
+    let m = ((a - d) * 60.0).floor();
+    let s = ((a - d) * 60.0 - m) * 60.0;
+    format!("{d:.0}d{m:02.0}'{s:05.2}\" {}", if v >= 0.0 { pos } else { neg })
+}
+
+/// Volet caméra, tel que sur l'appareil : caméra indisponible, coordonnées en bas.
+fn draw_camera(ac: &Aircraft, r: Rect) {
+    pane_frame(r);
+    txt_c("Camera Zoom Elevation :N/A", r.x + r.w / 2.0 - 10.0, r.y + 17.0, 13.0, WHITE);
+    let ax = r.x + r.w - 26.0;
+    let grey = Color::new(0.45, 0.47, 0.5, 1.0);
+    draw_triangle(vec2(ax, r.y + 30.0), vec2(ax - 10.0, r.y + 48.0), vec2(ax + 10.0, r.y + 48.0), grey);
+    txt_c("1/10", ax, r.y + 64.0, 11.0, WHITE);
+    draw_triangle(vec2(ax, r.y + 92.0), vec2(ax - 10.0, r.y + 74.0), vec2(ax + 10.0, r.y + 74.0), grey);
+    txt_c("Camera unavailable", r.x + r.w / 2.0 - 8.0, r.y + r.h / 2.0 + 6.0, 18.0, WHITE);
+    txt_c(&format!("{} / {}", dms(ac.lat, 'N', 'S'), dms(ac.lon, 'E', 'W')), r.x + r.w / 2.0, r.y + r.h - 8.0, 12.0, WHITE);
 }
 
 fn pane_frame(r: Rect) {
@@ -267,14 +317,6 @@ fn draw_hsi(ac: &Aircraft, traffic: &TrafficSys, r: Rect, st: &mut MfdState, des
     draw_triangle(vec2(cx, cy - 12.0), vec2(cx - 9.0, cy + 7.0), vec2(cx + 9.0, cy + 7.0), y);
     draw_rectangle(cx - 2.0, cy + 6.0, 4.0, 5.0, y);
     scissor(None);
-    txt_r(&format!("{} {:.0}NM", apt.icao, dist / NM), r.x + r.w - 8.0, r.y + r.h - 8.0, 12.0, MAGENTA_S);
-    let dms = |v: f64, pos: char, neg: char| {
-        let a = v.abs();
-        let d = a.floor();
-        let m = ((a - d) * 60.0).floor();
-        let s = ((a - d) * 60.0 - m) * 60.0;
-        format!("{d:.0}{}{m:02.0}'{s:04.1}\"", if v >= 0.0 { pos } else { neg })
-    };
-    txt(&dms(ac.lat, 'N', 'S'), r.x + 10.0, r.y + r.h - 24.0, 12.0, WHITE);
-    txt(&dms(ac.lon, 'E', 'W'), r.x + 10.0, r.y + r.h - 8.0, 12.0, WHITE);
+    let gs = (ac.tas * ac.gamma.cos()).max(1.0);
+    txt_r(&format!("{} {:.0}NM  ETE {}", apt.icao, dist / NM, crate::mission::fmt_time(dist / gs)), r.x + r.w - 8.0, r.y + r.h - 8.0, 12.0, MAGENTA_S);
 }

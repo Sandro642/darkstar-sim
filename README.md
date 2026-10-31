@@ -143,3 +143,19 @@ Données carte : Natural Earth (domaine public).
   jauges valeur/limites, manche (ordre pilote vs loi FCS), élevons et dérives.
 - Infos éphémères sur l'horizon (~3,5 s) : instructions collationnées, captures LOC/G/S, points d'essai,
   allumages, décollage/toucher, remises des gaz, passages de Mach, annonces radio-altimètre (2500…10 ft).
+
+## Simulateur d'essai avancé (v1.3.0)
+- **Écran Darkstar aux proportions du cockpit** : 6 boutons carrés au-dessus (ils sélectionnent les pages
+  MOTEURS, ALARMES, FCS, LIMITES, ÉLEC/ENV, THERMIQUE ; bouton allumé = page affichée), voyant, PFD en haut
+  et trois volets FUEL / caméra (« Camera unavailable » + coordonnées) / HSI.
+- **10 pages** sur deux rangées d'onglets (touches 4-9 et 0 pour les 7 premières).
+- **ALARMES** : panneau de 32 annonciateurs (ambre = caution, rouge clignotant = warning) et injection de
+  pannes : `PANNE ENGL|ENGR|GENL|GENR|POMPE|ADC|FCS|HYD|REFROID|PORTES|TRAIN|FUITEH2 [OFF]`, `PANNES OFF`.
+  Train bloqué → `TRAIN SECOURS`.
+- **MOTEURS** : nacelles TBCC « over-under » (FWD/AFT, GEN ON/OFF/FAIL, RPM %, EGT/CIT en °F, DOORS °) ;
+  en stato/scram le conduit inférieur s'anime et prend le relais.
+- **LIMITES** : seuil d'explosion de la chambre de combustion (manette vs Mach, stato et scram) et seuil de
+  destruction des gouvernes (braquage vs KEAS) avec le point de vol courant. En loi normale un limiteur
+  protège les gouvernes ; sous FBW OVERRIDE ou panne FCS, un braquage excessif à forte q les détruit.
+- **ÉLEC/ENV** : batterie, pile à combustible H2/O2 (STS %), génératrices, bus essentiel ; sélecteurs
+  TEMP COLD/WARM, FACEHEAT OFF/1-7, TEMP IND CKPT/E BAY, HOLD AUTO TEMP/MAN. Batterie vide = liaison perdue.

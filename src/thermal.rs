@@ -107,9 +107,6 @@ impl ThermalSys {
         let avion = self.reading("TC-601");
         let ram_w = self.reading("TC-301");
         let scram_w = self.reading("TC-401");
-        let th = e_th_eff(ac);
-        // Surplus de carburant au-delà de la saturation moteur (override) : points chauds en chambre
-        let rich = ((ac.throttle - 1.0).max(0.0) - (th - 1.0).max(0.0)).max(0.0);
 
         for s in &mut self.sensors {
             let target = match s.kind {
@@ -143,29 +140,13 @@ impl ThermalSys {
                         oat.max(avion - 10.0)
                     }
                 }
-                Kind::RamWall => {
-                    if e.ram == RamState::Lit {
-                        600.0 + 650.0 * th + 350.0 * rich
-                    } else if e.scram == ScramState::Lit {
-                        // Conduit commun dual-mode, refroidi avec la chambre scram
-                        scram_w * 0.75
-                    } else {
-                        oat + (stag - oat).min(rise) * 0.5
-                    }
-                }
-                Kind::ScramWall => {
-                    if e.scram == ScramState::Lit {
-                        // Refroidissement régénératif par l'hydrogène liquide
-                        850.0 + 600.0 * th + 900.0 * (th - 1.0).max(0.0) + 350.0 * rich - 55.0 * e.h2_flow
-                    } else {
-                        oat + (stag - oat).min(rise) * 0.6
-                    }
-                }
+                Kind::RamWall => e.ram_wall,
+                Kind::ScramWall => e.scram_wall,
                 Kind::Nozzle => ram_w.max(scram_w) * 0.45 + rise * 0.25 + e.egt.max(0.0) * 0.08,
                 Kind::FuelTank => 20.0 + (skin_avg - 20.0).max(0.0) * 0.25 * (1.0 - fuel_frac * 0.6),
                 // Carburant après l'échangeur : échauffé par la cellule, pas par le débit (puits de chaleur)
                 Kind::FuelInj => tank + 30.0 + rise * 0.12 + if e.ram == RamState::Lit || e.scram == ScramState::Lit { 40.0 } else { 0.0 },
-                Kind::Avionics => 25.0 + (tank - 20.0).max(0.0) * 0.35,
+                Kind::Avionics => ac.elec.ebay_temp + (tank - 20.0).max(0.0) * 0.15,
                 Kind::Hydraulic => 40.0 + rise * 0.12,
                 // Baie isolée et refroidie par la boucle carburant (pneus)
                 Kind::GearBay => oat + rise * 0.15,
@@ -233,10 +214,6 @@ impl ThermalSys {
         }
         a
     }
-}
-
-fn e_th_eff(ac: &Aircraft) -> f64 {
-    ac.eng.th_eff
 }
 
 fn temp_color(v: f64, caution: f64, limit: f64) -> Color {

@@ -3,6 +3,7 @@
 use crate::airports::*;
 use crate::atmosphere::*;
 use crate::geo::*;
+use crate::systems::{self, Fail};
 
 pub const S_WING: f64 = 200.0;
 pub const M_EMPTY: f64 = 28_000.0;
@@ -122,6 +123,9 @@ pub struct Engines {
     /// Santé des chambres de combustion (1 = neuf, 0 = rupture).
     pub health: f64,
     pub combustor_failed: bool,
+    /// Températures de paroi des chambres stato / scram (°C).
+    pub ram_wall: f64,
+    pub scram_wall: f64,
 }
 
 /// État des commandes de vol (FCS) exposé pour la page FCS.
@@ -136,6 +140,9 @@ pub struct Fcs {
     pub dive_active: bool,
     pub alpha_limit_active: bool,
     pub inlet_protect: bool,
+    pub defl_cmd: f64,
+    pub defl_limit: f64,
+    pub defl_limited: bool,
     pub pitch_in: f64,
     pub roll_in: f64,
     pub pitch_rate: f64, // deg/s ordonné par la loi
@@ -204,6 +211,11 @@ pub struct Aircraft {
     pub g_max: f64,
     pub g_min: f64,
     pub fcs: Fcs,
+    pub fails: systems::Failures,
+    pub elec: systems::Elec,
+    /// Sortie de secours du train (gravité) engagée.
+    pub gear_alt: bool,
+    fcs_overload_t: f64,
     pub events: Vec<(Level, String)>,
     pub jolt: f64,
     pub approach: Option<(usize, f64, f64, f64, f64)>, // (aéroport, lat seuil, lon seuil, cap, élévation)
@@ -350,6 +362,8 @@ impl Aircraft {
                 t_side: [0.0; 2],
                 health: 1.0,
                 combustor_failed: false,
+                ram_wall: 15.0,
+                scram_wall: 15.0,
             },
             skin_temp: 293.0,
             ap: Autopilot {
@@ -376,6 +390,10 @@ impl Aircraft {
             g_max: 1.0,
             g_min: 1.0,
             fcs: Fcs::default(),
+            fails: systems::Failures::default(),
+            elec: systems::Elec::new(),
+            gear_alt: false,
+            fcs_overload_t: 0.0,
             events: Vec::new(),
             jolt: 0.0,
             approach: None,
@@ -407,6 +425,8 @@ impl Aircraft {
         let pumps = matches!(self.eng.turb, TurbState::Running | TurbState::Starting) || self.eng.ram == RamState::Lit;
         if self.fuel <= 0.0 {
             0.0
+        } else if pumps && self.fails.has(Fail::FuelPump) {
+            35.0
         } else if pumps {
             100.0 - (1.0 - (self.fuel / FUEL_MAX / 0.05).min(1.0)) * 70.0
         } else {
@@ -617,10 +637,14 @@ impl Aircraft {
 
     /// Données anémométriques dégradées (échauffement des sondes au-delà de Mach 5.5).
     pub fn adc_degraded(&self) -> bool {
-        self.d.mach > 5.5 && !self.air_data_ovrd
+        (self.d.mach > 5.5 || self.fails.has(Fail::Adc)) && !self.air_data_ovrd
     }
 
     pub fn cmd_inlet(&mut self) {
+        if self.fails.has(Fail::InletJam) {
+            self.msg(Level::Warning, "PORTES D'ENTRÉE D'AIR BLOQUÉES — MANŒUVRE IMPOSSIBLE");
+            return;
+        }
         if self.eng.inlet_open {
             if self.eng.side.iter().any(|s| matches!(s, TurbState::Running | TurbState::Starting)) {
                 for st in self.eng.side.iter_mut() {
@@ -756,7 +780,42 @@ impl Aircraft {
             return;
         }
         self.gear_down = !self.gear_down;
-        self.msg(Level::Info, if self.gear_down { "TRAIN : SORTIE" } else { "TRAIN : RENTRÉE" });
+        if self.fails.has(Fail::GearJam) && !self.gear_alt {
+            self.msg(Level::Warning, "TRAIN BLOQUÉ — SORTIE DE SECOURS : INSTRUCTION TRAIN SECOURS");
+        } else {
+            self.msg(Level::Info, if self.gear_down { "TRAIN : SORTIE" } else { "TRAIN : RENTRÉE" });
+        }
+    }
+
+    /// Sortie de secours du train par gravité (fonctionne même train bloqué, irréversible en vol).
+    pub fn cmd_gear_alt(&mut self) {
+        self.gear_alt = true;
+        self.gear_down = true;
+        self.msg(Level::Caution, "SORTIE DE SECOURS DU TRAIN (GRAVITÉ) — ~20 s");
+    }
+
+    /// Injection / réparation d'une panne par l'ingénieur d'essai.
+    pub fn set_failure(&mut self, f: Fail, on: bool) {
+        self.fails.set(f, on);
+        let label = systems::FAILS.iter().find(|(x, _, _)| *x == f).map(|(_, _, l)| *l).unwrap_or("");
+        match f {
+            Fail::EngL | Fail::EngR => {
+                let i = if f == Fail::EngL { 0 } else { 1 };
+                if on {
+                    self.eng.side[i] = TurbState::Failed;
+                } else if self.eng.side[i] == TurbState::Failed {
+                    self.eng.side[i] = TurbState::Off;
+                    self.eng.fadec_fault[i] = false;
+                }
+            }
+            Fail::GearJam if !on => self.gear_alt = false,
+            _ => {}
+        }
+        if on {
+            self.msg(Level::Warning, format!("PANNE INJECTÉE : {label}"));
+        } else {
+            self.msg(Level::Info, format!("PANNE RÉPARÉE : {label}"));
+        }
     }
 
     pub fn mode_name(&self) -> &'static str {
@@ -792,9 +851,12 @@ impl Aircraft {
 
         // --- Pilote automatique ---
         let mut pitch_rate;
-        let roll_rate;
-        let qmax = (6.0f64).to_radians() / (1.0 + mach / 3.0);
-        let pmax = (35.0f64).to_radians() / (1.0 + mach / 6.0);
+        let mut roll_rate;
+        let hyd = if self.fails.has(Fail::Hyd) { 0.5 } else { 1.0 };
+        let qmax = (6.0f64).to_radians() / (1.0 + mach / 3.0) * hyd;
+        let pmax = (35.0f64).to_radians() / (1.0 + mach / 6.0) * hyd;
+        // Protections inhibées : FBW OVERRIDE ou panne FCS (loi directe)
+        let prot_off = self.ovr_fbw || self.fails.has(Fail::FcsDirect);
         if self.ap.on && !self.on_ground {
             let gamma_cmd = match self.ap.vert {
                 VertMode::Alt => {
@@ -881,7 +943,7 @@ impl Aircraft {
         // Loi FBW : protection haute vitesse anticipatrice (q prévue à 8 s), cabré automatique
         // prioritaire sur le manche, sauf FBW OVERRIDE
         let mut fcs = Fcs { pitch_in, roll_in, q_pred: q, ..Default::default() };
-        if !self.ovr_fbw && !self.on_ground {
+        if !prot_off && !self.on_ground {
             let q_rate = (q - self.d.q) / dt.max(1e-3);
             let q_pred = q + q_rate.max(0.0) * 8.0;
             fcs.q_pred = q_pred;
@@ -902,6 +964,29 @@ impl Aircraft {
             }
         } else {
             fcs.gamma_min = -90.0;
+        }
+        // Gouvernes : limiteur de braquage en loi normale, rupture si les protections sont inhibées
+        {
+            let q_kpa = q / 1000.0;
+            let d_cmd = (pitch_rate / qmax.max(1e-6)).abs() * 18.0 + (roll_rate / pmax.max(1e-6)).abs() * 14.0;
+            fcs.defl_limit = systems::defl_limit_normal(q_kpa);
+            fcs.defl_cmd = d_cmd.min(systems::DEFL_MAX);
+            if !self.on_ground {
+                if !prot_off {
+                    if d_cmd > fcs.defl_limit {
+                        let k = fcs.defl_limit / d_cmd;
+                        pitch_rate *= k;
+                        roll_rate *= k;
+                        fcs.defl_limited = true;
+                        fcs.defl_cmd = fcs.defl_limit;
+                    }
+                    self.fcs_overload_t = 0.0;
+                } else if q_kpa * d_cmd.min(systems::DEFL_MAX) > systems::HINGE_LIMIT {
+                    self.fcs_overload_t += dt;
+                } else {
+                    self.fcs_overload_t = (self.fcs_overload_t - dt).max(0.0);
+                }
+            }
         }
         // Vitesse gérée : la consigne suit la phase de vol (approche, basse altitude, croisière)
         // Approche ILS armée (reste vraie après la déconnexion AP aux minimums)
@@ -957,21 +1042,21 @@ impl Aircraft {
             let nmax = if mach > 4.0 { 2.0 } else { 3.0 };
             let alpha_g = nmax * mass * g / (q.max(1.0) * S_WING * cla);
             let mut amax = alpha_g.min(20f64.to_radians());
-            if self.ovr_fbw {
+            if prot_off {
                 amax = 25f64.to_radians();
             } else if self.eng.scram == ScramState::Lit {
                 // Loi FBW : protection d'incidence de l'entrée d'air (plus stricte sous AP)
                 let lim: f64 = if self.ap.on { 6.5 } else { 9.0 };
                 amax = amax.min(lim.to_radians());
             }
-            let amin = if self.ovr_fbw { -10f64.to_radians() } else { -5f64.to_radians() };
+            let amin = if prot_off { -10f64.to_radians() } else { -5f64.to_radians() };
             let unclamped = self.theta;
             self.theta = self.theta.clamp(self.gamma + amin, self.gamma + amax);
-            fcs.alpha_limit_active = (unclamped - self.theta).abs() > 1e-6 && !self.ovr_fbw;
+            fcs.alpha_limit_active = (unclamped - self.theta).abs() > 1e-6 && !prot_off;
             fcs.alpha_max = amax.to_degrees();
             fcs.alpha_min = amin.to_degrees();
-            fcs.nz_max = if self.ovr_fbw { 5.5 } else { nmax };
-            fcs.inlet_protect = self.eng.scram == ScramState::Lit && !self.ovr_fbw;
+            fcs.nz_max = if prot_off { 5.5 } else { nmax };
+            fcs.inlet_protect = self.eng.scram == ScramState::Lit && !prot_off;
             self.phi = (self.phi + roll_rate * dt).clamp(-80f64.to_radians(), 80f64.to_radians());
         }
         // Gouvernes : élevons (tangage + roulis différentiel) et dérives (lacet), en degrés
@@ -1062,7 +1147,11 @@ impl Aircraft {
 
         // --- Train, thermique ---
         let gt = if self.gear_down { 1.0 } else { 0.0 };
-        self.gear_pos += (gt - self.gear_pos).clamp(-dt / 8.0, dt / 8.0);
+        if self.gear_alt {
+            self.gear_pos = (self.gear_pos + dt / 20.0).min(1.0);
+        } else if !self.fails.has(Fail::GearJam) {
+            self.gear_pos += (gt - self.gear_pos).clamp(-dt / 8.0, dt / 8.0);
+        }
         let teq = skin_equilibrium(self.alt, v);
         self.skin_temp += (teq - self.skin_temp) * (dt / 15.0).min(1.0);
 
@@ -1101,6 +1190,24 @@ impl Aircraft {
         }
         if self.skin_temp - 273.15 > 1400.0 {
             self.crash("DÉFAILLANCE THERMIQUE DE LA STRUCTURE");
+        }
+        if self.fcs_overload_t > 0.3 {
+            self.crash("DESTRUCTION DES GOUVERNES (FCS) — CHARGE AÉRODYNAMIQUE EXCESSIVE");
+        }
+        if self.eng.ram == RamState::Lit && self.eng.ram_wall > systems::RAM_WALL_BURST {
+            self.crash("EXPLOSION DE LA CHAMBRE DE COMBUSTION DU STATORÉACTEUR");
+        }
+        if self.eng.scram == ScramState::Lit && self.eng.scram_wall > systems::SCRAM_WALL_BURST {
+            self.crash("EXPLOSION DE LA CHAMBRE DE COMBUSTION DU SCRAMJET");
+        }
+        // Circuit électrique : génératrices en ligne, sinon pile à combustible (H2/O2), sinon batterie
+        let gens = (0..2)
+            .filter(|&i| self.eng.side[i] == TurbState::Running && self.eng.n2s[i] > 0.55 && !self.fails.has(if i == 0 { Fail::GenL } else { Fail::GenR }))
+            .count() as u32;
+        let h2_use = self.elec.update(dt, gens, self.h2 > 0.0, self.skin_temp - 273.15);
+        self.h2 = (self.h2 - h2_use * dt).max(0.0);
+        if self.elec.lost {
+            self.crash("PERTE TOTALE D'ALIMENTATION ÉLECTRIQUE — LIAISON PERDUE");
         }
     }
 
@@ -1141,6 +1248,11 @@ impl Aircraft {
         }
         self.fadec_limit = lim;
         let th_cmd = self.throttle.min(lim);
+        let oat_k = air.t;
+        let ram_wall_t = systems::ram_wall(mach, th_cmd, oat_k);
+        let scram_wall_t = systems::scram_wall(mach, th_cmd, oat_k, self.fails.has(Fail::ScramCool));
+        let pump_fail = self.fails.has(Fail::FuelPump);
+        let doors_jam = self.fails.has(Fail::InletJam);
         // Limite physique : au-delà du mélange stœchiométrique la poussée sature (~+37 % max)
         let th = if th_cmd <= 1.0 { th_cmd } else { 1.0 + 0.4 * (1.0 - (-(th_cmd - 1.0) / 0.4).exp()) };
         let overboost = (th - 1.0).max(0.0);
@@ -1150,16 +1262,26 @@ impl Aircraft {
         let sigma = air.rho / RHO0;
         let has_fuel = self.fuel > 0.0;
         let has_h2 = self.h2 > 0.0;
+        // Panne de pompe : débit JP-7 limité (turbines et stato plafonnés à ~60 %)
+        let th_jp = if pump_fail { th.min(0.6) } else { th };
         let e = &mut self.eng;
         e.th_eff = th;
         let dt_door = if e.inlet_open { 0.0 } else { 1.0 };
-        e.doors += (dt_door - e.doors).clamp(-dt / 6.0, dt / 6.0);
+        if !doors_jam {
+            e.doors += (dt_door - e.doors).clamp(-dt / 6.0, dt / 6.0);
+        }
+        // Parois des chambres : cible selon le régime quand allumée, sinon équilibre avec l'air d'impact
+        let cavity = air.t - 273.15 + (air.t * 0.2 * mach * mach).min(900.0) * 0.5;
+        let rw = if e.ram == RamState::Lit { ram_wall_t } else if e.scram == ScramState::Lit { e.scram_wall * 0.75 } else { cavity };
+        let sw = if e.scram == ScramState::Lit { scram_wall_t } else { cavity };
+        e.ram_wall += (rw - e.ram_wall) * (dt / 4.0).min(1.0);
+        e.scram_wall += (sw - e.scram_wall) * (dt / 4.0).min(1.0);
         let mut ev: Vec<(Level, String)> = Vec::new();
 
         // Turbines gauche / droite (turboréacteurs à PC)
         let start_time = if e.alert_start { 8.0 } else { 25.0 };
         let any_running = e.side.contains(&TurbState::Running);
-        e.ab_frac = if any_running { ((th - 0.8) / 0.2).clamp(0.0, 1.0) } else { 0.0 };
+        e.ab_frac = if any_running { ((th_jp - 0.8) / 0.2).clamp(0.0, 1.0) } else { 0.0 };
         for i in 0..2 {
             let n = ["L", "R"][i];
             match e.side[i] {
@@ -1173,7 +1295,7 @@ impl Aircraft {
                     }
                 }
                 TurbState::Running => {
-                    let tgt = 0.62 + 0.38 * (th / 0.8).min(1.0) + 0.08 * overboost;
+                    let tgt = 0.62 + 0.38 * (th_jp / 0.8).min(1.0) + 0.08 * overboost;
                     e.n2s[i] += (tgt - e.n2s[i]) * (dt / 3.0).min(1.0);
                     if e.sw[i] == EngSw::Off {
                         e.side[i] = TurbState::Off;
@@ -1261,7 +1383,7 @@ impl Aircraft {
                 ev.push((Level::Warning, "EXTINCTION STATORÉACTEUR (FLAMEOUT)".into()));
             }
         }
-        e.t_ram = if e.ram == RamState::Lit { th * q * ram_k(mach) } else { 0.0 };
+        e.t_ram = if e.ram == RamState::Lit { th_jp * q * ram_k(mach) } else { 0.0 };
         let rt = if e.ram == RamState::Lit { 600.0 + 1500.0 * th } else { air.t - 273.15 };
         e.ram_temp += (rt - e.ram_temp) * (dt / 1.5).min(1.0);
 
@@ -1328,7 +1450,7 @@ impl Aircraft {
                 self.fuel_dump = false;
             }
         }
-        let dump = if self.h2_dump { 40.0 } else { 0.0 };
+        let dump = if self.h2_dump { 40.0 } else { 0.0 } + if self.fails.has(Fail::H2Leak) { 6.0 } else { 0.0 };
         self.h2 = (self.h2 - (self.eng.h2_flow + dump) * dt).max(0.0);
         if self.h2 <= 0.0 && self.h2_dump {
             self.h2_dump = false;
@@ -1524,15 +1646,17 @@ mod tests {
                     break;
                 }
             }
-            (ac.max_mach, ac.eng.health)
+            (ac.max_mach, ac.eng.health, ac.crashed.clone())
         };
-        let (m_norm, h_norm) = run(false, 1.0);
-        let (m_ovr, h_ovr) = run(true, 1.2);
-        let (_, h_stop) = run(true, 2.0);
-        println!("normal : Mach max {m_norm:.2} santé {h_norm:.2} | override 120 % : Mach max {m_ovr:.2} santé {h_ovr:.2} | manette en butée : santé {h_stop:.2}");
+        let (m_norm, h_norm, c_norm) = run(false, 1.0);
+        let (m_ovr, h_ovr, c_ovr) = run(true, 1.2);
+        let (_, h_stop, c_stop) = run(true, 2.0);
+        println!("normal : Mach max {m_norm:.2} santé {h_norm:.2} | override 120 % : Mach max {m_ovr:.2} santé {h_ovr:.2} | manette en butée : santé {h_stop:.2} {c_stop:?}");
+        assert!(c_norm.is_none() && c_ovr.is_none());
         assert!(m_ovr > m_norm + 0.1);
         assert!(h_norm == 1.0 && h_ovr < 1.0 && h_ovr > 0.0);
-        assert!(h_stop == 0.0, "en butée, le surplus de carburant doit détruire les chambres");
+        let exploded = c_stop.as_deref().is_some_and(|c| c.contains("EXPLOSION"));
+        assert!(h_stop == 0.0 || exploded, "en butée : chambres détruites (usure) ou explosion");
     }
 
     #[test]

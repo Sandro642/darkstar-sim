@@ -22,7 +22,8 @@ const LABEL: Color = Color::new(0.85, 0.88, 0.9, 1.0);
 
 /// Fenêtre de la vision synthétique dans l'écran PFD.
 pub fn svs_rect(r: Rect) -> Rect {
-    Rect::new((r.x + r.w * 0.155).round(), (r.y + r.h * 0.09).round(), (r.w * 0.66).round(), (r.h * 0.79).round())
+    // Proportions mesurées sur l'écran du cockpit : SVS ~70 % x 81 %, décalé de 15 % / 10 %
+    Rect::new((r.x + r.w * 0.152).round(), (r.y + r.h * 0.10).round(), (r.w * 0.70).round(), (r.h * 0.81).round())
 }
 
 /// Tambour de chiffres roulants : `step` = pas d'un cran, `modulo` = valeur bouclée affichée.
@@ -406,7 +407,8 @@ fn draw_speed(ac: &Aircraft, r: Rect, s: Rect, time: f64) {
     }
     drum(bx + bw, cy, 20.0, 46.0, spd as f64, 1.0, 10.0, 1, 22.0);
     // Sous l'échelle
-    let y = s.y + s.h + 20.0;
+    // Sous la vue SVS : une seule ligne (place mesurée sur l'écran du cockpit)
+    let y = s.y + s.h + 17.0;
     let a = d.alpha.to_degrees();
     let ac_col = if a > 7.0 && ac.eng.scram == ScramState::Lit { AMBER } else { LABEL };
     txt(&format!("a {a:+.1}°"), r.x + 14.0, y, 16.0, ac_col);
@@ -418,10 +420,12 @@ fn draw_speed(ac: &Aircraft, r: Rect, s: Rect, time: f64) {
         txt(if ac.air_data_ovrd { "INS" } else { "EAS" }, lx - 34.0, y, 15.0, if ac.air_data_ovrd { CYAN_S } else { LABEL });
     }
     let qcol = if d.q > Q_LIMIT { RED } else if d.q > 90_000.0 { AMBER } else { LABEL };
-    txt(&format!("q {:.0} kPa", d.q / 1000.0), r.x + 14.0, y + 18.0, 14.0, qcol);
+    // q et température de peau : colonne gauche, sous les mémoires G
+    let yq = s.y + s.h * 0.72 + 58.0;
+    txt(&format!("q {:.0} kPa", d.q / 1000.0), r.x + 14.0, yq, 13.0, qcol);
     let skin = ac.skin_temp - 273.15;
     let scol = if skin > SKIN_LIMIT_C { RED } else if skin > SKIN_LIMIT_C - 100.0 { AMBER } else { LABEL };
-    txt(&format!("PEAU {skin:.0}°C"), r.x + 14.0, y + 35.0, 14.0, scol);
+    txt(&format!("PEAU {skin:.0}°C"), r.x + 14.0, yq + 16.0, 13.0, scol);
     // Bouton MENU
     let mx = s.x + 6.0;
     draw_rectangle(mx, y - 13.0, 70.0, 18.0, Color::new(0.22, 0.24, 0.27, 1.0));
@@ -511,9 +515,9 @@ fn draw_altitude(ac: &Aircraft, r: Rect, s: Rect) {
     let a100 = (alt / 100.0).floor();
     txt_r(&format!("{a100:.0}"), bx + bw - 31.0, cy + 9.0, 22.0, WHITE);
     drum(bx + bw, cy, 30.0, 46.0, alt as f64, 20.0, 100.0, 2, 18.0);
-    let y = s.y + s.h + 20.0;
-    txt("GPS ALT", lx, y, 14.0, LABEL);
-    txt(&format!("FL{:03.0}", alt / 100.0), lx, y + 18.0, 14.0, LABEL);
+    let y = s.y + s.h + 17.0;
+    txt("GPS ALT", lx, y, 13.0, LABEL);
+    txt(&format!("FL{:03.0}", alt / 100.0), lx, y + 16.0, 13.0, LABEL);
 }
 
 fn draw_vsi(vs: f64, r: Rect, s: Rect) {
@@ -580,7 +584,7 @@ fn draw_heading(ac: &Aircraft, s: Rect, info: &PfdInfo) {
     let dx = s.x + s.w - 4.0;
     txt_r(&format!("DIST {:.2} NM", dist / NM), dx, y + 16.0, 15.0, MAGENTA_S);
     let gs = (ac.tas * ac.gamma.cos()).max(1.0);
-    txt_r(&format!("{} {:03.0}°  ETE {}", apt.icao, brg, crate::mission::fmt_time(dist / gs)), dx, y + 33.0, 13.0, MAGENTA_S);
+    let _ = (brg, gs);
 }
 
 /// Indicateur de train « trois vertes » : vert = sorti verrouillé, rouge = en transit ou configuration
