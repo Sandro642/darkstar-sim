@@ -27,6 +27,8 @@ impl MfdState {
 #[derive(Default)]
 pub struct MfdActions {
     pub fuel_dump: bool,
+    /// Commande de grossissement de la caméra de reconnaissance.
+    pub cam: Option<crate::recon::CamAction>,
     /// Bouton de lunette cliqué (0..5).
     pub bezel: Option<usize>,
 }
@@ -82,13 +84,17 @@ pub fn layout(r: Rect) -> (Rect, Layout, [Rect; 3]) {
 }
 
 #[allow(clippy::too_many_arguments)]
-pub fn draw_mfd(world: &World, tiles: &mut crate::tiles::Tiles, ac: &Aircraft, traffic: &TrafficSys, r: Rect, st: &mut MfdState, info: &PfdInfo, style: SvsStyle, time: f64, lit: [bool; 6]) -> (View, MfdActions) {
+#[allow(clippy::too_many_arguments)]
+pub fn draw_mfd(world: &World, tiles: &mut crate::tiles::Tiles, ac: &Aircraft, traffic: &TrafficSys, recon: &crate::recon::Recon, r: Rect, st: &mut MfdState, info: &PfdInfo, style: SvsStyle, time: f64, lit: [bool; 6]) -> (View, MfdActions) {
     let mut act = MfdActions { bezel: bezel(r, lit, time), ..Default::default() };
     let (_, lay, panes) = layout(r);
     let view = svs::draw_svs(world, tiles, ac, traffic, lay.svs, time, style);
     pfd::draw_pfd(ac, &view, lay.pfd, info);
     act.fuel_dump = draw_fuel(ac, panes[0]);
-    draw_camera(ac, panes[1]);
+    pane_frame(panes[1]);
+    act.cam = crate::recon::draw_camera(ac, recon, tiles, panes[1]);
+    let p = panes[1];
+    txt_c(&format!("{} / {}", dms(ac.lat, 'N', 'S'), dms(ac.lon, 'E', 'W')), p.x + p.w / 2.0, p.y + p.h - 6.0, 12.0, WHITE);
     draw_hsi(ac, traffic, panes[2], st, info.dest);
     (view, act)
 }
@@ -99,19 +105,6 @@ fn dms(v: f64, pos: char, neg: char) -> String {
     let m = ((a - d) * 60.0).floor();
     let s = ((a - d) * 60.0 - m) * 60.0;
     format!("{d:.0}d{m:02.0}'{s:05.2}\" {}", if v >= 0.0 { pos } else { neg })
-}
-
-/// Volet caméra, tel que sur l'appareil : caméra indisponible, coordonnées en bas.
-fn draw_camera(ac: &Aircraft, r: Rect) {
-    pane_frame(r);
-    txt_c("Camera Zoom Elevation :N/A", r.x + r.w / 2.0 - 10.0, r.y + 17.0, 13.0, WHITE);
-    let ax = r.x + r.w - 26.0;
-    let grey = Color::new(0.45, 0.47, 0.5, 1.0);
-    draw_triangle(vec2(ax, r.y + 30.0), vec2(ax - 10.0, r.y + 48.0), vec2(ax + 10.0, r.y + 48.0), grey);
-    txt_c("1/10", ax, r.y + 64.0, 11.0, WHITE);
-    draw_triangle(vec2(ax, r.y + 92.0), vec2(ax - 10.0, r.y + 74.0), vec2(ax + 10.0, r.y + 74.0), grey);
-    txt_c("Camera unavailable", r.x + r.w / 2.0 - 8.0, r.y + r.h / 2.0 + 6.0, 18.0, WHITE);
-    txt_c(&format!("{} / {}", dms(ac.lat, 'N', 'S'), dms(ac.lon, 'E', 'W')), r.x + r.w / 2.0, r.y + r.h - 8.0, 12.0, WHITE);
 }
 
 fn pane_frame(r: Rect) {

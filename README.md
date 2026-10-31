@@ -180,3 +180,17 @@ Données carte : Natural Earth (domaine public).
   proche de l'altitude de l'avion (ambre < 500 ft sous l'avion, rouge au-dessus).
 - Pistes : marquages (seuils, axe, zone de toucher) de nouveau visibles sur le relief réel.
 - Vision synthétique en mode réaliste uniquement (touche H retirée). Schémas aux tracés arrondis.
+
+## Reconnaissance (v1.6.0)
+Le SR-72 est un avion de reconnaissance : sa charge utile est simulée.
+- **Caméra EO/IR à la verticale** : le volet caméra de l'écran Darkstar filme le sol réel (imagerie
+  satellite), cap en haut, réticule, échelle, grossissement x1 à x32 (flèches du volet ou `ZOOM 8`),
+  mode visible `EO` ou infrarouge `IR`. Qualité d'image **NIIRS** calculée : résolution au sol (GSD,
+  fonction de la hauteur et du zoom), visée oblique (> 10° d'inclinaison), hublot chaud à haut Mach.
+- **Radar SAR** à visée latérale, tout temps : fauchées de 15 à 70 km à gauche et à droite (visibles
+  sur la carte), au-dessus de 30 000 ft.
+- **8 objectifs** (lettres A à H) avec un NIIRS requis ; une image insuffisante peut être améliorée en
+  repassant. Stockage embarqué (512 Go) et transmission au sol : rapide en LOS, lente en SATCOM.
+- Page **RECON** (11e onglet) : capteurs, qualité prévue, mémoire, transmission, objectifs et guidage.
+- Instructions : `CAMERA ON|OFF|EO|IR`, `ZOOM 1..32`, `SAR ON|OFF`, `CIBLE B`, `DIRECT CIBLE`
+  (l'autopilote rejoint la cible sélectionnée), `RECON`.

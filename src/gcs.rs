@@ -96,10 +96,11 @@ pub enum Tab {
     Domaine,
     Override,
     Console,
+    Recon,
 }
 
 /// Pages, dans l'ordre : touches 4..9 et 0 pour les 7 premières, boutons de lunette pour les 6 premières.
-pub const TABS: [(Tab, &str); 10] = [
+pub const TABS: [(Tab, &str); 11] = [
     (Tab::Moteurs, "MOTEURS"),
     (Tab::Alarmes, "ALARMES"),
     (Tab::Fcs, "FCS"),
@@ -110,11 +111,12 @@ pub const TABS: [(Tab, &str); 10] = [
     (Tab::Domaine, "DOMAINE"),
     (Tab::Override, "OVERRIDE"),
     (Tab::Console, "CONSOLE"),
+    (Tab::Recon, "RECON"),
 ];
 
 /// Barre d'onglets sur deux rangées ; renvoie l'onglet cliqué. `alert` : onglets à signaler en ambre.
 pub fn draw_tabs(r: Rect, cur: Tab, alert: &[Tab]) -> Option<Tab> {
-    let per_row = 5;
+    let per_row = TABS.len().div_ceil(2);
     let w = r.w / per_row as f32;
     let rh = r.h / 2.0;
     let mut out = None;

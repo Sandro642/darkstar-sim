@@ -13,6 +13,7 @@ mod geo;
 mod limits;
 mod map;
 mod menu;
+mod recon;
 mod mfd;
 mod mission;
 mod panels;
@@ -90,6 +91,7 @@ struct Game {
     bit_timer: f64,
     bit_fail: Option<bool>,
     mfd: mfd::MfdState,
+    recon: recon::Recon,
     cmd_hist: Vec<String>,
     hist_pos: usize,
 }
@@ -193,6 +195,7 @@ impl Game {
             bit_timer: 0.0,
             bit_fail: None,
             mfd: mfd::MfdState::new(),
+            recon: recon::Recon::new(),
             cmd_hist: Vec::new(),
             hist_pos: 0,
         }
@@ -790,6 +793,12 @@ impl Game {
         for (l, s) in ev {
             self.push(l, s);
         }
+        let los = self.link().0 == "LOS";
+        self.recon.update(sim_dt, &mut self.ac, self.mission.elapsed, los);
+        let rev: Vec<_> = self.recon.events.drain(..).collect();
+        for (l, m) in rev {
+            self.push(l, m);
+        }
         if let Some(m) = self.mission.update(sim_dt, &self.ac) {
             self.push(Level::Info, m);
         }
@@ -945,6 +954,52 @@ impl Game {
                         None => reply = Err(format!("AÉROPORT INCONNU : {} (DEST seul = liste)", arg(1))),
                     }
                 }
+            }
+            "DIRECT" | "DCT" | "DIR" if arg(1) == "CIBLE" => {
+                if !airborne {
+                    reply = Err("AU SOL".into());
+                } else {
+                    engage_ap(ac);
+                    ac.ap.lat = LatMode::Hdg;
+                    self.recon.steer = true;
+                    let t = &self.recon.targets[self.recon.selected];
+                    ac.ap.hdg_tgt = dist_brg(ac.lat, ac.lon, t.lat, t.lon).1.round();
+                    reply = Ok(format!("GUIDAGE VERS CIBLE {} {} — CAP {:03.0}", t.code, t.name, ac.ap.hdg_tgt));
+                }
+            }
+            "CAMERA" | "CAM" => {
+                match arg(1) {
+                    "ON" | "" => self.recon.cam_on = true,
+                    "OFF" => self.recon.cam_on = false,
+                    "IR" => self.recon.ir = true,
+                    "EO" | "VISIBLE" => self.recon.ir = false,
+                    _ => {}
+                }
+                reply = Ok(format!("CAMERA {} {}", if self.recon.cam_on { "ON" } else { "OFF" }, if self.recon.ir { "IR" } else { "EO" }));
+            }
+            "ZOOM" => match num(1).and_then(|z| recon::ZOOMS.iter().position(|v| *v >= z)) {
+                Some(i) => {
+                    self.recon.zoom = i;
+                    reply = Ok(format!("ZOOM CAMERA x{:.0}", recon::ZOOMS[i]));
+                }
+                None => reply = Err("ZOOM 1, 2, 4, 8, 16 OU 32".into()),
+            },
+            "SAR" | "RADAR" => {
+                self.recon.sar_on = arg(1) != "OFF";
+                reply = Ok(format!("RADAR SAR {}", if self.recon.sar_on { "ON" } else { "OFF" }));
+            }
+            "CIBLE" | "TARGET" => match self.recon.find(arg(1)) {
+                Some(i) => {
+                    self.recon.selected = i;
+                    let t = &self.recon.targets[i];
+                    let (d, b) = dist_brg(ac.lat, ac.lon, t.lat, t.lon);
+                    reply = Ok(format!("CIBLE {} {} — {b:03.0} deg {:.0} NM, NIIRS REQUIS {:.0}", t.code, t.name, d / NM, t.req));
+                }
+                None => reply = Err("CIBLE INCONNUE (A a H)".into()),
+            },
+            "RECON" => {
+                self.tab = gcs::Tab::Recon;
+                reply = Ok("PAGE RECON".into());
             }
             "DIRECT" | "DCT" | "DIR" => match apt_arg(1) {
                 Some(i) if airborne => {
@@ -1295,6 +1350,7 @@ impl Game {
                     "FDR (enregistrer la trace) | ANALYSE (analyse du vol / du crash)",
                     "FIN (terminer le vol + débriefing) | QUITTER (sauvegarder et fermer)",
                     "PANNE ENGL|ENGR|GENL|GENR|POMPE|ADC|FCS|HYD|REFROID|PORTES|TRAIN|FUITEH2 [OFF] | PANNES OFF | TRAIN SECOURS",
+                    "CAMERA ON|OFF|EO|IR  ZOOM 8  SAR ON|OFF  CIBLE B  DIRECT CIBLE  RECON",
                     "TRAIN UP/DOWN | FREINS ON/OFF | AP ON/OFF | MANUEL | WARP 8",
                 ] {
                     self.log.push((self.sim_time, Level::Info, l.into()));
@@ -1462,7 +1518,7 @@ async fn main() {
         let body = Rect::new(6.0, 40.0, sw - 12.0, sh - 46.0);
         if map_full {
             g.map.input(body);
-            g.map.draw(&world, &mut tiles, &g.ac, &g.traffic, body, g.dest, time);
+            g.map.draw(&world, &mut tiles, &g.recon, &g.ac, &g.traffic, body, g.dest, time);
         } else {
             // Écran principal Darkstar, aux proportions de l'écran du cockpit
             let mfd_w = (body.w * 0.60).min((body.h - 150.0) * mfd::COCKPIT_ASPECT).floor();
@@ -1471,9 +1527,14 @@ async fn main() {
             const BEZEL_PAGES: [gcs::Tab; 6] = [gcs::Tab::Moteurs, gcs::Tab::Alarmes, gcs::Tab::Fcs, gcs::Tab::Limites, gcs::Tab::Elec, gcs::Tab::Thermique];
             let lit: [bool; 6] = std::array::from_fn(|i| g.tab == BEZEL_PAGES[i]);
             let info = pfd::PfdInfo { alerts: &alerts, ra: g.traffic.ra, link_name: ln, latency_ms: lat, dest: g.dest, warp: warp_eff, time };
-            let (_, act) = mfd::draw_mfd(&world, &mut tiles, &g.ac, &g.traffic, mfd_r, &mut g.mfd, &info, g.style, time, lit);
+            let (_, act) = mfd::draw_mfd(&world, &mut tiles, &g.ac, &g.traffic, &g.recon, mfd_r, &mut g.mfd, &info, g.style, time, lit);
             if act.fuel_dump {
                 g.apply_switch(gcs::Switch::FuelDump);
+            }
+            match act.cam {
+                Some(recon::CamAction::ZoomIn) => g.recon.zoom = (g.recon.zoom + 1).min(recon::ZOOMS.len() - 1),
+                Some(recon::CamAction::ZoomOut) => g.recon.zoom = g.recon.zoom.saturating_sub(1),
+                None => {}
             }
             if let Some(b) = act.bezel {
                 g.tab = BEZEL_PAGES[b];
@@ -1508,7 +1569,7 @@ async fn main() {
             let map_h = (body.h * 0.36).floor();
             let mr = Rect::new(rx, body.y, rw, map_h);
             g.map.input(mr);
-            g.map.draw(&world, &mut tiles, &g.ac, &g.traffic, mr, g.dest, time);
+            g.map.draw(&world, &mut tiles, &g.recon, &g.ac, &g.traffic, mr, g.dest, time);
             let tabs_r = Rect::new(rx, mr.y + mr.h + 6.0, rw, 54.0);
             let mut alert_tabs = Vec::new();
             if g.ac.ovr_engine || g.ac.ovr_fbw || g.ac.h2_dump || g.ac.fuel_dump {
@@ -1559,6 +1620,27 @@ async fn main() {
                     }
                 }
                 gcs::Tab::Fcs => fcs::draw_fcs(&g.ac, cr),
+                gcs::Tab::Recon => {
+                    let ln = g.link().0;
+                    if let Some(a) = recon::draw_recon(&g.ac, &g.recon, cr, ln) {
+                        match a {
+                            recon::ReconAction::Camera => g.recon.cam_on = !g.recon.cam_on,
+                            recon::ReconAction::Mode => g.recon.ir = !g.recon.ir,
+                            recon::ReconAction::Sar => g.recon.sar_on = !g.recon.sar_on,
+                            recon::ReconAction::Select(i) => g.recon.selected = i,
+                            recon::ReconAction::ZoomIn => g.recon.zoom = (g.recon.zoom + 1).min(recon::ZOOMS.len() - 1),
+                            recon::ReconAction::ZoomOut => g.recon.zoom = g.recon.zoom.saturating_sub(1),
+                            recon::ReconAction::Steer => {
+                                if g.recon.steer {
+                                    g.recon.steer = false;
+                                } else {
+                                    g.exec_command("DIRECT CIBLE");
+                                }
+                            }
+                        }
+                        g.cues.push(audio::Cue::Ack);
+                    }
+                }
                 gcs::Tab::Console => {
                     let bit = menu::BitState { running: g.bit_timer > 0.0, fail: g.bit_fail };
                     if let Some(a) = menu::draw_menu(&g.ac, &bit, cr, time) {
