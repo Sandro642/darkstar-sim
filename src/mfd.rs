@@ -82,10 +82,10 @@ pub fn layout(r: Rect) -> (Rect, Layout, [Rect; 3]) {
 }
 
 #[allow(clippy::too_many_arguments)]
-pub fn draw_mfd(world: &World, ac: &Aircraft, traffic: &TrafficSys, r: Rect, st: &mut MfdState, info: &PfdInfo, style: SvsStyle, time: f64, lit: [bool; 6]) -> (View, MfdActions) {
+pub fn draw_mfd(world: &World, tiles: &mut crate::tiles::Tiles, ac: &Aircraft, traffic: &TrafficSys, r: Rect, st: &mut MfdState, info: &PfdInfo, style: SvsStyle, time: f64, lit: [bool; 6]) -> (View, MfdActions) {
     let mut act = MfdActions { bezel: bezel(r, lit, time), ..Default::default() };
     let (_, lay, panes) = layout(r);
-    let view = svs::draw_svs(world, ac, traffic, lay.svs, time, style);
+    let view = svs::draw_svs(world, tiles, ac, traffic, lay.svs, time, style);
     pfd::draw_pfd(ac, &view, lay.pfd, info);
     act.fuel_dump = draw_fuel(ac, panes[0]);
     draw_camera(ac, panes[1]);

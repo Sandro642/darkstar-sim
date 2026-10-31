@@ -99,8 +99,35 @@ impl Airport {
     }
 }
 
-/// Élévation du sol : altitude de l'aéroport le plus proche dans un rayon de 40 km, sinon 0.
+/// Élévation du sol : relief réel (tuiles de terrain) aplani autour des pistes ; hors ligne, altitude
+/// de l'aéroport le plus proche dans un rayon de 40 km, sinon 0.
 pub fn ground_elev(lat: f64, lon: f64) -> f64 {
+    match crate::tiles::elevation(lat, lon) {
+        Some(t) => flatten_airports(lat, lon, t, AIRPORTS.iter()),
+        None => fallback_elev(lat, lon),
+    }
+}
+
+/// Plateforme aplanie à l'altitude de l'aérodrome jusqu'à demi-longueur de piste + 1,5 km,
+/// puis raccord progressif au relief sur 3 km.
+pub fn flatten_airports<'a>(lat: f64, lon: f64, terrain: f64, apts: impl Iterator<Item = &'a Airport>) -> f64 {
+    let mut h = terrain;
+    for a in apts {
+        if (a.lat - lat).abs() > 0.12 {
+            continue;
+        }
+        let (d, _) = dist_brg(lat, lon, a.lat, a.lon);
+        let r0 = a.len / 2.0 + 1_500.0;
+        if d < r0 + 3_000.0 {
+            let w = ((d - r0) / 3_000.0).clamp(0.0, 1.0);
+            let w = w * w * (3.0 - 2.0 * w);
+            h = a.elev + (h - a.elev) * w;
+        }
+    }
+    h
+}
+
+fn fallback_elev(lat: f64, lon: f64) -> f64 {
     let mut best = (f64::MAX, 0.0);
     for a in AIRPORTS {
         if (a.lat - lat).abs() > 1.0 {

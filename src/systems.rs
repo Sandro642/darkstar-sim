@@ -285,3 +285,36 @@ mod tests {
         }
     }
 }
+
+#[cfg(test)]
+mod roll_tests {
+    use crate::aircraft::*;
+    use crate::geo::FT;
+
+    /// Tonneau complet : le roulis n'est plus bloqué et revient à l'horizontale.
+    #[test]
+    fn full_roll_360() {
+        let mut ac = Aircraft::new_on_runway(0);
+        ac.on_ground = false;
+        ac.gear_down = false;
+        ac.gear_pos = 0.0;
+        ac.brakes = false;
+        ac.alt = 20_000.0 * FT;
+        ac.tas = 0.8 * crate::atmosphere::isa(ac.alt).a;
+        let mut max_abs: f64 = 0.0;
+        let mut total = 0.0;
+        let mut prev = ac.phi;
+        for _ in 0..(20 * 120) {
+            ac.step(1.0 / 120.0, 0.0, 1.0);
+            total += wrap_pi(ac.phi - prev);
+            prev = ac.phi;
+            max_abs = max_abs.max(ac.phi.abs());
+            if total > std::f64::consts::TAU {
+                break;
+            }
+        }
+        println!("roulis cumulé {:.0} deg, crash {:?}", total.to_degrees(), ac.crashed);
+        assert!(max_abs > 170f64.to_radians(), "dos atteint");
+        assert!(total > std::f64::consts::TAU, "360 deg effectués");
+    }
+}

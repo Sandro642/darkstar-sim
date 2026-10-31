@@ -1,8 +1,10 @@
-//! Vision synthétique (SVS) façon Darkstar : terre sphérique texturée, ciel, pistes 3D, balisage.
+//! Vision synthétique (SVS) façon Darkstar : terrain réel (imagerie satellite sur relief), ciel,
+//! pistes 3D, balisage.
 
 use crate::aircraft::{Aircraft, EYE_H};
 use crate::airports::AIRPORTS;
 use crate::geo::*;
+use crate::tiles::Tiles;
 use crate::traffic::{Tcas, TrafficSys};
 use crate::ui::*;
 use crate::world::World;
@@ -40,6 +42,7 @@ impl View {
 struct SvsCam {
     mat: Mat4,
     vp: (i32, i32, i32, i32),
+    depth: bool,
 }
 
 impl Camera for SvsCam {
@@ -47,7 +50,7 @@ impl Camera for SvsCam {
         self.mat
     }
     fn depth_enabled(&self) -> bool {
-        false
+        self.depth
     }
     fn render_pass(&self) -> Option<macroquad::texture::RenderPass> {
         None
@@ -70,29 +73,6 @@ pub fn basis(ac: &Aircraft) -> (Vec3, Vec3, Vec3) {
     let up = up0 * c + r0 * s;
     let right = fwd.cross(up).normalize();
     (fwd, up, right)
-}
-
-fn hash2(ix: i64, iy: i64) -> f64 {
-    let mut h = (ix as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15) ^ (iy as u64).wrapping_mul(0xC2B2_AE3D_27D4_EB4F);
-    h ^= h >> 31;
-    h = h.wrapping_mul(0x94D0_49BB_1331_11EB);
-    ((h >> 11) as f64) / ((1u64 << 53) as f64)
-}
-
-fn vnoise(x: f64, y: f64) -> f64 {
-    let (ix, iy) = (x.floor() as i64, y.floor() as i64);
-    let (fx, fy) = (x - x.floor(), y - y.floor());
-    let (sx, sy) = (fx * fx * (3.0 - 2.0 * fx), fy * fy * (3.0 - 2.0 * fy));
-    let a = hash2(ix, iy) + (hash2(ix + 1, iy) - hash2(ix, iy)) * sx;
-    let b = hash2(ix, iy + 1) + (hash2(ix + 1, iy + 1) - hash2(ix, iy + 1)) * sx;
-    a + (b - a) * sy
-}
-
-/// Relief visuel (collines à l'horizon) : uniquement sur terre et loin de l'avion.
-fn hill(lat: f64, lon: f64) -> f64 {
-    let n = vnoise(lon * 6.0, lat * 6.0);
-    let m = vnoise(lon * 25.0, lat * 25.0);
-    (n * n * 900.0 + m * 160.0).max(0.0)
 }
 
 fn lerpc(a: [f32; 3], b: [f32; 3], t: f32) -> [f32; 3] {
@@ -199,7 +179,9 @@ impl AptFrame {
         let e = self.ce + along * self.u.0 + cross * self.c.0;
         let n = self.cn + along * self.u.1 + cross * self.c.1;
         let d = (e * e + n * n).sqrt();
-        vec3(e as f32, (self.dz + z - curvature_drop(d)) as f32, -n as f32)
+        // Légère surélévation croissante avec la distance : pas de scintillement avec le relief aplani
+        let lift = 0.25 + d * 0.0012;
+        vec3(e as f32, (self.dz + z + lift - curvature_drop(d)) as f32, -n as f32)
     }
 }
 
@@ -234,12 +216,14 @@ pub struct Lights {
     pub pts: Vec<(Vec3, Color, f32)>,
 }
 
-pub fn draw_svs(world: &World, ac: &Aircraft, traffic: &TrafficSys, rect: Rect, time: f64, style: SvsStyle) -> View {
+pub fn draw_svs(world: &World, tiles: &mut Tiles, ac: &Aircraft, traffic: &TrafficSys, rect: Rect, time: f64, style: SvsStyle) -> View {
     let dark = style == SvsStyle::Darkstar;
     let dpi = screen_dpi_scale();
     let (fwd, up, _) = basis(ac);
     let fovy = FOVY_DEG;
-    let proj = Mat4::perspective_rh_gl(fovy.to_radians(), rect.w / rect.h, 1.0, 5.0e6);
+    // Plan proche adapté à la hauteur : précision du tampon de profondeur pour le relief
+    let near = ((ac.alt - ac.d.elev) * 0.02).clamp(1.5, 1_500.0) as f32;
+    let proj = Mat4::perspective_rh_gl(fovy.to_radians(), rect.w / rect.h, near, 6.0e6);
     let view = Mat4::look_at_rh(Vec3::ZERO, fwd, up);
     let mat = proj * view;
     let vp = (
@@ -248,7 +232,7 @@ pub fn draw_svs(world: &World, ac: &Aircraft, traffic: &TrafficSys, rect: Rect, 
         (rect.w * dpi) as i32,
         (rect.h * dpi) as i32,
     );
-    set_camera(&SvsCam { mat, vp });
+    set_camera(&SvsCam { mat, vp, depth: false });
 
     let elev = ac.d.elev;
     let h = (ac.alt - elev + EYE_H).max(1.0);
@@ -313,15 +297,6 @@ pub fn draw_svs(world: &World, ac: &Aircraft, traffic: &TrafficSys, rect: Rect, 
                 let az = s as f64 / n_az as f64 * 360.0;
                 let (la, lo) = destination(ac.lat, ac.lon, az, d);
                 let mut c = world.sample(la, lo);
-                let water = c[2] > c[0] + 0.08 && c[2] > c[1];
-                let mut vert = vert;
-                let mut hill_k = 0.0f32;
-                if !water && d > 6_000.0 {
-                    let fade = ((d - 6_000.0) / 24_000.0).clamp(0.0, 1.0);
-                    let hgt = hill(la, lo) * fade;
-                    vert += hgt;
-                    hill_k = (hgt / 900.0) as f32;
-                }
                 if dark {
                     // Terre verte / mer bleue, modulée par la luminance de la texture
                     let water = c[2] > c[0] + 0.08 && c[2] > c[1];
@@ -334,8 +309,6 @@ pub fn draw_svs(world: &World, ac: &Aircraft, traffic: &TrafficSys, rect: Rect, 
                         lerpc([0.16, 0.48, 0.10], [0.50, 0.76, 0.28], (lum - 0.2) * 1.8)
                     };
                 }
-                // Collines plus claires au sommet, comme sur le SVS Darkstar
-                c = lerpc(c, [c[0] * 1.25 + 0.05, c[1] * 1.18 + 0.05, c[2] * 1.1], hill_k);
                 // Brume atmosphérique
                 let fog_k = if dark { 0.55 } else { 0.85 };
                 let fog = ((d / vis).min(1.0) * fog_k + (d / d_h).powi(4) * 0.15) as f32;
@@ -364,35 +337,9 @@ pub fn draw_svs(world: &World, ac: &Aircraft, traffic: &TrafficSys, rect: Rect, 
         draw_mesh_chunked(&verts, &idx);
     }
 
-    // --- Grille SVS (repères de mouvement à basse altitude) ---
-    if h < 25_000.0 && !dark {
-        let step = if h < 2_500.0 { 0.01 } else if h < 8_000.0 { 0.05 } else { 0.1 };
-        let span = step * 24.0;
-        let alpha = (1.0 - h / 25_000.0) as f32 * 0.22;
-        let col = Color::new(1.0, 1.0, 1.0, alpha);
-        let la0 = (ac.lat / step).round() * step;
-        let lo0 = (ac.lon / step).round() * step;
-        let coslat = ac.lat.to_radians().cos().max(0.2);
-        let to3 = |la: f64, lo: f64| {
-            let (e, n) = enu_offset(ac.lat, ac.lon, la, lo);
-            let d = (e * e + n * n).sqrt();
-            vec3(e as f32, (-h - curvature_drop(d)) as f32, -n as f32)
-        };
-        let n = 24;
-        for k in -n..=n {
-            let la = la0 + k as f64 * step;
-            let lo = lo0 + k as f64 * step / coslat;
-            for j in -n..n {
-                let lo_a = lo0 + j as f64 * step / coslat;
-                let lo_b = lo0 + (j + 1) as f64 * step / coslat;
-                draw_line_3d(to3(la, lo_a), to3(la, lo_b), col);
-                let la_a = la0 + j as f64 * step;
-                let la_b = la0 + (j + 1) as f64 * step;
-                draw_line_3d(to3(la_a, lo), to3(la_b, lo), col);
-            }
-        }
-        let _ = span;
-    }
+    // --- Terrain réel (test de profondeur) ---
+    set_camera(&SvsCam { mat, vp, depth: true });
+    crate::terrain::draw_terrain(world, tiles, ac, mat, dark);
 
     // --- Aérodromes ---
     let mut lights = Lights { pts: Vec::new() };
@@ -547,6 +494,34 @@ pub fn draw_svs(world: &World, ac: &Aircraft, traffic: &TrafficSys, rect: Rect, 
         }
     }
     mb.flush();
+
+    // --- Perspective aérienne : voile de brume vers l'horizon, par-dessus le relief ---
+    set_camera(&SvsCam { mat, vp, depth: false });
+    {
+        let dipd = dip.to_degrees() as f32;
+        let band = 1.0 / (1.0 + ac.alt as f32 / 8000.0);
+        let hz = rgba(ground_haze);
+        let a_max = if dark { 0.55 } else { 0.75 };
+        let rings: [(f32, f32); 5] = [(-dipd - 25.0 * band - 2.0, 0.0), (-dipd - 6.0 * band - 0.5, 0.25), (-dipd - 0.4, 0.8), (-dipd + 0.3, 1.0), (-dipd + 2.5 * band + 0.3, 0.0)];
+        let seg = 48;
+        let rd = 1.0e6f32;
+        let mut v = Vec::new();
+        let mut idx: Vec<u16> = Vec::new();
+        for (ri, (el, al)) in rings.iter().enumerate() {
+            let el = el.to_radians();
+            let c = [hz[0], hz[1], hz[2], (al * a_max * 255.0) as u8];
+            for k in 0..=seg {
+                let az = k as f32 / seg as f32 * std::f32::consts::TAU;
+                v.push(vtx(vec3(az.sin() * el.cos(), el.sin(), -az.cos() * el.cos()) * rd, c));
+                if ri > 0 && k < seg {
+                    let a = ((ri - 1) * (seg + 1) + k) as u16;
+                    let b = (ri * (seg + 1) + k) as u16;
+                    idx.extend_from_slice(&[a, b, b + 1, a, b + 1, a + 1]);
+                }
+            }
+        }
+        draw_mesh_chunked(&v, &idx);
+    }
 
     set_default_camera();
     let v = View { mat, rect };

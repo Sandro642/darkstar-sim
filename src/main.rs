@@ -19,8 +19,10 @@ mod panels;
 mod recorder;
 mod pfd;
 mod svs;
+mod terrain;
 mod systems;
 mod thermal;
+mod tiles;
 mod traffic;
 mod ui;
 mod updater;
@@ -1357,6 +1359,7 @@ async fn main() {
     ui::load_font();
     next_frame().await;
     let world = world::World::load();
+    let mut tiles = tiles::Tiles::new();
     let mut sfx = audio::Sfx::new().await;
     let upd = updater::Updater::new();
     upd.check();
@@ -1452,6 +1455,7 @@ async fn main() {
         }
 
         // --- Mise en page ---
+        tiles.begin_frame();
         clear_background(ui::BG);
         let (sw, sh) = (screen_width(), screen_height());
         let time = get_time();
@@ -1461,7 +1465,7 @@ async fn main() {
         let body = Rect::new(6.0, 40.0, sw - 12.0, sh - 46.0);
         if map_full {
             g.map.input(body);
-            g.map.draw(&world, &g.ac, &g.traffic, body, g.dest, time);
+            g.map.draw(&world, &mut tiles, &g.ac, &g.traffic, body, g.dest, time);
         } else {
             // Écran principal Darkstar, aux proportions de l'écran du cockpit
             let mfd_w = (body.w * 0.60).min((body.h - 150.0) * mfd::COCKPIT_ASPECT).floor();
@@ -1470,7 +1474,7 @@ async fn main() {
             const BEZEL_PAGES: [gcs::Tab; 6] = [gcs::Tab::Moteurs, gcs::Tab::Alarmes, gcs::Tab::Fcs, gcs::Tab::Limites, gcs::Tab::Elec, gcs::Tab::Thermique];
             let lit: [bool; 6] = std::array::from_fn(|i| g.tab == BEZEL_PAGES[i]);
             let info = pfd::PfdInfo { alerts: &alerts, ra: g.traffic.ra, link_name: ln, latency_ms: lat, dest: g.dest, warp: warp_eff, time };
-            let (_, act) = mfd::draw_mfd(&world, &g.ac, &g.traffic, mfd_r, &mut g.mfd, &info, g.style, time, lit);
+            let (_, act) = mfd::draw_mfd(&world, &mut tiles, &g.ac, &g.traffic, mfd_r, &mut g.mfd, &info, g.style, time, lit);
             if act.fuel_dump {
                 g.apply_switch(gcs::Switch::FuelDump);
             }
@@ -1507,7 +1511,7 @@ async fn main() {
             let map_h = (body.h * 0.36).floor();
             let mr = Rect::new(rx, body.y, rw, map_h);
             g.map.input(mr);
-            g.map.draw(&world, &g.ac, &g.traffic, mr, g.dest, time);
+            g.map.draw(&world, &mut tiles, &g.ac, &g.traffic, mr, g.dest, time);
             let tabs_r = Rect::new(rx, mr.y + mr.h + 6.0, rw, 54.0);
             let mut alert_tabs = Vec::new();
             if g.ac.ovr_engine || g.ac.ovr_fbw || g.ac.h2_dump || g.ac.fuel_dump {
@@ -1643,6 +1647,7 @@ async fn main() {
                 std::process::exit(0);
             }
         }
+        tiles.end_frame();
         next_frame().await;
     }
 }

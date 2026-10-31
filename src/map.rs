@@ -1,8 +1,10 @@
-//! Carte de navigation mondiale (projection équirectangulaire).
+//! Carte de navigation mondiale (projection Mercator) sur tuiles réelles : plan CARTO / OpenStreetMap
+//! ou imagerie satellite Esri, avec repli sur la carte Natural Earth hors ligne.
 
 use crate::aircraft::*;
 use crate::airports::AIRPORTS;
 use crate::geo::*;
+use crate::tiles::{self, Key, Layer, Tiles};
 use crate::traffic::{Tcas, TrafficSys};
 use crate::ui::*;
 use crate::world::World;
@@ -13,13 +15,15 @@ pub struct MapView {
     pub follow: bool,
     pub center: (f64, f64), // (lat, lon)
     pub trail: Vec<(f64, f64)>,
+    /// Fond satellite (sinon plan).
+    pub sat: bool,
     trail_t: f64,
     drag: Option<Vec2>,
 }
 
 impl MapView {
     pub fn new() -> Self {
-        MapView { zoom: 60.0, follow: true, center: (0.0, 0.0), trail: Vec::new(), trail_t: 0.0, drag: None }
+        MapView { zoom: 60.0, follow: true, center: (0.0, 0.0), trail: Vec::new(), sat: false, trail_t: 0.0, drag: None }
     }
 
     pub fn record(&mut self, ac: &Aircraft, dt: f64) {
@@ -40,7 +44,7 @@ impl MapView {
             let (_, wy) = mouse_wheel();
             if wy != 0.0 {
                 let f = if wy > 0.0 { 1.15 } else { 1.0 / 1.15 };
-                self.zoom = (self.zoom * f).clamp(r.w / 360.0, 3000.0);
+                self.zoom = (self.zoom * f).clamp(r.w / 360.0, 60_000.0);
             }
             if is_mouse_button_pressed(MouseButton::Left) {
                 self.drag = Some(vec2(mx, my));
@@ -51,10 +55,8 @@ impl MapView {
                 let dlt = vec2(mx, my) - p;
                 if dlt.length() > 2.0 {
                     self.follow = false;
-                    let cl = self.center.0.to_radians().cos().max(0.2) as f32;
-                    let _ = cl;
                     self.center.1 = wrap180(self.center.1 - (dlt.x / self.zoom) as f64);
-                    self.center.0 = (self.center.0 + (dlt.y / self.zoom) as f64).clamp(-85.0, 85.0);
+                    self.center.0 = merc_inv(merc(self.center.0) + (dlt.y / self.zoom) as f64).clamp(-85.0, 85.0);
                     self.drag = Some(vec2(mx, my));
                 }
             } else {
@@ -63,7 +65,7 @@ impl MapView {
         }
     }
 
-    pub fn draw(&mut self, world: &World, ac: &Aircraft, traffic: &TrafficSys, r: Rect, dest: usize, time: f64) {
+    pub fn draw(&mut self, world: &World, tiles: &mut Tiles, ac: &Aircraft, traffic: &TrafficSys, r: Rect, dest: usize, time: f64) {
         if self.follow {
             self.center = (ac.lat, ac.lon);
         }
@@ -71,28 +73,96 @@ impl MapView {
         let (clat, clon) = self.center;
         let cx = r.x + r.w / 2.0;
         let cy = r.y + r.h / 2.0;
+        let cm = merc(clat);
         let to_s = |lat: f64, lon: f64| -> Vec2 {
-            vec2(cx + wrap180(lon - clon) as f32 * z, cy - (lat - clat) as f32 * z)
+            vec2(cx + wrap180(lon - clon) as f32 * z, cy - (merc(lat) - cm) as f32 * z)
         };
 
         draw_rectangle(r.x, r.y, r.w, r.h, Color::new(0.02, 0.06, 0.12, 1.0));
         scissor(Some(r));
-        // Texture monde (3 copies pour l'antiméridien)
+        // Repli hors ligne : texture Natural Earth (équirectangulaire) découpée en bandes Mercator
         for k in [-1.0f32, 0.0, 1.0] {
             let x0 = cx + ((-180.0 - clon) as f32 + k * 360.0) * z;
-            let y0 = cy - (90.0 - clat) as f32 * z;
             if x0 > r.x + r.w || x0 + 360.0 * z < r.x {
                 continue;
             }
-            draw_texture_ex(&world.texture, x0, y0, Color::new(0.75, 0.78, 0.82, 1.0), DrawTextureParams { dest_size: Some(vec2(360.0 * z, 180.0 * z)), ..Default::default() });
+            let (tw, th) = (world.texture.width(), world.texture.height());
+            let mut la = -84.0;
+            while la < 84.0 {
+                let (y_top, y_bot) = (cy - (merc(la + 4.0) - cm) as f32 * z, cy - (merc(la) - cm) as f32 * z);
+                if y_bot >= r.y && y_top <= r.y + r.h {
+                    let sy = (90.0 - (la + 4.0)) as f32 / 180.0 * th;
+                    draw_texture_ex(
+                        &world.texture,
+                        x0,
+                        y_top,
+                        Color::new(0.75, 0.78, 0.82, 1.0),
+                        DrawTextureParams { dest_size: Some(vec2(360.0 * z, y_bot - y_top)), source: Some(Rect::new(0.0, sy, tw, 4.0 / 180.0 * th)), ..Default::default() },
+                    );
+                }
+                la += 4.0;
+            }
         }
-        // Traits de côte nets aux zooms élevés
-        if z > 14.0 {
+        // Tuiles réelles
+        let layer = if self.sat { Layer::Sat } else { Layer::Plan };
+        let dpi = screen_dpi_scale();
+        let zt = ((z * dpi * 360.0 / 256.0).log2().round().max(0.0) as u8).min(layer.max_z());
+        let n = tiles::n_tiles(zt);
+        let lon_l = clon - (r.w / 2.0 / z) as f64;
+        let lon_r = clon + (r.w / 2.0 / z) as f64;
+        let lat_t = merc_inv(cm + (r.h / 2.0 / z) as f64).min(85.05);
+        let lat_b = merc_inv(cm - (r.h / 2.0 / z) as f64).max(-85.05);
+        let (x0, y0) = tiles::tile_xy(lat_t, lon_l, zt);
+        let (x1, y1) = tiles::tile_xy(lat_b, lon_r, zt);
+        let mut missing = 0;
+        for (li, layer) in [layer, Layer::Labels].into_iter().enumerate() {
+            let tint = if li == 0 && self.sat { Color::new(0.80, 0.82, 0.86, 1.0) } else { WHITE };
+            for ty in (y0.floor() as i64).max(0)..=(y1.floor() as i64).min(n as i64 - 1) {
+                for txu in (x0.floor() as i64)..=(x1.floor() as i64) {
+                    let tx = txu.rem_euclid(n as i64) as u32;
+                    let lo_a = clon + wrap180(tiles::tile_lon(txu as f64, zt) - clon);
+                    let p0 = vec2(cx + (lo_a - clon) as f32 * z, cy - (merc(tiles::tile_lat(ty as f64, zt)) - cm) as f32 * z);
+                    let p1 = vec2(p0.x + (360.0 / n) as f32 * z, cy - (merc(tiles::tile_lat(ty as f64 + 1.0, zt)) - cm) as f32 * z);
+                    let mid = (p0 + p1) * 0.5 - vec2(cx, cy);
+                    let prio = zt as f32 + mid.length() / r.w + li as f32 * 0.5;
+                    match tiles.get(Key { layer, z: zt, x: tx, y: ty as u32 }, prio) {
+                        Some(t) => {
+                            if !t.exact && li == 0 {
+                                missing += 1;
+                            }
+                            // Les noms ne sont dessinés qu'à leur propre zoom (pas d'agrandissement flou)
+                            if li == 1 && !t.exact {
+                                continue;
+                            }
+                            let (tw, th) = (t.tex.width(), t.tex.height());
+                            draw_texture_ex(
+                                t.tex,
+                                p0.x.floor(),
+                                p0.y.floor(),
+                                tint,
+                                DrawTextureParams {
+                                    dest_size: Some(vec2((p1.x - p0.x).ceil() + 1.0, (p1.y - p0.y).ceil() + 1.0)),
+                                    source: Some(Rect::new(t.uv.x * tw, t.uv.y * th, t.uv.w * tw, t.uv.h * th)),
+                                    ..Default::default()
+                                },
+                            );
+                        }
+                        None => {
+                            if li == 0 {
+                                missing += 1
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        // Traits de côte Natural Earth tant que les tuiles manquent
+        if z > 14.0 && missing > 0 {
             let half_w = (r.w / 2.0 / z) as f64 + 1.0;
             let half_h = (r.h / 2.0 / z) as f64 + 1.0;
             let col = Color::new(0.85, 0.9, 0.8, 0.55);
             for ring in &world.rings {
-                if (ring.max.1 as f64) < clat - half_h || (ring.min.1 as f64) > clat + half_h {
+                if (ring.max.1 as f64) < clat - half_h * 2.0 || (ring.min.1 as f64) > clat + half_h * 2.0 {
                     continue;
                 }
                 let rc = (ring.min.0 + ring.max.0) as f64 / 2.0;
@@ -115,8 +185,8 @@ impl MapView {
         // Graticule
         let step = if z < 8.0 { 30.0 } else if z < 40.0 { 10.0 } else if z < 200.0 { 5.0 } else { 1.0 };
         let gcol = Color::new(0.5, 0.6, 0.7, 0.18);
-        let mut lat = -90.0;
-        while lat <= 90.0 {
+        let mut lat = -80.0;
+        while lat <= 80.0 {
             let y = to_s(lat, clon).y;
             draw_line(r.x, y, r.x + r.w, y, 1.0, gcol);
             lat += step;
@@ -240,7 +310,7 @@ impl MapView {
         let _ = time;
 
         // Légende
-        let km_per_px = 111.195 / z as f64;
+        let km_per_px = 111.195 * clat.to_radians().cos() / z as f64;
         let bar_km = [1.0, 2.0, 5.0, 10.0, 20.0, 50.0, 100.0, 200.0, 500.0, 1000.0, 2000.0, 5000.0]
             .iter()
             .copied()
@@ -255,5 +325,32 @@ impl MapView {
         draw_rectangle_lines(r.x + 0.5, r.y + 0.5, r.w - 1.0, r.h - 1.0, 1.0, Color::new(0.25, 0.3, 0.36, 1.0));
         draw_rectangle(r.x + 1.0, r.y + 1.0, 290.0, 20.0, Color::new(0.0, 0.0, 0.0, 0.6));
         txt("ND / CARTE MONDE  (molette: zoom)", r.x + 8.0, r.y + 16.0, 14.0, DIM);
+        // Sélecteur PLAN / SAT et crédits des tuiles
+        let b = Rect::new(r.x + r.w - 118.0, r.y + 4.0, 112.0, 20.0);
+        rrect(b, 5.0, Color::new(0.0, 0.0, 0.0, 0.7));
+        for (i, (lbl, on)) in [("PLAN", !self.sat), ("SAT", self.sat)].iter().enumerate() {
+            let c = Rect::new(b.x + 2.0 + i as f32 * 55.0, b.y + 2.0, 53.0, 16.0);
+            if *on {
+                rrect(c, 4.0, Color::new(0.10, 0.30, 0.42, 1.0));
+            }
+            txt_c(lbl, c.x + c.w / 2.0, c.y + 12.0, 12.0, if *on { WHITE } else { DIM });
+        }
+        if clicked(b) {
+            self.sat = !self.sat;
+        }
+        let credit = if tiles.offline() { "HORS LIGNE - carte Natural Earth" } else { layer.credit() };
+        let cw = credit.len() as f32 * 6.2 + 10.0;
+        draw_rectangle(r.x + r.w - cw - 2.0, r.y + r.h - 34.0, cw, 15.0, Color::new(0.0, 0.0, 0.0, 0.55));
+        txt_r(credit, r.x + r.w - 6.0, r.y + r.h - 23.0, 10.0, DIM);
     }
+}
+
+/// Ordonnée Mercator exprimée en « degrés » (même échelle que la longitude).
+pub fn merc(lat: f64) -> f64 {
+    let l = lat.clamp(-85.05, 85.05).to_radians();
+    (std::f64::consts::FRAC_PI_4 + l / 2.0).tan().ln().to_degrees()
+}
+
+pub fn merc_inv(m: f64) -> f64 {
+    (2.0 * m.to_radians().exp().atan() - std::f64::consts::FRAC_PI_2).to_degrees()
 }

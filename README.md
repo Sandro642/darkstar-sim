@@ -159,3 +159,13 @@ Données carte : Natural Earth (domaine public).
   protège les gouvernes ; sous FBW OVERRIDE ou panne FCS, un braquage excessif à forte q les détruit.
 - **ÉLEC/ENV** : batterie, pile à combustible H2/O2 (STS %), génératrices, bus essentiel ; sélecteurs
   TEMP COLD/WARM, FACEHEAT OFF/1-7, TEMP IND CKPT/E BAY, HOLD AUTO TEMP/MAN. Batterie vide = liaison perdue.
+
+## Cartes réelles et terrain 3D (v1.4.0)
+- **Carte** : tuiles réelles en projection Mercator, bouton **PLAN / SAT** (plan gris foncé Esri avec noms
+  de lieux OpenStreetMap, ou imagerie satellite Esri World Imagery). Zoom jusqu'au niveau des rues.
+- **Horizon artificiel (SVS)** : comme dans MSFS, imagerie satellite drapée sur le **relief réel**
+  (AWS Terrain Tiles), détail progressif autour de l'avion, voile de brume vers l'horizon.
+- Le **modèle de vol utilise le relief réel** (sol aplani autour des pistes) : attention au terrain en montagne.
+- Tuiles téléchargées en arrière-plan et gardées en cache dans `~/Library/Caches/Darkstar/tiles` ;
+  hors ligne, retour automatique à la carte Natural Earth et à un sol plat.
+- **Roulis libre sur 360°** (tonneaux), en manuel comme sous autopilote.

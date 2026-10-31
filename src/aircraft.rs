@@ -925,7 +925,7 @@ impl Aircraft {
             let err = wrap180(hdg_cmd - self.hdg_deg());
             let bank_lim = if mach > 3.0 { 35.0 } else { 30.0 };
             let phi_cmd = (err * 2.0).clamp(-bank_lim, bank_lim).to_radians();
-            roll_rate = (1.5 * (phi_cmd - self.phi)).clamp(-pmax * 0.5, pmax * 0.5);
+            roll_rate = (1.5 * wrap_pi(phi_cmd - self.phi)).clamp(-pmax * 0.5, pmax * 0.5);
 
             if self.ap.vert == VertMode::QHold && mach < 0.95 && self.alt < 35_000.0 * FT {
                 self.ap.vert = VertMode::Alt;
@@ -1057,7 +1057,8 @@ impl Aircraft {
             fcs.alpha_min = amin.to_degrees();
             fcs.nz_max = if prot_off { 5.5 } else { nmax };
             fcs.inlet_protect = self.eng.scram == ScramState::Lit && !prot_off;
-            self.phi = (self.phi + roll_rate * dt).clamp(-80f64.to_radians(), 80f64.to_radians());
+            // Roulis libre sur 360° (tonneau) : angle ramené dans ]-180°, 180°]
+            self.phi = wrap_pi(self.phi + roll_rate * dt);
         }
         // Gouvernes : élevons (tangage + roulis différentiel) et dérives (lacet), en degrés
         fcs.pitch_rate = pitch_rate.to_degrees();
@@ -1829,4 +1830,11 @@ mod descent {
         println!("PIQUÉ MANUEL : q max {:.0} kPa, crash {:?}", qmax / 1000.0, ac.crashed);
         assert!(ac.crashed.is_none());
     }
+}
+
+/// Angle ramené dans ]-pi, pi].
+pub fn wrap_pi(a: f64) -> f64 {
+    let t = std::f64::consts::TAU;
+    let r = (a + std::f64::consts::PI).rem_euclid(t) - std::f64::consts::PI;
+    if r <= -std::f64::consts::PI { r + t } else { r }
 }
