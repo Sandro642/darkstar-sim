@@ -256,22 +256,16 @@ pub fn draw_thermal(th: &ThermalSys, r: Rect, time: f64) -> Option<usize> {
     ];
     let col = Color::new(0.25, 0.85, 0.35, 0.9);
     let center = to(0.0, 0.62);
-    for i in 0..outline.len() {
-        let a = to(outline[i].0, outline[i].1);
-        let b = to(outline[(i + 1) % outline.len()].0, outline[(i + 1) % outline.len()].1);
-        draw_triangle(center, a, b, Color::new(0.05, 0.16, 0.08, 1.0));
+    let shape = smooth(&outline.iter().map(|&(x, y)| to(x, y)).collect::<Vec<_>>(), true, 2);
+    for i in 0..shape.len() {
+        draw_triangle(center, shape[i], shape[(i + 1) % shape.len()], Color::new(0.05, 0.16, 0.08, 1.0));
     }
-    for i in 0..outline.len() {
-        let a = to(outline[i].0, outline[i].1);
-        let b = to(outline[(i + 1) % outline.len()].0, outline[(i + 1) % outline.len()].1);
-        draw_line(a.x, a.y, b.x, b.y, 1.5, col);
-    }
+    stroke(&shape, true, 1.6, col);
     // Dérives inclinées et tuyères jumelles
     for sx in [-1.0f32, 1.0] {
-        let (a, b) = (to(sx * 0.16, 0.74), to(sx * 0.27, 0.97));
-        draw_line(a.x, a.y, b.x, b.y, 3.0, col);
+        round_line(to(sx * 0.16, 0.74), to(sx * 0.27, 0.97), 3.0, col);
         let n = to(sx * 0.07, 0.985);
-        draw_rectangle_lines(n.x - 5.0, n.y - 3.0, 10.0, 8.0, 1.5, col);
+        rrect_lines(Rect::new(n.x - 5.0, n.y - 3.0, 10.0, 8.0), 3.0, 1.5, col);
     }
     // Ligne de chine
     let (a, b) = (to(0.0, 0.02), to(0.0, 0.95));

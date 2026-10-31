@@ -156,6 +156,7 @@ pub fn draw_terrain(world: &World, tiles: &mut Tiles, ac: &Aircraft, mat: Mat4, 
     list.sort_by(|a, b| b.3.total_cmp(&a.3));
     let near_apts: Vec<&Airport> = AIRPORTS.iter().filter(|a| dist_brg(ac.lat, ac.lon, a.lat, a.lon).0 < reach).collect();
     let tint = if dark { [0.92, 0.96, 0.92] } else { [1.0, 1.0, 1.0] };
+    let taws = !ac.on_ground;
     for (z, x, y, gd) in &list {
         let (z, x, y) = (*z, *x, *y);
         let ze = z.saturating_sub(3).clamp(4, tiles::ELEV_Z);
@@ -181,12 +182,23 @@ pub fn draw_terrain(world: &World, tiles: &mut Tiles, ac: &Aircraft, mat: Mat4, 
             for i in 0..=g {
                 let fx = x as f64 + i as f64 / g as f64;
                 let lo = tiles::tile_lon(fx, z);
-                let mut e = patch.as_ref().map(|p| p.sample_xy(fx, fy, z)).unwrap_or(0.0);
+                let raw = patch.as_ref().map(|p| p.sample_xy(fx, fy, z)).unwrap_or(0.0);
+                let mut e = raw;
                 if !apts.is_empty() {
                     e = airports::flatten_airports(la, lo, e, apts.iter().copied());
                 }
                 let p = eye.local(la, lo, e);
-                let col = if texture.is_some() { tint } else { fallback_color(world, la, lo, dark) };
+                let mut col = if texture.is_some() { tint } else { fallback_color(world, la, lo, dark) };
+                // Alerte relief (TAWS) : relief à moins de 500 ft sous l'avion en ambre, au-dessus en rouge
+                // (inhibée au sol et sur les plateformes aplanies des aérodromes)
+                if taws && (e - raw).abs() < 0.5 && e > 1.0 {
+                    let dh = e - ac.alt;
+                    let k = ((dh + 150.0) / 120.0).clamp(0.0, 1.0) as f32;
+                    if dh > -150.0 {
+                        let warn = if dh > 0.0 { [1.0, 0.30, 0.25] } else { [1.0, 0.72, 0.25] };
+                        col = [col[0] * (1.0 - k) + warn[0] * k, col[1] * (1.0 - k) + warn[1] * k, col[2] * (1.0 - k) + warn[2] * k];
+                    }
+                }
                 let (u, v) = (uv.x + uv.w * i as f32 / g as f32, uv.y + uv.h * j as f32 / g as f32);
                 verts.push(Vertex { position: p, uv: vec2(u, v), color: rgba(col), normal: Vec4::ZERO });
             }

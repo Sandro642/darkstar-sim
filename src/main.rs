@@ -188,7 +188,7 @@ impl Game {
             crash_report: Vec::new(),
             muted: false,
             thermal: thermal::ThermalSys::new(),
-            style: svs::SvsStyle::Darkstar,
+            style: svs::SvsStyle::Realiste,
             tab: gcs::Tab::Moteurs,
             bit_timer: 0.0,
             bit_fail: None,
@@ -703,9 +703,6 @@ impl Game {
         }
         if is_key_pressed(KeyCode::J) {
             self.muted = !self.muted;
-        }
-        if is_key_pressed(KeyCode::H) {
-            self.style = if self.style == svs::SvsStyle::Darkstar { svs::SvsStyle::Realiste } else { svs::SvsStyle::Darkstar };
         }
         for (l, s) in msgs {
             self.push(l, s);

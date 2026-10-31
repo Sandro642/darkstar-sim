@@ -183,6 +183,29 @@ impl AptFrame {
         let lift = 0.25 + d * 0.0012;
         vec3(e as f32, (self.dz + z + lift - curvature_drop(d)) as f32, -n as f32)
     }
+    /// Point d'un marquage peint : au-dessus de l'enrobé (test de profondeur), écart croissant avec la distance.
+    fn pm(&self, along: f64, cross: f64) -> Vec3 {
+        let e = self.ce + along * self.u.0 + cross * self.c.0;
+        let n = self.cn + along * self.u.1 + cross * self.c.1;
+        let d = (e * e + n * n).sqrt();
+        self.p(along, cross, 0.08 + d * 0.0006)
+    }
+}
+
+/// Surface de piste découpée en carreaux de 150 m au plus : la surélévation anti-scintillement
+/// (fonction de la distance) reste correcte partout au lieu d'être interpolée sur 4 km.
+#[allow(clippy::too_many_arguments)]
+fn rw_quad(mb: &mut MeshBuilder, f: &AptFrame, a0: f64, a1: f64, c0: f64, c1: f64, mark: bool, col: [u8; 4]) {
+    let na = ((a1 - a0).abs() / 150.0).ceil().max(1.0) as usize;
+    let nc = ((c1 - c0).abs() / 150.0).ceil().max(1.0) as usize;
+    let pt = |a: f64, c: f64| if mark { f.pm(a, c) } else { f.p(a, c, 0.0) };
+    for i in 0..na {
+        let (x0, x1) = (a0 + (a1 - a0) * i as f64 / na as f64, a0 + (a1 - a0) * (i + 1) as f64 / na as f64);
+        for j in 0..nc {
+            let (y0, y1) = (c0 + (c1 - c0) * j as f64 / nc as f64, c0 + (c1 - c0) * (j + 1) as f64 / nc as f64);
+            mb.quad([pt(x0, y0), pt(x1, y0), pt(x1, y1), pt(x0, y1)], col);
+        }
+    }
 }
 
 /// Segments de chiffres 7-segments : (x0, y0, x1, y1) dans une cellule 1 x 2.
@@ -360,27 +383,26 @@ pub fn draw_svs(world: &World, tiles: &mut Tiles, ac: &Aircraft, traffic: &Traff
             dz: apt.elev - (ac.alt + EYE_H),
         };
         let (l2, w2) = (apt.len / 2.0, apt.width / 2.0);
-        let q = |a0: f64, a1: f64, c0: f64, c1: f64, z: f64| [f.p(a0, c0, z), f.p(a1, c0, z), f.p(a1, c1, z), f.p(a0, c1, z)];
-        outlines.push(q(-l2, l2, -w2, w2, 0.0));
+        outlines.push([f.p(-l2, -w2, 0.0), f.p(l2, -w2, 0.0), f.p(l2, w2, 0.0), f.p(-l2, w2, 0.0)]);
         let white = [235, 235, 235, 255];
         let concrete = [150, 148, 140, 255];
         // Taxiway, aire de trafic, bretelles
-        mb.quad(q(-l2, l2, w2 + 160.0, w2 + 185.0, 0.0), [70, 70, 72, 255]);
+        rw_quad(&mut mb, &f, -l2, l2, w2 + 160.0, w2 + 185.0, false, [70, 70, 72, 255]);
         let mut a = -l2 + 100.0;
         while a < l2 {
-            mb.quad(q(a - 12.0, a + 12.0, w2, w2 + 170.0, 0.0), [70, 70, 72, 255]);
+            rw_quad(&mut mb, &f, a - 12.0, a + 12.0, w2, w2 + 170.0, false, [70, 70, 72, 255]);
             a += 900.0;
         }
-        mb.quad(q(-600.0, 600.0, w2 + 185.0, w2 + 380.0, 0.0), concrete);
+        rw_quad(&mut mb, &f, -600.0, 600.0, w2 + 185.0, w2 + 380.0, false, concrete);
         // Piste + prolongements
         let asphalt = if dark { [118, 118, 124, 255] } else { [52, 52, 55, 255] };
-        mb.quad(q(-l2 - 60.0, l2 + 60.0, -w2, w2, 0.0), asphalt);
-        mb.quad(q(-l2 + 60.0, l2 - 60.0, -w2 + 1.5, -w2 + 2.5, 0.0), white);
-        mb.quad(q(-l2 + 60.0, l2 - 60.0, w2 - 2.5, w2 - 1.5, 0.0), white);
+        rw_quad(&mut mb, &f, -l2 - 60.0, l2 + 60.0, -w2, w2, false, asphalt);
+        rw_quad(&mut mb, &f, -l2 + 60.0, l2 - 60.0, -w2 + 1.5, -w2 + 2.5, true, white);
+        rw_quad(&mut mb, &f, -l2 + 60.0, l2 - 60.0, w2 - 2.5, w2 - 1.5, true, white);
         // Axe
         let mut a = -l2 + 90.0;
         while a + 36.0 < l2 - 90.0 {
-            mb.quad(q(a, a + 36.0, -0.9, 0.9, 0.0), white);
+            rw_quad(&mut mb, &f, a, a + 36.0, -0.9, 0.9, true, white);
             a += 66.0;
         }
         for s in [-1.0f64, 1.0] {
@@ -391,9 +413,9 @@ pub fn draw_svs(world: &World, tiles: &mut Tiles, ac: &Aircraft, traffic: &Traff
             let qa = |x0: f64, x1: f64, c0: f64, c1: f64| {
                 let (a0, a1) = (at(x0), at(x1));
                 let (c0, c1) = if inw > 0.0 { (c0, c1) } else { (-c1, -c0) };
-                q(a0.min(a1), a0.max(a1), c0, c1, 0.0)
+                (a0.min(a1), a0.max(a1), c0, c1)
             };
-            mb.quad(qa(0.0, 3.0, -w2, w2), white);
+            { let (a0, a1, c0, c1) = qa(0.0, 3.0, -w2, w2); rw_quad(&mut mb, &f, a0, a1, c0, c1, true, white); }
             // Bandes de seuil ("piano")
             let n = ((apt.width - 6.0) / 3.6) as i32;
             for k in 0..n {
@@ -401,7 +423,7 @@ pub fn draw_svs(world: &World, tiles: &mut Tiles, ac: &Aircraft, traffic: &Traff
                 if c0.abs() < 3.0 || (c0 + 1.8).abs() < 3.0 {
                     continue;
                 }
-                mb.quad(qa(6.0, 36.0, c0, c0 + 1.8), white);
+                { let (a0, a1, c0, c1) = qa(6.0, 36.0, c0, c0 + 1.8); rw_quad(&mut mb, &f, a0, a1, c0, c1, true, white); }
             }
             // Numéro de piste
             let num = crate::airports::Airport::runway_number(num_hdg);
@@ -411,17 +433,17 @@ pub fn draw_svs(world: &World, tiles: &mut Tiles, ac: &Aircraft, traffic: &Traff
             for (k, dg) in digits.iter().enumerate() {
                 let x0 = -total / 2.0 + k as f64 * (dw + gap);
                 for (sx0, sy0, sx1, sy1) in seg_rects(*dg) {
-                    mb.quad(qa(48.0 + sy0 * dh / 2.0, 48.0 + sy1 * dh / 2.0, x0 + sx0 * dw, x0 + sx1 * dw), white);
+                    { let (a0, a1, c0, c1) = qa(48.0 + sy0 * dh / 2.0, 48.0 + sy1 * dh / 2.0, x0 + sx0 * dw, x0 + sx1 * dw); rw_quad(&mut mb, &f, a0, a1, c0, c1, true, white); }
                 }
             }
             // Point d'aboutissement et zone de toucher
-            mb.quad(qa(300.0, 345.0, 7.0, 15.0), white);
-            mb.quad(qa(300.0, 345.0, -15.0, -7.0), white);
+            { let (a0, a1, c0, c1) = qa(300.0, 345.0, 7.0, 15.0); rw_quad(&mut mb, &f, a0, a1, c0, c1, true, white); }
+            { let (a0, a1, c0, c1) = qa(300.0, 345.0, -15.0, -7.0); rw_quad(&mut mb, &f, a0, a1, c0, c1, true, white); }
             for (dx, nb) in [(150.0, 3), (450.0, 2), (600.0, 2), (750.0, 1), (900.0, 1)] {
                 for k in 0..nb {
                     let c0 = 8.0 + k as f64 * 3.0;
-                    mb.quad(qa(dx, dx + 22.5, c0, c0 + 1.8), white);
-                    mb.quad(qa(dx, dx + 22.5, -c0 - 1.8, -c0), white);
+                    { let (a0, a1, c0, c1) = qa(dx, dx + 22.5, c0, c0 + 1.8); rw_quad(&mut mb, &f, a0, a1, c0, c1, true, white); }
+                    { let (a0, a1, c0, c1) = qa(dx, dx + 22.5, -c0 - 1.8, -c0); rw_quad(&mut mb, &f, a0, a1, c0, c1, true, white); }
                 }
             }
             // Feux : rampe d'approche, seuil, PAPI

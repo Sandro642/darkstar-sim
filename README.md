@@ -48,7 +48,7 @@ Données carte : Natural Earth (domaine public).
 ## Écran PFD et télémesure
 - PFD au format Darkstar : fenêtre SVS centrale (ciel ardoise, sol vert), EAS à gauche avec crochet de G,
   altitude GPS à droite avec sol hachuré, vario logarithmique, cap en bas, DIST vers la destination.
-  Touche H : bascule entre la palette Darkstar et une palette réaliste.
+  Vision synthétique en couleurs réalistes (imagerie satellite).
 - Panneau THERMIQUE : 22 thermocouples (peau, bords d'attaque, entrée d'air, CIT, EGT, parois de
   combustion stato/scram, tuyère, carburant, avionique, hydraulique, train, freins, batterie).
   Valeur bruitée, tendance °C/min, seuils caution/limite, historique de 2 min, pannes de capteur
@@ -169,3 +169,14 @@ Données carte : Natural Earth (domaine public).
 - Tuiles téléchargées en arrière-plan et gardées en cache dans `~/Library/Caches/Darkstar/tiles` ;
   hors ligne, retour automatique à la carte Natural Earth et à un sol plat.
 - **Roulis libre sur 360°** (tonneaux), en manuel comme sous autopilote.
+
+## Écran moteurs fidèle, horizon nouvelle génération (v1.5.0)
+- **Moteurs** reproduits d'après l'écran du cockpit : silhouette grise, turbine claire (cône, GEN ON,
+  RPM %), EGT et CIT en °F, DOORS, repères orange d'entrée et de tuyère, contours arrondis. En stato /
+  scram, le **conduit inférieur** s'illumine : dégradé jusqu'à la chambre de combustion, filets
+  d'écoulement animés, jet avec losanges de choc (scram), pastille mode + poussée.
+- **Horizon** : rose des caps posée sur la ligne d'horizon, **tunnel dans le ciel** (portes 3D le long
+  de la route de l'autopilote, vertes sur le plan de descente ILS), **alerte relief** colorant le terrain
+  proche de l'altitude de l'avion (ambre < 500 ft sous l'avion, rouge au-dessus).
+- Pistes : marquages (seuils, axe, zone de toucher) de nouveau visibles sur le relief réel.
+- Vision synthétique en mode réaliste uniquement (touche H retirée). Schémas aux tracés arrondis.

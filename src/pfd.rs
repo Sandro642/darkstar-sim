@@ -93,6 +93,8 @@ fn draw_svs_overlay(ac: &Aircraft, v: &View, info: &PfdInfo) {
     if let (Some(a), Some(b)) = (v.project(h0 - hr * big * 3.0), v.project(h0 + hr * big * 3.0)) {
         draw_line(a.x, a.y, b.x, b.y, 2.0, LINE);
     }
+    draw_horizon_compass(ac, v);
+    draw_tunnel(ac, v, info.dest, info.time);
 
     // Échelle de tangage « 10 •  • 10 »
     for p in (-90i32..=90).step_by(5) {
@@ -623,4 +625,107 @@ pub fn draw_gear(ac: &Aircraft, cx: f32, cy: f32, time: f64, unsafe_gear: bool) 
         ("TRANSIT", RED)
     };
     txt_c(label, cx, cy + 37.0, 11.0, c);
+}
+
+/// Rose des caps posée sur la ligne d'horizon : repère direct des caps dans le paysage.
+fn draw_horizon_compass(ac: &Aircraft, v: &View) {
+    let hdg = ac.psi.to_degrees();
+    let base = (hdg / 10.0).round() as i32 * 10;
+    for k in -5..=5 {
+        let h = base + k * 10;
+        let hn = h.rem_euclid(360);
+        let Some(p) = v.project_dir(dir((h as f64).to_radians(), 0.0)) else { continue };
+        if !v.rect.contains(p) {
+            continue;
+        }
+        let major = hn % 30 == 0;
+        let len = if major { 9.0 } else { 5.0 };
+        // Inclinée avec le roulis
+        let (sn, co) = (ac.phi.sin() as f32, ac.phi.cos() as f32);
+        let up = vec2(sn, -co);
+        let a = p + up * len;
+        draw_line(p.x, p.y, a.x, a.y, 1.5, Color::new(1.0, 1.0, 1.0, 0.85));
+        if major {
+            let lbl = match hn {
+                0 => "N".to_string(),
+                90 => "E".to_string(),
+                180 => "S".to_string(),
+                270 => "W".to_string(),
+                _ => format!("{}", hn / 10),
+            };
+            let t = p + up * (len + 9.0);
+            txt_c(&lbl, t.x, t.y + 5.0, 13.0, Color::new(1.0, 1.0, 1.0, 0.85));
+        }
+    }
+}
+
+/// « Tunnel dans le ciel » : portes 3D le long de la trajectoire à suivre (plan de descente ILS,
+/// sinon route et altitude de l'autopilote). Le pilote vole « dans » les cadres.
+fn draw_tunnel(ac: &Aircraft, v: &View, dest: usize, time: f64) {
+    if ac.on_ground {
+        return;
+    }
+    let eye = crate::terrain::EyeFrame::new(ac);
+    let mut gates: Vec<(f64, f64, f64, f64)> = Vec::new();
+    let (mut w, mut h) = (160.0, 100.0);
+    let mut col = MAGENTA_S;
+    if let Some((_, tla, tlo, hdg, elev)) = ac.approach {
+        let along = along_before(tla, tlo, hdg, ac.lat, ac.lon);
+        if along > 400.0 && along < 45_000.0 {
+            let sp = 800.0;
+            let mut s = ((along - 300.0) / sp).floor() * sp;
+            while s >= 0.0 && gates.len() < 12 {
+                let (la, lo) = destination(tla, tlo, wrap360(hdg + 180.0), s);
+                gates.push((la, lo, elev + 15.0 + s * 3f64.to_radians().tan(), hdg));
+                s -= sp;
+            }
+            col = Color::new(0.35, 1.0, 0.55, 1.0);
+            (w, h) = (140.0, 90.0);
+        }
+    }
+    if gates.is_empty() && ac.ap.on {
+        let apt = &AIRPORTS[dest];
+        let brg = if ac.ap.lat == LatMode::Nav { dist_brg(ac.lat, ac.lon, apt.lat, apt.lon).1 } else { ac.ap.hdg_tgt };
+        let sp = (ac.tas * 6.0).max(1_500.0);
+        let alt_t = if ac.ap.vert == VertMode::Alt { ac.ap.alt_tgt_ft * FT } else { ac.alt };
+        for k in 2..=10 {
+            let s = k as f64 * sp;
+            let (la, lo) = destination(ac.lat, ac.lon, brg, s);
+            // Raccord progressif vers l'altitude visée (pente visuelle de 6 % maxi)
+            let alt = ac.alt + (alt_t - ac.alt).clamp(-s * 0.06, s * 0.06);
+            gates.push((la, lo, alt, brg));
+        }
+        w = (ac.tas * 0.5).clamp(180.0, 900.0);
+        h = w * 0.6;
+    }
+    let n = gates.len();
+    // Du plus lointain au plus proche
+    for (k, &(la, lo, alt, brg)) in gates.iter().enumerate().rev() {
+        let (l_la, l_lo) = destination(la, lo, wrap360(brg - 90.0), w / 2.0);
+        let (r_la, r_lo) = destination(la, lo, wrap360(brg + 90.0), w / 2.0);
+        let c = [
+            eye.local(l_la, l_lo, alt - h / 2.0),
+            eye.local(r_la, r_lo, alt - h / 2.0),
+            eye.local(r_la, r_lo, alt + h / 2.0),
+            eye.local(l_la, l_lo, alt + h / 2.0),
+        ];
+        let pts: Vec<Option<Vec2>> = c.iter().map(|&p| v.project(p)).collect();
+        if pts.iter().any(|p| p.is_none()) {
+            continue;
+        }
+        let pts: Vec<Vec2> = pts.into_iter().flatten().collect();
+        let fade = 1.0 - k as f32 / n.max(1) as f32 * 0.7;
+        let pulse = 0.85 + 0.15 * ((time * 3.0 - k as f64 * 0.6).sin() as f32);
+        let cc = Color::new(col.r, col.g, col.b, fade * pulse);
+        // Coins en équerre (cadre ouvert, moins encombrant qu'un rectangle plein)
+        for i in 0..4 {
+            let p0 = pts[i];
+            let pa = pts[(i + 1) % 4];
+            let pb = pts[(i + 3) % 4];
+            let a = p0 + (pa - p0) * 0.25;
+            let b = p0 + (pb - p0) * 0.25;
+            draw_line(p0.x, p0.y, a.x, a.y, 2.0, cc);
+            draw_line(p0.x, p0.y, b.x, b.y, 2.0, cc);
+        }
+    }
 }

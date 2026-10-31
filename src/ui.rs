@@ -159,3 +159,119 @@ pub fn wrap_text(s: &str, size: f32, max_w: f32) -> Vec<String> {
     }
     lines
 }
+
+/// Lissage de Chaikin : coupe les coins d'une polyligne (`iters` passes) pour des tracés arrondis.
+pub fn smooth(pts: &[Vec2], closed: bool, iters: usize) -> Vec<Vec2> {
+    let mut v = pts.to_vec();
+    for _ in 0..iters {
+        if v.len() < 3 {
+            break;
+        }
+        let n = v.len();
+        let mut out = Vec::with_capacity(n * 2);
+        if !closed {
+            out.push(v[0]);
+        }
+        let segs = if closed { n } else { n - 1 };
+        for i in 0..segs {
+            let (a, b) = (v[i], v[(i + 1) % n]);
+            out.push(a * 0.75 + b * 0.25);
+            out.push(a * 0.25 + b * 0.75);
+        }
+        if !closed {
+            out.push(v[n - 1]);
+        }
+        v = out;
+    }
+    v
+}
+
+/// Trait aux jonctions et extrémités arrondies.
+pub fn stroke(pts: &[Vec2], closed: bool, th: f32, c: Color) {
+    let n = pts.len();
+    if n < 2 {
+        return;
+    }
+    let segs = if closed { n } else { n - 1 };
+    for i in 0..segs {
+        let (a, b) = (pts[i], pts[(i + 1) % n]);
+        draw_line(a.x, a.y, b.x, b.y, th, c);
+    }
+    // Pastilles aux sommets : seulement là où l'angle est marqué (évite la surcharge sur les courbes lissées)
+    for i in 0..n {
+        let edge = !closed && (i == 0 || i == n - 1);
+        let turn = if edge {
+            1.0
+        } else {
+            let (p, q, r) = (pts[(i + n - 1) % n], pts[i], pts[(i + 1) % n]);
+            1.0 - (q - p).normalize_or_zero().dot((r - q).normalize_or_zero())
+        };
+        if turn > 0.02 && th > 1.2 {
+            draw_circle(pts[i].x, pts[i].y, th * 0.5, c);
+        }
+    }
+}
+
+/// Segment aux extrémités arrondies.
+pub fn round_line(a: Vec2, b: Vec2, th: f32, c: Color) {
+    draw_line(a.x, a.y, b.x, b.y, th, c);
+    draw_circle(a.x, a.y, th * 0.5, c);
+    draw_circle(b.x, b.y, th * 0.5, c);
+}
+
+/// Remplissage d'un contour (éventail depuis le barycentre : formes étoilées).
+pub fn fill_shape(pts: &[Vec2], c: Color) {
+    if pts.len() < 3 {
+        return;
+    }
+    let ctr = pts.iter().copied().fold(Vec2::ZERO, |a, b| a + b) / pts.len() as f32;
+    for i in 0..pts.len() {
+        draw_triangle(ctr, pts[i], pts[(i + 1) % pts.len()], c);
+    }
+}
+
+/// Arrondi des coins d'un contour avec une tolérance (rayon en pixels) : les segments droits restent
+/// droits, chaque angle est remplacé par une courbe de Bézier quadratique.
+pub fn round_corners(pts: &[Vec2], closed: bool, r: f32) -> Vec<Vec2> {
+    let n = pts.len();
+    if n < 3 {
+        return pts.to_vec();
+    }
+    let mut out = Vec::with_capacity(n * 7);
+    for i in 0..n {
+        if !closed && (i == 0 || i == n - 1) {
+            out.push(pts[i]);
+            continue;
+        }
+        let (p, q, nx) = (pts[(i + n - 1) % n], pts[i], pts[(i + 1) % n]);
+        let d1 = r.min((p - q).length() * 0.5);
+        let d2 = r.min((nx - q).length() * 0.5);
+        let a = q + (p - q).normalize_or_zero() * d1;
+        let b = q + (nx - q).normalize_or_zero() * d2;
+        for k in 0..=6 {
+            let t = k as f32 / 6.0;
+            out.push(a * (1.0 - t) * (1.0 - t) + q * 2.0 * t * (1.0 - t) + b * t * t);
+        }
+    }
+    out
+}
+
+/// Remplissage d'un contour avec une couleur par sommet (dégradés).
+pub fn fill_shape_colored(pts: &[Vec2], col: impl Fn(Vec2) -> Color) {
+    if pts.len() < 3 {
+        return;
+    }
+    let ctr = pts.iter().copied().fold(Vec2::ZERO, |a, b| a + b) / pts.len() as f32;
+    let cv = |p: Vec2| {
+        let c = col(p);
+        macroquad::models::Vertex::new(p.x, p.y, 0.0, 0.0, 0.0, c)
+    };
+    let mut vertices = vec![cv(ctr)];
+    vertices.extend(pts.iter().map(|&p| cv(p)));
+    let n = pts.len() as u16;
+    let mut indices = Vec::with_capacity(pts.len() * 3);
+    for i in 0..n {
+        indices.extend_from_slice(&[0, 1 + i, 1 + (i + 1) % n]);
+    }
+    draw_mesh(&Mesh { vertices, indices, texture: None });
+}

@@ -179,18 +179,19 @@ fn draw_fuel(ac: &Aircraft, r: Rect) -> bool {
     let h = bot - top;
     let hw = r.w * 0.17;
     let outline = [(0.0, 0.0), (0.22, 0.48), (1.0, 0.82), (1.0, 0.96), (0.35, 1.0), (-0.35, 1.0), (-1.0, 0.96), (-1.0, 0.82), (-0.22, 0.48)];
-    for i in 0..outline.len() {
-        let (a, b) = (outline[i], outline[(i + 1) % outline.len()]);
-        draw_line(cx + a.0 * hw, top + a.1 * h, cx + b.0 * hw, top + b.1 * h, 2.0, GREEN_S);
-    }
+    let shape = smooth(&outline.iter().map(|&(x, y)| vec2(cx + x * hw, top + y * h)).collect::<Vec<_>>(), true, 2);
+    stroke(&shape, true, 2.0, GREEN_S);
     let h2f = (ac.h2 / H2_MAX) as f32;
     let blocks = [(0.30, 0.42, tanks[0], GREEN_S), (0.46, 0.26, h2f, CYAN_S), (0.62, 0.30, tanks[1], GREEN_S), (0.76, 0.34, tanks[2], GREEN_S), (0.90, 0.60, tanks[3], GREEN_S)];
     for (fy, fw, f, c) in blocks {
         let bw = hw * fw * 2.0;
         let bh = h * 0.075;
         let (bx, by) = (cx - bw / 2.0, top + fy * h - bh / 2.0);
-        draw_rectangle_lines(bx, by, bw, bh, 1.0, Color::new(c.r, c.g, c.b, 0.6));
-        draw_rectangle(bx + 1.0, by + 1.0 + (bh - 2.0) * (1.0 - f), bw - 2.0, (bh - 2.0) * f, c);
+        rrect_lines(Rect::new(bx, by, bw, bh), bh * 0.3, 1.2, Color::new(c.r, c.g, c.b, 0.6));
+        if f > 0.02 {
+            let fh = (bh - 2.0) * f;
+            rrect(Rect::new(bx + 1.0, by + 1.0 + (bh - 2.0) - fh, bw - 2.0, fh), (bh * 0.3).min(fh * 0.5), c);
+        }
     }
 
     // Centrage et vidange

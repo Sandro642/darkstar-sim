@@ -109,10 +109,9 @@ pub fn draw_fcs(ac: &Aircraft, r: Rect) {
     let gcx = rx + rw / 2.0;
     let gw = rw * 0.42;
     let pts = [(0.0, 0.0), (0.12, 0.45), (1.0, 0.85), (1.0, 0.95), (-1.0, 0.95), (-1.0, 0.85), (-0.12, 0.45)];
-    for i in 0..pts.len() {
-        let (a, b) = (pts[i], pts[(i + 1) % pts.len()]);
-        draw_line(gcx + a.0 * gw, gy + a.1 * gh, gcx + b.0 * gw, gy + b.1 * gh, 1.5, Color::new(0.5, 0.55, 0.6, 1.0));
-    }
+    let plan = smooth(&pts.iter().map(|&(x, y)| vec2(gcx + x * gw, gy + y * gh)).collect::<Vec<_>>(), true, 2);
+    fill_shape(&plan, Color::new(0.10, 0.12, 0.14, 1.0));
+    stroke(&plan, true, 1.6, Color::new(0.5, 0.55, 0.6, 1.0));
     let surf_col = |d: f64| {
         let k = (d.abs() / 25.0).clamp(0.0, 1.0) as f32;
         Color::new(0.2 + 0.8 * k, 1.0 - 0.3 * k, 0.3, 1.0)
@@ -123,7 +122,7 @@ pub fn draw_fcs(ac: &Aircraft, r: Rect) {
         let ey = gy + 0.95 * gh;
         // Le volet descend (positif) ou monte (négatif) : représenté par sa hauteur
         let hgt = (d as f32 / 30.0) * gh * 0.18;
-        draw_rectangle(ex - ew / 2.0, if hgt < 0.0 { ey + hgt } else { ey }, ew, hgt.abs().max(2.0), surf_col(d));
+        rrect(Rect::new(ex - ew / 2.0, if hgt < 0.0 { ey + hgt } else { ey }, ew, hgt.abs().max(3.0)), 2.0, surf_col(d));
         txt_c(&format!("{d:+.0}"), ex, ey + gh * 0.18 + 14.0, 12.0, WHITE);
     }
     for side in [-1.0f32, 1.0] {
@@ -131,7 +130,7 @@ pub fn draw_fcs(ac: &Aircraft, r: Rect) {
         let top = gy + gh * 0.62;
         let bot = gy + gh * 0.95;
         let lean = f.rudder as f32 / 25.0 * gw * 0.12;
-        draw_line(rxp, bot, rxp + lean, top, 3.0, surf_col(f.rudder));
+        round_line(vec2(rxp, bot), vec2(rxp + lean, top), 3.0, surf_col(f.rudder));
     }
     txt_c(&format!("DERIVES {:+.0}", f.rudder), gcx, gy + gh * 0.55, 12.0, WHITE);
     txt_c("ELEVONS G / D", gcx, gy + 12.0, 11.0, DIM);
