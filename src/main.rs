@@ -237,12 +237,10 @@ impl Game {
         }
     }
 
-    /// Accélération du temps effective (plafonnée près du sol) et indicateur de plafonnement.
+    /// Accélération du temps effective : disponible à toute altitude, y compris au sol
+    /// (la physique reste intégrée au pas fixe de 1/120 s, quelle que soit l'accélération).
     fn effective_warp(&self) -> (f64, bool) {
-        let ac = &self.ac;
-        let max_warp = if ac.on_ground || ac.d.agl < 1500.0 { 2.0 } else { 32.0 };
-        let w = WARPS[self.warp_idx];
-        (w.min(max_warp), w > max_warp)
+        (WARPS[self.warp_idx], false)
     }
 
     /// Termine le vol : enregistrement final et débriefing.
