@@ -363,3 +363,12 @@ Le SR-72 est un avion de reconnaissance : sa charge utile est simulée.
   sur le roulis), à-coups (toucher des roues, mur du son, allumage scram / PC), roulage sur la piste,
   voile gris / rouge sous facteur de charge, lueur de plasma en hypersonique dense, grondement de
   structure et bang supersonique.
+- v1.22.0 : **météo réelle et horizon intelligent** — prévision Open-Meteo de l'heure courante (gratuit,
+  sans clé) sur une grille 5 x 5 autour de l'avion, 12 niveaux de 1000 à 30 hPa (vent, température,
+  humidité, nébulosité) + CAPE, précipitations, nébulosité basse / moyenne / haute. Vent, turbulence en
+  air clair (cisaillement réel), nuages et orages générés d'après ces données ; repli simulé hors
+  ligne (`METEO REEL` par défaut, `METEO ORAGEUX`... pour simuler). Visualisation 3D dans l'horizon
+  (`METEO 3D ON/OFF`) : flux de particules de vent coloré selon le danger (épaisseur selon
+  l'humidité), vecteurs de vent devant l'avion, volumes filaires autour des cumulonimbus, nappes de
+  turbulence en air clair ; bloc météo avec source, température extérieure, légende ; alerte du danger
+  le plus fort sur la trajectoire.

@@ -320,7 +320,7 @@ fn draw_svs_overlay(ac: &Aircraft, v: &View, s: Rect, info: &PfdInfo) {
     // Informations éphémères façon HUD : RWR (haut gauche), vent / météo (haut droite)
     if !ac.on_ground {
         crate::pfd_plus::rwr(ac, &info.threats, Rect::new(s.x + 8.0, s.y + 26.0, 92.0, 92.0), info.time, vis.rwr);
-        crate::pfd_plus::wind_block(ac, &info.wx, Rect::new(s.x + s.w - 150.0, s.y + 44.0, 142.0, 52.0), info.time, vis.wind);
+        crate::pfd_plus::wind_block(ac, &info.wx, Rect::new(s.x + s.w - 160.0, s.y + 44.0, 152.0, 86.0), info.time, vis.wind);
     }
     // Annonces d'override et de limitation FADEC
     let mut oy = if ac.on_ground || vis.rwr < 0.01 { s.y + 36.0 } else { s.y + 152.0 };

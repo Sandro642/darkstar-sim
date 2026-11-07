@@ -33,6 +33,8 @@ mod tiles;
 mod ui;
 mod updater;
 mod weather;
+mod wx3d;
+mod wxreal;
 mod world;
 
 use aircraft::*;
@@ -1147,6 +1149,14 @@ impl Game {
                 pfd_plus::hud_show_all(10.0);
                 reply = Ok("INFOS HUD AFFICHEES 10 s (survol de l'horizon : toutes les infos)".into());
             }
+            "METEO" | "WEATHER" | "WX" if matches!(arg(1), "REEL" | "REELLE" | "REAL" | "LIVE") => {
+                self.wx.set_real();
+                reply = Ok(format!("METEO REELLE (Open-Meteo, grille 5x5 autour de l'avion) — {}", self.wx.real.status));
+            }
+            "METEO" | "WEATHER" | "WX" if arg(1) == "3D" => {
+                self.wx.show3d = arg(2) != "OFF";
+                reply = Ok(if self.wx.show3d { "METEO 3D ON (flux de vent, vecteurs, volumes de danger)".into() } else { "METEO 3D OFF".into() });
+            }
             "METEO" | "WEATHER" | "WX" => {
                 let i = weather::SEVERITIES.iter().position(|n| n.starts_with(arg(1))).or_else(|| arg(1).parse::<usize>().ok().filter(|v| *v <= 4));
                 match i {
@@ -1156,7 +1166,7 @@ impl Game {
                     }
                     _ => {
                         let w = &self.wx.info;
-                        reply = Ok(format!("METEO {} — VENT {:03.0}/{:.0} KT (CALME|BEAU|NUAGEUX|COUVERT|ORAGEUX)", weather::SEVERITIES[self.wx.severity], w.wind_dir, w.wind_kt));
+                        reply = Ok(format!("METEO {} — VENT {:03.0}/{:.0} KT — DANGER {} {} (REEL|CALME|BEAU|NUAGEUX|COUVERT|ORAGEUX, 3D ON/OFF)", w.source, w.wind_dir, w.wind_kt, wx3d::danger_label(w.danger), w.cause));
                     }
                 }
             }
@@ -1526,7 +1536,7 @@ impl Game {
                     "PANNE ENGL|ENGR|GENL|GENR|POMPE|ADC|FCS|HYD|REFROID|PORTES|TRAIN|FUITEH2 [OFF] | PANNES OFF | TRAIN SECOURS",
                     "CAMERA ON|OFF|EO|IR|TRACK|NADIR  ZOOM 8  PHOTO  SAR STRIP|SPOT|OFF  ELINT ON|OFF",
                     "CIBLE B  DIRECT CIBLE  PLAN RECON  ROUTE RECON|OFF  MENACES ON|OFF  RECON (page)",
-                    "METEO CALME|BEAU|NUAGEUX|COUVERT|ORAGEUX  HUD (infos ephemeres 10 s, ou survol)",
+                    "METEO REEL (defaut) | CALME|BEAU|NUAGEUX|COUVERT|ORAGEUX  METEO 3D ON/OFF  HUD (infos 10 s)",
                     "TANKER [OACI|OFF]  RAVITAILLEMENT (autonome)  DECROCHER  BINGO [AUTO|t]",
                     "CHAFF  FLARE  ECM ON|OFF  CMDS AUTO|MAN  TIR [I|J|K] (HACM)  ARMEMENT (page)",
                     "EMERGENCY [OFF] (ravitaillement > terrain proche > ejection)  EJECTION CONFIRME",

@@ -496,6 +496,14 @@ pub fn wind_block(ac: &Aircraft, wx: &crate::weather::WxInfo, r: Rect, time: f64
         let drift = wrap180(ac.track_deg() - ac.hdg_deg());
         htxt(&format!("DERIVE {}{:.0}", if drift >= 0.0 { "D" } else { "G" }, drift.abs()), x, r.y + 31.0, 11.0, WHITE, a);
         htxt(&format!("GS {:.0} kt", ac.ground_speed() / KT), x, r.y + 45.0, 11.0, WHITE, a);
+        // Source des données, température extérieure, danger local et légende
+        let src: String = wx.source.chars().take(22).collect();
+        let sc = if wx.source.starts_with("REEL") { GREEN_S } else { AMBER };
+        htxt(&src, r.x + 6.0, r.y + 60.0, 10.0, sc, a);
+        if let Some(t) = wx.oat {
+            htxt_r(&format!("OAT {t:.0}C"), r.x + r.w - 6.0, r.y + 60.0, 10.0, WHITE, a);
+        }
+        crate::wx3d::legend(r.x + 6.0, r.y + 66.0, r.w - 12.0, a);
     }
     // Annonces météo actives
     let mut y = r.y + r.h + 16.0;
@@ -512,6 +520,14 @@ pub fn wind_block(ac: &Aircraft, wx: &crate::weather::WxInfo, r: Rect, time: f64
         }
     }
     y += 18.0;
+    // Danger météo le plus fort sur la trajectoire (toujours affiché)
+    if let Some((cause, dist, lvl, alt_ft)) = wx.ahead {
+        let c = crate::wx3d::danger_color(lvl, 1.0);
+        if blink || lvl < 0.8 {
+            htxt(&format!("{cause} {} {:.0}NM FL{:.0}", crate::wx3d::danger_label(lvl), dist / NM, alt_ft / 100.0), r.x, y, 12.0, c, 1.0);
+        }
+        y += 16.0;
+    }
     if let Some((brg, dist, top)) = wx.storm {
         if dist < 60.0 * NM || a > 0.01 {
             let clock = ((wrap360(brg - ac.hdg_deg()) / 30.0).round() as i32 + 11) % 12 + 1;

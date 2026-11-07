@@ -1,4 +1,4 @@
-//! Météo procédurale déterministe : vent fonction de l'altitude (courant-jet vers FL350, vent faible
+//! Météo réelle (Open-Meteo, voir `wxreal`) avec repli procédural hors ligne. Météo procédurale déterministe : vent fonction de l'altitude (courant-jet vers FL350, vent faible
 //! dans la stratosphère), champs de cumulus, couches de stratus et cellules orageuses (cumulonimbus
 //! à enclume). Effets : dérive de l'avion, turbulence, vol aux instruments dans les nuages. Rendu :
 //! nuages volumétriques en panneaux orientés vers la caméra dans la vision synthétique, éclairs,
@@ -56,13 +56,44 @@ pub struct WxInfo {
     pub turb: f64,
     /// Orage le plus proche devant : (relèvement, distance m, sommet ft).
     pub storm: Option<(f64, f64, f64)>,
+    /// Source des données (« REEL OPEN-METEO », « SIMULE »...).
+    pub source: String,
+    /// Température de l'air extérieur (°C) si connue.
+    pub oat: Option<f64>,
+    /// Danger au point de l'avion (0..1) et sa cause.
+    pub danger: f32,
+    pub cause: &'static str,
+    /// Danger le plus fort devant sur la trajectoire : (cause, distance m, niveau 0..1, altitude ft).
+    pub ahead: Option<(&'static str, f64, f32, f64)>,
 }
+
+/// Particule de vent (visualisation 3D) : position, vent local, danger, humidité.
+pub struct Part {
+    pub lat: f64,
+    pub lon: f64,
+    pub alt: f64,
+    pub u: f64,
+    pub v: f64,
+    pub danger: f32,
+    pub rh: f32,
+}
+
+pub const N_PARTS: usize = 240;
 
 pub struct Weather {
     pub severity: usize,
     cells: HashMap<(i32, i32), Vec<Cloud>>,
     pub info: WxInfo,
     gust_t: f64,
+    /// Météo réelle (prioritaire quand disponible).
+    pub use_real: bool,
+    pub real: crate::wxreal::Real,
+    /// Visualisation 3D dans l'horizon (particules de vent, vecteurs, volumes de danger).
+    pub show3d: bool,
+    pub parts: Vec<Part>,
+    /// Rayon de la zone de particules (m).
+    pub part_r: f64,
+    rng: u64,
 }
 
 fn hash(a: i64, b: i64, c: i64) -> f64 {
@@ -85,12 +116,73 @@ fn vnoise(x: f64, y: f64, seed: i64) -> f64 {
 
 impl Weather {
     pub fn new() -> Weather {
-        Weather { severity: 2, cells: HashMap::new(), info: WxInfo::default(), gust_t: 0.0 }
+        Weather {
+            severity: 2,
+            cells: HashMap::new(),
+            info: WxInfo::default(),
+            gust_t: 0.0,
+            use_real: true,
+            real: crate::wxreal::Real::new(),
+            show3d: true,
+            parts: Vec::new(),
+            part_r: 5_000.0,
+            rng: 0x2545_F491_4F6C_DD1D,
+        }
     }
 
     pub fn set_severity(&mut self, s: usize) {
         self.severity = s.min(4);
+        self.use_real = false;
         self.cells.clear();
+    }
+
+    pub fn set_real(&mut self) {
+        self.use_real = true;
+        self.cells.clear();
+    }
+
+    fn grid(&self) -> Option<&crate::wxreal::Grid> {
+        if self.use_real { self.real.grid.as_ref() } else { None }
+    }
+
+    /// Échantillon météo réel au point (None : météo simulée ou hors grille).
+    pub fn sample(&self, lat: f64, lon: f64, alt: f64) -> Option<crate::wxreal::Sample> {
+        self.grid()?.sample(lat, lon, alt)
+    }
+
+    /// Danger météo (0..1) au point et sa cause, hors nuages : turbulence en air clair (cisaillement),
+    /// convection, givrage, vent fort ; en météo simulée, voisinage du courant-jet.
+    pub fn field_danger(&self, lat: f64, lon: f64, alt: f64) -> (f32, &'static str, f32) {
+        let sm = |x: f64| {
+            let x = x.clamp(0.0, 1.0);
+            (x * x * (3.0 - 2.0 * x)) as f32
+        };
+        let mut d = 0.0f32;
+        let mut cause = "";
+        let mut put = |v: f32, c: &'static str| {
+            if v > d {
+                d = v;
+                cause = c;
+            }
+        };
+        if let Some(s) = self.sample(lat, lon, alt) {
+            put(sm((s.shear - 0.004) / 0.014), "CAT");
+            let conv_top = 9_000.0 + s.cape * 1.5;
+            if alt < conv_top {
+                put(sm((s.cape - 400.0) / 2_000.0) * (0.55 + 0.45 * sm(s.precip / 3.0)), "CONVECTION");
+            }
+            if (-20.0..0.0).contains(&s.t_c) && s.rh > 85.0 {
+                put(0.45 + 0.2 * sm((s.rh - 85.0) / 15.0), "GIVRAGE");
+            }
+            put(sm((s.u.hypot(s.v) - 45.0) / 50.0) * 0.6, "VENT FORT");
+            return (d, cause, (s.rh / 100.0) as f32);
+        }
+        let (_, _, _, spd) = self.wind_at(lat, lon, alt);
+        let h_ft = alt / FT;
+        if (28_000.0..42_000.0).contains(&h_ft) {
+            put(sm((spd - 70.0) / 80.0) * 0.7, "CAT");
+        }
+        (d, cause, 0.4)
     }
 
     fn sev_k(&self) -> f64 {
@@ -99,6 +191,11 @@ impl Weather {
 
     /// Vent (vers l'est, vers le nord) en m/s, et direction d'origine / force en kt.
     pub fn wind_at(&self, lat: f64, lon: f64, alt: f64) -> (f64, f64, f64, f64) {
+        if let Some(s) = self.sample(lat, lon, alt) {
+            let spd = s.u.hypot(s.v);
+            let dir = wrap360(s.u.atan2(s.v).to_degrees() + 180.0);
+            return (s.u, s.v, dir, spd / KT);
+        }
         let h_ft = alt / FT;
         // Profil vertical : couche limite, courant-jet ~FL350, stratosphère calme
         let jet = 55.0 + 70.0 * vnoise(lat / 9.0, lon / 9.0, 7);
@@ -120,7 +217,8 @@ impl Weather {
         (ms * to.sin(), ms * to.cos(), dir, spd)
     }
 
-    fn gen_cell(&self, i: i32, j: i32) -> Vec<Cloud> {
+    /// Nuages d'une cellule en météo simulée (niveau de sévérité).
+    fn specs_proc(&self, i: i32, j: i32) -> Vec<(CloudKind, f64, f64, f64, f64, f64)> {
         let mut out = Vec::new();
         let (lat0, lon0) = (i as f64 * CELL_DEG, j as f64 * CELL_DEG);
         let cov = vnoise(lat0 / 2.5, lon0 / 2.5, 21);
@@ -154,7 +252,62 @@ impl Weather {
                 }
                 CloudKind::Cb => (5_500.0 + rr(4) * 1_500.0, 38_000.0 + rr(5) * 14_000.0, 6_000.0 + rr(6) * 3_500.0),
             };
-            let (base, top) = (base_ft * FT, top_ft * FT);
+            out.push((kind, lat, lon, base_ft * FT, top_ft * FT, radius));
+        }
+        out
+    }
+
+    /// Nuages d'une cellule d'après la météo réelle : cumulus (nébulosité basse, développement par la
+    /// CAPE), couches moyennes et cirrus (nébulosité moyenne / haute aux hauteurs des niveaux de
+    /// pression), cumulonimbus si la convection est forte et qu'il pleut.
+    fn specs_real(&self, i: i32, j: i32, g: &crate::wxreal::Grid) -> Option<Vec<(CloudKind, f64, f64, f64, f64, f64)>> {
+        let (lat0, lon0) = (i as f64 * CELL_DEG, j as f64 * CELL_DEG);
+        let (lc, oc) = (lat0 + CELL_DEG / 2.0, lon0 + CELL_DEG / 2.0);
+        let s = g.sample(lc, oc, 3_000.0)?;
+        let h = |hpa: u32, dflt: f64| g.level_h(lc, oc, hpa).unwrap_or(dflt);
+        let mut out = Vec::new();
+        let r = |k: i64| hash(i as i64, j as i64, 700 + k);
+        let mut c = 0i64;
+        let next = |c: &mut i64| {
+            *c += 1;
+            let k = *c;
+            move |x: i64| hash(i as i64 * 31 + k, j as i64, 800 + x)
+        };
+        // Cumulonimbus
+        let storm = (s.cape - 500.0).max(0.0) / 2_000.0 * if s.precip > 0.2 || s.code >= 95.0 { 1.0 } else { 0.25 };
+        if r(0) < storm.min(0.6) {
+            let rr = next(&mut c);
+            let top = h(200, 11_800.0) + (s.cape / 2_500.0).min(1.5) * 1_500.0;
+            out.push((CloudKind::Cb, lat0 + rr(0) * CELL_DEG, lon0 + rr(1) * CELL_DEG, s.elev + 1_200.0 + rr(4) * 500.0, top, 5_000.0 + rr(6) * 3_500.0));
+        }
+        // Cumulus de la couche basse
+        let n_cu = (s.cc_low / 100.0 * 4.0 + r(1)) as usize;
+        for _ in 0..n_cu {
+            let rr = next(&mut c);
+            let base = s.elev + 700.0 + rr(4) * 900.0;
+            let depth = 600.0 + s.cc_low / 100.0 * 900.0 + (s.cape / 1_000.0).min(2.0) * 1_500.0 * rr(5);
+            out.push((CloudKind::Cu, lat0 + rr(0) * CELL_DEG, lon0 + rr(1) * CELL_DEG, base, base + depth, 1_300.0 + rr(6) * 1_800.0));
+        }
+        // Couche moyenne (altostratus) et cirrus
+        for (cc, lo, hi, thick, rad) in [(s.cc_mid, h(700, 3_000.0), h(500, 5_600.0), 500.0, 5_000.0), (s.cc_high, h(300, 9_200.0), h(250, 10_400.0), 350.0, 8_000.0)] {
+            let n = (cc / 100.0 * 2.5 + r(2 + c)) as usize;
+            for _ in 0..n {
+                let rr = next(&mut c);
+                let base = lo + (hi - lo) * rr(4);
+                out.push((CloudKind::St, lat0 + rr(0) * CELL_DEG, lon0 + rr(1) * CELL_DEG, base, base + thick, rad * (0.7 + 0.6 * rr(6))));
+            }
+        }
+        Some(out)
+    }
+
+    fn gen_cell(&self, i: i32, j: i32) -> Vec<Cloud> {
+        let mut out = Vec::new();
+        let specs = match self.grid().and_then(|g| self.specs_real(i, j, g)) {
+            Some(sp) => sp,
+            None => self.specs_proc(i, j),
+        };
+        for (c, (kind, lat, lon, base, top, radius)) in specs.into_iter().enumerate() {
+            let rr = |k: i64| hash(i as i64 * 31 + c as i64, j as i64, 200 + k);
             let mut puffs = Vec::new();
             let mut add = |de: f64, dn: f64, alt: f64, pr: f64| {
                 let (pla, plo) = from_enu(lat, lon, de, dn);
@@ -234,6 +387,13 @@ impl Weather {
 
     /// Mise à jour : vent et turbulence appliqués à l'avion, état météo pour l'horizon.
     pub fn update(&mut self, ac: &mut Aircraft, dt: f64) {
+        if self.use_real {
+            let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs_f64()).unwrap_or(0.0);
+            if self.real.poll(ac.lat, ac.lon, ac.d.mach, now) {
+                // Nouvelles données : les nuages sont régénérés d'après la météo réelle
+                self.cells.clear();
+            }
+        }
         self.ensure(ac.lat, ac.lon, VIEW_RANGE);
         self.gust_t += dt;
         let (we, wn, dir, spd) = self.wind_at(ac.lat, ac.lon, ac.alt);
@@ -275,9 +435,10 @@ impl Weather {
         if h_ft < 3_000.0 && spd > 18.0 {
             turb = turb.max(((spd - 18.0) / 30.0).min(0.4));
         }
-        let alt_ft = ac.alt / FT;
-        if (28_000.0..42_000.0).contains(&alt_ft) && spd > 80.0 {
-            turb = turb.max(((spd - 80.0) / 80.0).min(0.35));
+        // Turbulence en air clair (cisaillement réel ou voisinage du courant-jet), convection
+        let (danger, cause, _) = self.field_danger(ac.lat, ac.lon, ac.alt);
+        if cause == "CAT" || cause == "CONVECTION" {
+            turb = turb.max(danger as f64 * 0.7);
         }
         // Rafales : composante aléatoire lissée
         let g = turb * 6.0 + spd * KT * 0.04;
@@ -285,7 +446,96 @@ impl Weather {
         let gy = g * ((self.gust_t * 0.9 + 2.0).sin() + 0.5 * (self.gust_t * 2.3).sin());
         ac.wind = (we + gx, wn + gy);
         ac.turb = turb;
-        self.info = WxInfo { wind_dir: dir, wind_kt: spd, imc, turb, storm };
+        let real = self.grid().is_some_and(|g| g.contains(ac.lat, ac.lon));
+        let source = if real {
+            self.real.status.clone()
+        } else if self.use_real {
+            format!("SIMULE ({})", self.real.status)
+        } else {
+            format!("SIMULE {}", SEVERITIES[self.severity])
+        };
+        let oat = self.sample(ac.lat, ac.lon, ac.alt).map(|s| s.t_c).or_else(|| Some(crate::atmosphere::isa(ac.alt).t - 273.15));
+        // Orage proche : danger maximal
+        let (mut danger, mut cause) = (danger, cause);
+        if let Some((_, d, _)) = storm {
+            let v = (1.0 - d / 40_000.0).clamp(0.0, 1.0) as f32;
+            if v > danger {
+                danger = v;
+                cause = "ORAGE";
+            }
+        }
+        let ahead = self.scan_ahead(ac);
+        self.info = WxInfo { wind_dir: dir, wind_kt: spd, imc, turb, storm, source, oat, danger, cause, ahead };
+        self.update_parts(ac, dt);
+    }
+
+    fn rand(&mut self) -> f64 {
+        self.rng ^= self.rng << 13;
+        self.rng ^= self.rng >> 7;
+        self.rng ^= self.rng << 17;
+        (self.rng >> 11) as f64 / (1u64 << 53) as f64
+    }
+
+    /// Danger le plus fort sur la trajectoire (10 points jusqu'à ~5 min de vol, max 300 km).
+    fn scan_ahead(&self, ac: &Aircraft) -> Option<(&'static str, f64, f32, f64)> {
+        let range = (ac.tas * 300.0).clamp(20_000.0, 300_000.0);
+        let climb = ac.gamma.sin();
+        let mut best: Option<(&'static str, f64, f32, f64)> = None;
+        for k in 1..=10 {
+            let d = range * k as f64 / 10.0;
+            let (la, lo) = destination(ac.lat, ac.lon, ac.track_deg(), d);
+            let alt = (ac.alt + d * climb).max(0.0);
+            let (mut v, mut c, _) = self.field_danger(la, lo, alt);
+            for cl in self.clouds_near(la, lo, 15_000.0) {
+                if cl.kind == CloudKind::Cb && alt < cl.top + 600.0 && dist_brg(la, lo, cl.lat, cl.lon).0 < cl.radius * 1.5 {
+                    v = 1.0;
+                    c = "ORAGE";
+                }
+            }
+            if v > 0.35 && best.is_none_or(|b| v > b.2 + 0.1) {
+                best = Some((c, d, v, alt / FT));
+            }
+        }
+        best
+    }
+
+    /// Particules de vent : advectées par le vent local, réensemencées devant l'avion.
+    fn update_parts(&mut self, ac: &Aircraft, dt: f64) {
+        let r = (ac.tas * 25.0).clamp(5_000.0, 80_000.0);
+        self.part_r = r;
+        let hgt = (r * 0.12).clamp(400.0, 4_000.0);
+        let hdg = ac.track_deg();
+        let init = self.parts.is_empty();
+        // Orages proches : danger maximal dans et autour de la cellule
+        let cbs: Vec<(f64, f64, f64, f64)> = self.clouds_near(ac.lat, ac.lon, r * 1.6).filter(|c| c.kind == CloudKind::Cb).map(|c| (c.lat, c.lon, c.radius, c.top)).collect();
+        while self.parts.len() < N_PARTS {
+            self.parts.push(Part { lat: ac.lat, lon: ac.lon, alt: ac.alt, u: 0.0, v: 0.0, danger: 0.0, rh: 0.0 });
+        }
+        for k in 0..self.parts.len() {
+            let (mut la, mut lo, mut al) = (self.parts[k].lat, self.parts[k].lon, self.parts[k].alt);
+            let (d, brg) = dist_brg(ac.lat, ac.lon, la, lo);
+            let behind = wrap180(brg - hdg).abs() > 100.0 && d > r * 0.25;
+            if init || d > r * 1.1 || behind || (al - ac.alt).abs() > hgt * 1.2 || k % 97 == (self.gust_t * 10.0) as usize % 97 && d > r {
+                let along = if init { r * (-0.2 + 1.2 * self.rand()) } else { r * (0.3 + 0.7 * self.rand()) };
+                let lat_off = (self.rand() - 0.5) * 1.6 * r;
+                let (a1, o1) = destination(ac.lat, ac.lon, hdg, along);
+                let (a2, o2) = destination(a1, o1, wrap360(hdg + 90.0), lat_off);
+                la = a2;
+                lo = o2;
+                al = (ac.alt + (self.rand() - 0.5) * 2.0 * hgt).max(ac.d.elev + 30.0);
+            }
+            let (u, v, _, _) = self.wind_at(la, lo, al);
+            let (de, dn) = (u * dt, v * dt);
+            let (la2, lo2) = from_enu(la, lo, de, dn);
+            let (mut danger, _, rh) = self.field_danger(la2, lo2, al);
+            for &(cl, co, cr, ct) in &cbs {
+                if al < ct + 800.0 {
+                    let dd = dist_brg(la2, lo2, cl, co).0;
+                    danger = danger.max((1.0 - (dd - cr) / (cr * 1.5)).clamp(0.0, 1.0) as f32);
+                }
+            }
+            self.parts[k] = Part { lat: la2, lon: lo2, alt: al, u, v, danger, rh };
+        }
     }
 }
 

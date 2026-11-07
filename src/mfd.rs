@@ -91,6 +91,7 @@ pub fn draw_mfd(world: &World, tiles: &mut crate::tiles::Tiles, wx: &crate::weat
     let (_, lay, panes) = layout(r);
     let view = svs::draw_svs(world, tiles, wx, rf, ac, lay.svs, time, style, feel.cam());
     feel.draw_overlay(ac, lay.svs, time);
+    crate::wx3d::draw(wx, ac, &view, time);
     crate::pfd_plus::set_inner(lay.inner);
     pfd::draw_pfd(ac, &view, lay.pfd, info);
     // Ravitailleur : repère tant qu'il est loin, directeur de ravitaillement en approche
