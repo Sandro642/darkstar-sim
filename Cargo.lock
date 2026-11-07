@@ -88,7 +88,7 @@ dependencies = [
 
 [[package]]
 name = "darkstar_sim"
-version = "1.30.4"
+version = "1.30.5"
 dependencies = [
  "image",
  "macroquad",

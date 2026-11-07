@@ -498,3 +498,7 @@ Le SR-72 est un avion de reconnaissance : sa charge utile est simulée.
   requise), sortie de spirale avec marge de vent, VAPP majorée de la moitié du vent de face,
   correction forte sous le profil en échangeant l'excès de vitesse contre de la hauteur. Essais :
   7 départs, dont le vol rejoué avec 20 kt de face et deux cas vent arrière / travers.
+- v1.30.5 : reconnexion immédiate — plus aucune panne injectée. L'avion reprend exactement l'état et
+  les pannes réelles du moment de la déconnexion ; le « sapin de Noël » de l'écran de perte du signal
+  reste une indication et n'est plus converti en pannes. Mode dégradé (manche indisponible, terminal)
+  et refus d'instructions basés sur les pannes réellement présentes.

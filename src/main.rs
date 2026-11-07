@@ -556,10 +556,9 @@ impl Game {
         let mut ac = self.last_ac.clone().unwrap_or_else(|| self.ac.clone());
         ac.crashed = None;
         let kind = self.mishap.as_ref().map(|m| m.kind);
-        let lights = self.mishap.as_ref().map(|m| m.lights()).unwrap_or([0; 32]);
+        // Aucune panne ajoutée : seules les pannes réellement présentes à la déconnexion demeurent
+        // (le panneau de l'écran de perte du signal n'est qu'une indication, pas une injection)
         self.ac = ac;
-        // Les dégâts de l'incident demeurent : chaque système touché (voyant allumé) est en panne
-        self.apply_damage(&lights);
         self.degraded = kind;
         self.mishap = None;
         self.crash_report.clear();
@@ -567,42 +566,7 @@ impl Game {
         self.tree = None;
         self.link.state = link::State::Connected;
         self.push(Level::Warning, format!("RECONNEXION IMMEDIATE : LIAISON RETABLIE VIA {} — MODE DEGRADE (TELEMESURE + TERMINAL, MANCHE INDISPONIBLE)", self.link.path.name()));
-        self.push(Level::Warning, "DEGATS DE L'INCIDENT CONSERVES : CERTAINES INSTRUCTIONS SONT REFUSEES — EMERGENCY OVERRIDE / EJECTION TOUJOURS POSSIBLES");
-    }
-
-    /// Pannes réelles des systèmes touchés par l'incident (voyants du panneau, ordre alarms::LIGHTS).
-    fn apply_damage(&mut self, l: &[u8; 32]) {
-        use systems::Fail;
-        let on = |i: usize| l[i] > 0;
-        let ac = &mut self.ac;
-        for (i, f) in [(0, Fail::GenL), (1, Fail::GenR), (10, Fail::ScramCool), (13, Fail::FuelPump), (15, Fail::H2Leak), (22, Fail::Adc), (23, Fail::FcsDirect), (26, Fail::Hyd), (28, Fail::GearJam), (29, Fail::InletJam)] {
-            if on(i) {
-                ac.set_failure(f, true);
-            }
-        }
-        for k in 0..2 {
-            if on(2 + k) {
-                ac.eng.fadec_fault[k] = true;
-            }
-            if on(4 + k) {
-                ac.eng.side[k] = TurbState::Failed;
-                ac.eng.n2s[k] = 0.0;
-            }
-        }
-        if on(4) && on(5) {
-            ac.eng.turb = TurbState::Failed;
-            ac.throttle = 0.0;
-        }
-        if on(11) {
-            ac.eng.combustor_failed = true;
-            ac.eng.ram = RamState::Off;
-            ac.eng.scram = ScramState::Off;
-        }
-        if on(31) {
-            for s in self.thermal.sensors.iter_mut().step_by(5) {
-                s.failed = true;
-            }
-        }
+        self.push(Level::Warning, "ETAT ET PANNES DE LA DECONNEXION CONSERVES : CERTAINES INSTRUCTIONS SONT REFUSEES — EMERGENCY OVERRIDE / EJECTION TOUJOURS POSSIBLES");
     }
 
     /// Instructions impossibles en mode dégradé, selon les dégâts.
