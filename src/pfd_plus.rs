@@ -229,7 +229,7 @@ pub fn cue(ac: &Aircraft, v: &View, c: &Cue, slot: usize) {
             // Flèche au bord gauche ou droit (moitié haute, hors des blocs du bas)
             let rel = wrap180(brg - ac.hdg_deg()) as f32;
             let side = if rel >= 0.0 { 1.0 } else { -1.0 };
-            let p = vec2(ctr.x + side * (s.w / 2.0 - 18.0), s.y + s.h * 0.30 + slot as f32 * 34.0);
+            let p = vec2(ctr.x + side * (s.w / 2.0 - 18.0), s.y + s.h * 0.46 + slot as f32 * 30.0);
             let dirv = vec2(side, 0.0);
             let n = vec2(0.0, 1.0);
             draw_triangle(p + dirv * 12.0, p - dirv * 6.0 + n * 8.0, p - dirv * 6.0 - n * 8.0, c.color);
@@ -510,6 +510,7 @@ pub fn wind_block(ac: &Aircraft, wx: &crate::weather::WxInfo, r: Rect, time: f64
 // ---------- Menaces : RWR et repères 3D ----------
 
 pub struct ThreatCue {
+    pub site: usize,
     pub lat: f64,
     pub lon: f64,
     pub name: &'static str,
@@ -517,8 +518,8 @@ pub struct ThreatCue {
     /// 1 veille, 2 poursuite, 3 accrochage (LOCK), 4 tir (LAUNCH).
     pub state: u8,
     pub dist: f64,
-    /// Missile en vol : (fraction du trajet, temps avant impact).
-    pub missile: Option<(f64, f64)>,
+    /// Missile en vol : (lat, lon, altitude, temps avant impact).
+    pub missile: Option<(f64, f64, f64, f64)>,
     pub escape: String,
 }
 
@@ -599,27 +600,24 @@ pub fn threats(ac: &Aircraft, v: &View, cues: &[ThreatCue], time: f64) {
             rrect(Rect::new(p.x - w / 2.0, p.y + 18.0, w, 15.0), 4.0, PANEL_BG);
             txt_c(&lbl, p.x, p.y + 29.0, 11.0, col);
         }
-        // Missile en vol : position interpolée site -> avion, traînée de fumée
-        if let Some((frac, _)) = t.missile {
-            let f = frac.clamp(0.0, 1.0);
-            let alt = ac.alt * (f * (2.0 - f)).min(1.0);
-            let (d, b) = dist_brg(t.lat, t.lon, ac.lat, ac.lon);
-            let (mla, mlo) = destination(t.lat, t.lon, b, d * f);
-            if let Some(mp) = v.project(eye.local(mla, mlo, alt)) {
-                let (tla, tlo) = destination(t.lat, t.lon, b, d * (f - 0.08).max(0.0));
-                if let Some(tp) = v.project(eye.local(tla, tlo, ac.alt * ((f - 0.08).max(0.0) * (2.0 - f + 0.08)).min(1.0))) {
+        // Missile en vol : position simulée, traînée vers le site de lancement
+        if let Some((mla, mlo, malt, _)) = t.missile {
+            if let Some(mp) = v.project(eye.local(mla, mlo, malt)) {
+                let (d, b) = dist_brg(mla, mlo, t.lat, t.lon);
+                let (tla, tlo) = destination(mla, mlo, b, (d * 0.08).min(3_000.0));
+                if let Some(tp) = v.project(eye.local(tla, tlo, malt * 0.97)) {
                     draw_line(tp.x, tp.y, mp.x, mp.y, 3.0, Color::new(0.85, 0.85, 0.85, 0.5));
                 }
-                draw_circle(mp.x, mp.y, 6.0, Color::new(1.0, 0.6, 0.1, 0.5));
+                draw_circle(mp.x, mp.y, 7.0, Color::new(1.0, 0.6, 0.1, 0.5));
                 draw_circle(mp.x, mp.y, 3.0, WHITE);
             }
         }
     }
     // Bandeau de la menace la plus grave
     if let Some(t) = cues.iter().filter(|t| t.state >= 3).max_by_key(|t| t.state) {
-        let (cx, y) = (s.x + s.w / 2.0, s.y + s.h * 0.30);
+        let (cx, y) = (s.x + s.w / 2.0, s.y + s.h * 0.43);
         let msg = match t.missile {
-            Some((_, tti)) => format!("MISSILE LAUNCH  {}  IMPACT {:.0}s", t.name, tti),
+            Some((_, _, _, tti)) => format!("MISSILE LAUNCH  {}  IMPACT {:.0}s", t.name, tti),
             None => format!("SAM LOCK  {}", t.name),
         };
         let w = txt_w(&msg, 18.0) + 24.0;

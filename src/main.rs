@@ -6,6 +6,7 @@ mod airports;
 mod atmosphere;
 mod elec;
 mod audio;
+mod combat;
 mod autoflight;
 mod fcs;
 mod gcs;
@@ -96,6 +97,7 @@ struct Game {
     recon: recon::Recon,
     wx: weather::Weather,
     refuel: refuel::Refuel,
+    combat: combat::Combat,
     bingo_manual: Option<f64>,
     fuel_plan: fuel::Plan,
     fuel_change_t: f64,
@@ -204,6 +206,7 @@ impl Game {
             recon: recon::Recon::new(),
             wx: weather::Weather::new(),
             refuel: refuel::Refuel::new(),
+            combat: combat::Combat::new(),
             bingo_manual: None,
             fuel_plan: fuel::Plan::default(),
             fuel_change_t: -100.0,
@@ -540,6 +543,7 @@ impl Game {
         }
         a.extend(self.thermal.alerts());
         a.extend(self.recon.alerts());
+        a.extend(self.combat.alerts());
         a
     }
 
@@ -844,6 +848,25 @@ impl Game {
         for (l, m) in rev {
             self.push(l, m);
         }
+        // Missiles et contre-mesures : tirs des sites, vol des missiles, HACM
+        self.recon.ecm = self.combat.ecm;
+        for k in std::mem::take(&mut self.recon.launches) {
+            self.combat.launch(k, &self.recon.emitters[k], &self.ac);
+        }
+        self.combat.update(sim_dt, &mut self.ac);
+        for k in std::mem::take(&mut self.combat.done) {
+            self.recon.missile_done(k);
+        }
+        for k in std::mem::take(&mut self.combat.killed) {
+            self.recon.emitters[k].destroyed = true;
+            if self.recon.threat.is_some_and(|t| t.0 == k) {
+                self.recon.threat = None;
+            }
+        }
+        let cev: Vec<_> = self.combat.events.drain(..).collect();
+        for (l, m) in cev {
+            self.push(l, m);
+        }
         if let Some(m) = self.mission.update(sim_dt, &self.ac) {
             self.push(Level::Info, m);
         }
@@ -1024,6 +1047,31 @@ impl Game {
                     let p = &self.fuel_plan;
                     reply = Ok(format!("BINGO {:.1} t{} — JOKER {:.1} t — JP7 {:.1} t (BINGO AUTO | BINGO 8)", p.bingo / 1000.0, if p.manual { " MANUEL" } else { "" }, p.joker / 1000.0, ac.fuel / 1000.0));
                 }
+            }
+            "CHAFF" | "PAILLETTES" | "FLARE" | "FLARES" | "LEURRES" | "ECM" | "BROUILLEUR" | "CMDS" => {
+                reply = self.combat.command(&w, ac);
+            }
+            "TIR" | "FIRE" | "HACM" => {
+                // Cible : objectif ELINT (code), nom d'émetteur, ou objectif sélectionné
+                let k = match self.recon.find(arg(1)) {
+                    Some(i) => match self.recon.targets[i].kind {
+                        recon::Kind::Elint(k) => Some(k),
+                        _ => None,
+                    },
+                    None if arg(1).is_empty() => match self.recon.targets[self.recon.selected].kind {
+                        recon::Kind::Elint(k) => Some(k),
+                        _ => None,
+                    },
+                    None => self.recon.emitters.iter().position(|e| e.name.contains(arg(1))),
+                };
+                reply = match k {
+                    Some(k) => self.combat.fire_hacm(k, &self.recon.emitters[k], ac),
+                    None => Err("TIR <objectif ELINT I|J|K ou nom de site> — site localise par l'ELINT".into()),
+                };
+            }
+            "ARMEMENT" | "ARMES" => {
+                self.tab = gcs::Tab::Armement;
+                reply = Ok("PAGE ARMEMENT".into());
             }
             "HUD" | "INFOS" => {
                 pfd_plus::hud_show_all(10.0);
@@ -1402,6 +1450,7 @@ impl Game {
                     "CIBLE B  DIRECT CIBLE  PLAN RECON  ROUTE RECON|OFF  MENACES ON|OFF  RECON (page)",
                     "METEO CALME|BEAU|NUAGEUX|COUVERT|ORAGEUX  HUD (infos ephemeres 10 s, ou survol)",
                     "TANKER [OACI|OFF]  RAVITAILLEMENT (autonome)  DECROCHER  BINGO [AUTO|t]",
+                    "CHAFF  FLARE  ECM ON|OFF  CMDS AUTO|MAN  TIR [I|J|K] (HACM)  ARMEMENT (page)",
                     "TRAIN UP/DOWN | FREINS ON/OFF | AP ON/OFF | MANUEL | WARP 8",
                 ] {
                     self.log.push((self.sim_time, Level::Info, l.into()));
@@ -1581,7 +1630,7 @@ async fn main() {
         let body = Rect::new(6.0, 40.0, sw - 12.0, sh - 46.0);
         if map_full {
             g.map.input(body);
-            g.map.draw(&world, &mut tiles, &g.wx, &g.refuel, &g.recon, &g.ac, body, g.dest, time);
+            g.map.draw(&world, &mut tiles, &g.wx, &g.refuel, &g.combat, &g.recon, &g.ac, body, g.dest, time);
         } else {
             // Écran principal Darkstar, aux proportions de l'écran du cockpit
             let mfd_w = (body.w * 0.63).min((body.h - 120.0) * mfd::COCKPIT_ASPECT).floor();
@@ -1593,7 +1642,17 @@ async fn main() {
                 let t = &g.recon.targets[g.recon.selected];
                 (!t.done()).then(|| pfd_plus::Cue { lat: t.lat, lon: t.lon, elev: 0.0, label: format!("CIBLE {}", t.code), color: Color::new(1.0, 0.85, 0.2, 1.0) })
             };
-            let info = pfd::PfdInfo { alerts: &alerts, link_name: ln, latency_ms: lat, dest: g.dest, warp: warp_eff, time, cue, wx: g.wx.info.clone(), threats: g.recon.threat_cues(&g.ac), fuel: g.fuel_plan.clone(), fuel_since: get_time() - g.fuel_change_t };
+            let info = pfd::PfdInfo { alerts: &alerts, link_name: ln, latency_ms: lat, dest: g.dest, warp: warp_eff, time, cue, wx: g.wx.info.clone(), threats: {
+                    let mut tc = g.recon.threat_cues(&g.ac);
+                    for c in tc.iter_mut() {
+                        if let Some(m) = g.combat.missiles.iter().filter(|m| m.site == c.site).min_by(|a, b| a.range.total_cmp(&b.range)) {
+                            let (la, lo, al) = m.latlon();
+                            c.missile = Some((la, lo, al, m.tti.max(0.0)));
+                            c.state = 4;
+                        }
+                    }
+                    tc
+                }, fuel: g.fuel_plan.clone(), fuel_since: get_time() - g.fuel_change_t };
             let (_, act) = mfd::draw_mfd(&world, &mut tiles, &g.wx, &g.refuel, &g.ac, &g.recon, mfd_r, &mut g.mfd, &info, g.style, time, lit);
             if act.fuel_dump {
                 g.apply_switch(gcs::Switch::FuelDump);
@@ -1612,6 +1671,9 @@ async fn main() {
                 draw_crash_report(&g.crash_report, svs_r);
             }
             draw_flashes(&mut g.flashes, svs_r);
+            if !g.ac.on_ground {
+                combat::draw_hud(&g.combat, svs_r);
+            }
             // Bouton MENU du PFD : ouvre l'onglet CONSOLE
             let menu_btn = Rect::new(svs_r.x + 6.0, svs_r.y + svs_r.h + 7.0, 70.0, 18.0);
             if g.tab == gcs::Tab::Console {
@@ -1636,7 +1698,7 @@ async fn main() {
             let map_h = (body.h * 0.36).floor();
             let mr = Rect::new(rx, body.y, rw, map_h);
             g.map.input(mr);
-            g.map.draw(&world, &mut tiles, &g.wx, &g.refuel, &g.recon, &g.ac, mr, g.dest, time);
+            g.map.draw(&world, &mut tiles, &g.wx, &g.refuel, &g.combat, &g.recon, &g.ac, mr, g.dest, time);
             let tabs_r = Rect::new(rx, mr.y + mr.h + 6.0, rw, 54.0);
             let mut alert_tabs = Vec::new();
             if g.ac.ovr_engine || g.ac.ovr_fbw || g.ac.h2_dump || g.ac.fuel_dump {
@@ -1687,6 +1749,28 @@ async fn main() {
                     }
                 }
                 gcs::Tab::Fcs => fcs::draw_fcs(&g.ac, cr),
+                gcs::Tab::Armement => {
+                    if let Some(a) = combat::draw_page(&g.combat, &g.recon.emitters, &g.ac, cr) {
+                        let r = match a {
+                            combat::ArmAction::Chaff => g.combat.dispense(combat::Seeker::Radar, &g.ac),
+                            combat::ArmAction::Flare => g.combat.dispense(combat::Seeker::Ir, &g.ac),
+                            combat::ArmAction::Ecm => {
+                                g.combat.ecm = !g.combat.ecm;
+                                Ok(format!("ECM {}", if g.combat.ecm { "ON" } else { "OFF" }))
+                            }
+                            combat::ArmAction::Auto => {
+                                g.combat.cmds_auto = !g.combat.cmds_auto;
+                                Ok(format!("CMDS {}", if g.combat.cmds_auto { "AUTO" } else { "MANUEL" }))
+                            }
+                            combat::ArmAction::Fire(k) => g.combat.fire_hacm(k, &g.recon.emitters[k], &g.ac),
+                        };
+                        match r {
+                            Ok(m) => g.push(Level::Info, m),
+                            Err(e) => g.push(Level::Caution, format!("ARMEMENT : {e}")),
+                        }
+                        g.cues.push(audio::Cue::Ack);
+                    }
+                }
                 gcs::Tab::Recon => {
                     let ln = g.link().0;
                     if let Some(a) = recon::draw_recon(&g.ac, &g.recon, &mut tiles, cr, ln) {

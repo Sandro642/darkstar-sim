@@ -276,3 +276,18 @@ Le SR-72 est un avion de reconnaissance : sa charge utile est simulée.
   temps et carburant nécessaires pour le retour, ravitailleur disponible ; ensuite annonciateur compact
   permanent à partir du bingo ; chevron ambre du cap de retour sur l'échelle de cap.
 - Alarmes maîtres, messages et sons (caution / warning) associés.
+
+## Missiles et contre-mesures (v1.12.0)
+- **Missiles sol-air simulés** (sites d'exercice fictifs) : après accrochage (12 s, 26 s sous ECM) le
+  site tire un vrai missile — propulsion puis vol freiné, poursuite anticipée, facteur de charge qui
+  s'effondre en altitude, rayon létal 40 m. Il peut manquer, être leurré ou tomber à court d'énergie :
+  monter et accélérer restent la meilleure défense du SR-72. Missile visible en vol sur l'horizon et la carte.
+- **Contre-mesures (CMDS)** : `CHAFF` (paillettes, contre les missiles radar, bien plus efficaces quand
+  le missile est par le travers), `FLARE` (leurres IR, contre le SAM mobile infrarouge), `ECM ON|OFF`
+  (brouilleur : accrochage plus long, guidage radar dégradé), `CMDS AUTO|MAN` (programme automatique
+  sous 18 km). Compteurs sur l'horizon sous le RWR.
+- **HACM** (4 missiles hypersoniques Mach 7, portée 324 NM) : `TIR I|J|K` ou bouton TIR HACM sur un site
+  localisé par l'ELINT ; tir au-dessus de 30 000 ft et de Mach 2. Impact sur la position estimée : le
+  site n'est détruit que si l'erreur ELINT est inférieure à 400 m ; un site détruit n'émet plus.
+- Page **ARMEMENT** (12e onglet, instruction `ARMEMENT`) : contre-mesures, missiles en vol (distance,
+  vitesse, temps d'impact, leurrés), HACM et sites tirables.

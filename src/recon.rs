@@ -28,7 +28,8 @@ const SAR_STRIP_NIIRS: f64 = 3.5;
 const SAR_SPOT_NIIRS: f64 = 5.0;
 const ELINT_SIGMA_DEG: f64 = 1.5;
 const ELINT_LOCALIZED_M: f64 = 1_500.0;
-const MISSILE_TOF: f64 = 25.0;
+/// Temps d'accrochage avant tir (s), sans brouillage.
+const LOCK_T: f64 = 12.0;
 const MAX_SHOTS: usize = 80;
 const GOLD: Color = Color::new(1.0, 0.85, 0.2, 1.0);
 
@@ -56,6 +57,8 @@ pub struct Emitter {
     pub est: Option<(f64, f64, f64)>,
     pub localized: bool,
     pub heard: bool,
+    /// Site détruit (missile HACM) : n'émet plus.
+    pub destroyed: bool,
     meas_t: f64,
 }
 
@@ -73,6 +76,7 @@ fn emitters() -> Vec<Emitter> {
         est: None,
         localized: false,
         heard: false,
+        destroyed: false,
         meas_t: 0.0,
     };
     // Émetteurs d'exercice fictifs (champs de tir du Nevada et de Californie)
@@ -199,6 +203,10 @@ pub struct Recon {
     pub threat: Option<(usize, f64, Option<f64>)>,
     /// Menaces sol-air actives (instruction MENACES OFF pour les vols d'essai sans opposition).
     pub threats_on: bool,
+    /// Tirs demandés par les sites (indices d'émetteurs), pris en charge par le module de combat.
+    pub launches: Vec<usize>,
+    /// Brouilleur ECM actif : accrochage plus long, tir retardé.
+    pub ecm: bool,
     rng: u64,
 }
 
@@ -250,6 +258,8 @@ impl Recon {
             events: Vec::new(),
             threat: None,
             threats_on: true,
+            launches: Vec::new(),
+            ecm: false,
             rng: 0x9E37_79B9_7F4A_7C15,
         }
     }
@@ -467,7 +477,7 @@ impl Recon {
                 dist_brg(ac.lat, ac.lon, em.lat, em.lon)
             };
             let em_range = self.emitters[k].range;
-            let visible = d < radar_horizon(h_ac, 15.0) && d < em_range * 1.6 && ac.crashed.is_none();
+            let visible = !self.emitters[k].destroyed && d < radar_horizon(h_ac, 15.0) && d < em_range * 1.6 && ac.crashed.is_none();
             if ok && self.elint_on && visible {
                 if !self.emitters[k].heard {
                     self.emitters[k].heard = true;
@@ -500,11 +510,13 @@ impl Recon {
                 }
             }
             let em = &self.emitters[k];
-            if self.threats_on && em.kind == EmKind::Sam && d < em.range && ac.alt / FT < em.ceiling_ft && ac.d.mach < em.mach_max && !ac.on_ground && ac.crashed.is_none() {
+            if self.threats_on && !em.destroyed && em.kind == EmKind::Sam && d < em.range && ac.alt / FT < em.ceiling_ft && ac.d.mach < em.mach_max && !ac.on_ground && ac.crashed.is_none() {
                 threat = Some((k, d));
             }
         }
-        // Domaine d'engagement : menace -> tir après 12 s -> impact après le temps de vol
+        // Domaine d'engagement : menace -> accrochage -> tir (missile simulé par le module de combat).
+        // Le brouilleur ECM double le temps nécessaire à l'accrochage.
+        let lock_t = if self.ecm { LOCK_T * 2.2 } else { LOCK_T };
         match (threat, self.threat) {
             (Some((k, _)), None) => {
                 self.threat = Some((k, 0.0, None));
@@ -513,26 +525,18 @@ impl Recon {
             (Some((k, _)), Some((_, t_in, missile))) => {
                 let t_in = t_in + dt;
                 let missile = match missile {
-                    None if t_in > 12.0 => {
-                        self.events.push((Level::Warning, format!("TIR MISSILE — {} — MONTER / ACCELERER", self.emitters[k].name)));
+                    None if t_in > lock_t => {
+                        self.events.push((Level::Warning, format!("TIR MISSILE — {} — MONTER / ACCELERER / LEURRES", self.emitters[k].name)));
+                        self.launches.push(k);
                         Some(0.0)
                     }
                     Some(m) => Some(m + dt),
                     None => None,
                 };
-                if missile.is_some_and(|m| m > MISSILE_TOF) {
-                    ac.crash(&format!("ABATTU PAR MISSILE SOL-AIR ({})", self.emitters[k].name));
-                    self.threat = None;
-                } else {
-                    self.threat = Some((k, t_in, missile));
-                }
+                self.threat = Some((k, t_in, missile));
             }
-            (None, Some((k, _, missile))) => {
-                if missile.is_some() {
-                    self.events.push((Level::Info, format!("MISSILE ESQUIVE — HORS DU DOMAINE DE {}", self.emitters[k].name)));
-                } else {
-                    self.events.push((Level::Info, format!("HORS DU DOMAINE DE {}", self.emitters[k].name)));
-                }
+            (None, Some((k, _, _))) => {
+                self.events.push((Level::Info, format!("HORS DU DOMAINE DE {}", self.emitters[k].name)));
                 self.threat = None;
             }
             (None, None) => {}
@@ -611,11 +615,20 @@ impl Recon {
         self.targets.iter().position(|t| t.code == arg || t.name.starts_with(arg))
     }
 
+    /// Le missile tiré par le site `k` est terminé (impact, leurré, à court d'énergie).
+    pub fn missile_done(&mut self, k: usize) {
+        if let Some((tk, t_in, Some(_))) = self.threat {
+            if tk == k {
+                self.threat = Some((k, (t_in * 0.4).min(LOCK_T * 0.5), None));
+            }
+        }
+    }
+
     /// Menaces pour l'horizon et le RWR : émetteurs entendus avec leur état.
     pub fn threat_cues(&self, ac: &Aircraft) -> Vec<crate::pfd_plus::ThreatCue> {
         let mut out = Vec::new();
         for (k, em) in self.emitters.iter().enumerate() {
-            if !em.heard || !self.elint_on {
+            if !em.heard || !self.elint_on || em.destroyed {
                 continue;
             }
             let (d, _) = dist_brg(ac.lat, ac.lon, em.lat, em.lon);
@@ -623,7 +636,7 @@ impl Recon {
                 continue;
             }
             let (state, missile) = match self.threat {
-                Some((tk, _, Some(m))) if tk == k => (4, Some((m / MISSILE_TOF, (MISSILE_TOF - m).max(0.0)))),
+                Some((tk, _, Some(_))) if tk == k => (4, None),
                 Some((tk, t_in, None)) if tk == k => (if t_in > 4.0 { 3 } else { 2 }, None),
                 _ if em.kind != EmKind::Search && d < em.range => (2, None),
                 _ => (1, None),
@@ -635,7 +648,7 @@ impl Recon {
             };
             // Position : estimation ELINT si disponible, sinon émetteur entendu dans son relèvement
             let (la, lo) = em.est.map(|e| (e.0, e.1)).unwrap_or((em.lat, em.lon));
-            out.push(crate::pfd_plus::ThreatCue { lat: la, lon: lo, name: em.name, sam: em.kind == EmKind::Sam, state, dist: d, missile, escape });
+            out.push(crate::pfd_plus::ThreatCue { site: k, lat: la, lon: lo, name: em.name, sam: em.kind == EmKind::Sam, state, dist: d, missile, escape });
         }
         out
     }
@@ -643,7 +656,7 @@ impl Recon {
     /// Alarmes de menace pour l'horizon et le panneau d'alarmes.
     pub fn alerts(&self) -> Vec<(Level, String)> {
         match self.threat {
-            Some((k, _, Some(m))) => vec![(Level::Warning, format!("MISSILE {} — IMPACT {:.0}s", self.emitters[k].name, (MISSILE_TOF - m).max(0.0)))],
+            Some((_, _, Some(_))) => vec![],
             Some((k, _, None)) => vec![(Level::Caution, format!("MENACE SAM {}", self.emitters[k].name))],
             None => vec![],
         }
@@ -1138,8 +1151,8 @@ pub fn draw_recon(ac: &Aircraft, rc: &Recon, tiles: &mut Tiles, r: Rect, link_na
     }
     if let Some((k, t_in, missile)) = rc.threat {
         let msg = match missile {
-            Some(m) => format!("MISSILE EN VOL — {} — IMPACT {:.0} s", rc.emitters[k].name, (MISSILE_TOF - m).max(0.0)),
-            None => format!("DOMAINE SAM {} — TIR DANS {:.0} s", rc.emitters[k].name, (12.0 - t_in).max(0.0)),
+            Some(_) => format!("MISSILE EN VOL — {} — LEURRES / MONTER / ACCELERER", rc.emitters[k].name),
+            None => format!("DOMAINE SAM {} — TIR DANS {:.0} s", rc.emitters[k].name, ((if rc.ecm { LOCK_T * 2.2 } else { LOCK_T }) - t_in).max(0.0)),
         };
         let b = Rect::new(r.x + 12.0, r.y + 54.0, r.w - 24.0, 20.0);
         rrect(b, 5.0, Color::new(0.35, 0.03, 0.03, 1.0));
@@ -1465,7 +1478,7 @@ mod tests {
         assert!(em.localized && err < 3_000.0);
     }
 
-    /// Menace : rester dans le domaine du SAM moyenne portée à basse altitude = abattu.
+    /// Menace : rester dans le domaine du SAM moyenne portée à basse altitude déclenche un tir.
     #[test]
     fn sam_shoots_down_slow_low_aircraft() {
         let mut rc = Recon::new();
@@ -1475,7 +1488,7 @@ mod tests {
         for _ in 0..60 {
             rc.update(1.0, &mut ac, 0.0, true);
         }
-        assert!(ac.crashed.as_deref().is_some_and(|c| c.contains("MISSILE")));
+        assert_eq!(rc.launches, vec![2], "tir du SAM moyenne portee");
         // À Mach 6 et 100 000 ft : hors domaine
         let mut rc = Recon::new();
         let mut ac = over(la, lo, 100_000.0);
@@ -1484,6 +1497,6 @@ mod tests {
         for _ in 0..60 {
             rc.update(1.0, &mut ac, 0.0, true);
         }
-        assert!(ac.crashed.is_none());
+        assert!(rc.launches.is_empty());
     }
 }

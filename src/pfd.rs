@@ -287,7 +287,7 @@ fn draw_svs_overlay(ac: &Aircraft, v: &View, info: &PfdInfo) {
         crate::pfd_plus::wind_block(ac, &info.wx, Rect::new(s.x + s.w - 150.0, s.y + 44.0, 142.0, 52.0), info.time, vis.wind);
     }
     // Annonces d'override et de limitation FADEC
-    let mut oy = if ac.on_ground || vis.rwr < 0.01 { s.y + 36.0 } else { s.y + 138.0 };
+    let mut oy = if ac.on_ground || vis.rwr < 0.01 { s.y + 36.0 } else { s.y + 152.0 };
     let blink = (info.time * 2.0).fract() < 0.65;
     for (on, label) in [(ac.ovr_engine, "ENG OVRD"), (ac.ovr_fbw, "FBW OVRD"), (!ac.ovr_engine && ac.fadec_limit < 0.995, "FADEC LIMIT")] {
         if on {
