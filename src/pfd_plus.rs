@@ -634,3 +634,57 @@ pub fn threats(ac: &Aircraft, v: &View, cues: &[ThreatCue], time: f64) {
         txt_c(&esc, cx, y + 24.0, 13.0, AMBER);
     }
 }
+
+// ---------- Alertes carburant (bingo) ----------
+
+/// Bandeau carburant façon HUD : détail pendant 12 s après chaque changement de niveau (ou au survol),
+/// puis annonciateur compact permanent à partir du bingo. Repère de cap retour sur l'échelle de cap.
+pub fn fuel_alert(ac: &Aircraft, p: &crate::fuel::Plan, s: Rect, time: f64, since_change: f64, reveal: bool) {
+    use crate::fuel::Level as F;
+    if p.level == F::Ok && !p.h2_bingo {
+        return;
+    }
+    let col = match p.level {
+        F::Joker => CYAN_S,
+        F::Bingo => AMBER,
+        F::MinFuel | F::Emergency => RED,
+        F::Ok => AMBER,
+    };
+    let blink = (time * 2.5).fract() < 0.6;
+    let cx = s.x + s.w / 2.0;
+    let detail = since_change < 12.0 || reveal;
+    let title = if p.level == F::Ok { "H2 BINGO" } else { p.level.name() };
+    if detail {
+        let y = s.y + s.h * 0.20;
+        let a = if since_change < 12.0 { ((12.0 - since_change) / 1.5).clamp(0.0, 1.0) as f32 } else { 1.0 };
+        let a = if reveal { 1.0 } else { a };
+        let flashing = matches!(p.level, F::MinFuel | F::Emergency | F::Bingo) && since_change < 6.0;
+        if !flashing || blink {
+            htxt(title, cx - txt_w(title, 26.0) / 2.0, y, 26.0, col, a);
+        }
+        let (icao, brg, dist, eta, need) = p.rtb;
+        let l1 = format!("JP7 {:.1} t   BINGO {:.1} t{}", ac.fuel / 1000.0, p.bingo / 1000.0, if p.manual { " (MAN)" } else { "" });
+        htxt(&l1, cx - txt_w(&l1, 14.0) / 2.0, y + 22.0, 14.0, WHITE, a);
+        let l2 = format!("RTB {icao}  CAP {brg:03.0}  {:.0} NM  {}  BESOIN {:.1} t", dist / NM, crate::mission::fmt_time(eta), need / 1000.0);
+        htxt(&l2, cx - txt_w(&l2, 13.0) / 2.0, y + 40.0, 13.0, if need + crate::fuel::RESERVE > ac.fuel { RED } else { GREEN_S }, a);
+        let mut yy = y + 58.0;
+        if let Some((cs, d)) = p.tanker {
+            let l3 = format!("RAVITAILLEUR {cs} {:.0} NM — RAVITAILLEMENT", d / NM);
+            htxt(&l3, cx - txt_w(&l3, 13.0) / 2.0, yy, 13.0, Color::new(0.4, 0.85, 1.0, 1.0), a);
+            yy += 18.0;
+        }
+        if p.h2_bingo {
+            let l4 = "H2 BINGO : HYDROGENE < 3 MIN — DECELERER (DESCENTE)";
+            htxt(l4, cx - txt_w(l4, 13.0) / 2.0, yy, 13.0, AMBER, a);
+        }
+    } else if p.level >= F::Bingo || p.h2_bingo {
+        // Annonciateur compact permanent sous l'échelle d'assiette supérieure
+        let lbl = if p.level >= F::Bingo { format!("{}  {:.1} t", p.level.name(), ac.fuel / 1000.0) } else { "H2 BINGO".to_string() };
+        let w = txt_w(&lbl, 14.0) + 16.0;
+        let b = Rect::new(cx - w / 2.0, s.y + 26.0, w, 20.0);
+        if p.level < F::MinFuel || blink {
+            draw_rectangle_lines(b.x, b.y, b.w, b.h, 1.5, col);
+            htxt(&lbl, b.x + 8.0, b.y + 15.0, 14.0, col, 1.0);
+        }
+    }
+}

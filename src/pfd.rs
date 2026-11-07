@@ -17,6 +17,9 @@ pub struct PfdInfo<'a> {
     /// Objectif de reconnaissance sélectionné (repère 3D).
     pub cue: Option<crate::pfd_plus::Cue>,
     pub wx: crate::weather::WxInfo,
+    pub fuel: crate::fuel::Plan,
+    /// Secondes écoulées depuis le dernier changement de niveau carburant.
+    pub fuel_since: f64,
     pub threats: Vec<crate::pfd_plus::ThreatCue>,
 }
 
@@ -211,6 +214,10 @@ fn draw_svs_overlay(ac: &Aircraft, v: &View, info: &PfdInfo) {
     }
 
     crate::pfd_plus::terrain_warning(clr, s, info.time);
+    if !ac.on_ground {
+        let reveal = s.contains(vec2(mouse_position().0, mouse_position().1));
+        crate::pfd_plus::fuel_alert(ac, &info.fuel, s, info.time, info.fuel_since, reveal && info.fuel.level != crate::fuel::Level::Ok);
+    }
     // Panneaux couloir hypersonique et énergie (masqués en finale ILS)
     let on_ils = ac.approach.is_some_and(|(_, tla, tlo, thdg, _)| along_before(tla, tlo, thdg, ac.lat, ac.lon) < 60_000.0);
     if !ac.on_ground && !on_ils {
@@ -595,6 +602,11 @@ fn draw_heading(ac: &Aircraft, s: Rect, info: &PfdInfo) {
     if ac.ap.on {
         let bx = cx + wrap180(ac.ap.hdg_tgt - hdg as f64) as f32 * ppd;
         draw_rectangle(bx - 4.0, y, 8.0, 6.0, MAGENTA_S);
+    }
+    // Cap de retour (bingo) : chevron ambre sur l'échelle de cap
+    if info.fuel.level >= crate::fuel::Level::Bingo && !ac.on_ground {
+        let bx = cx + wrap180(info.fuel.rtb.1 - hdg as f64).clamp(-28.0, 28.0) as f32 * ppd;
+        draw_triangle(vec2(bx, y + 1.0), vec2(bx - 6.0, y + 11.0), vec2(bx + 6.0, y + 11.0), AMBER);
     }
     // Route sol (losange vert)
     if !ac.on_ground {

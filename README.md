@@ -264,3 +264,15 @@ Le SR-72 est un avion de reconnaissance : sa charge utile est simulée.
 - Horizon : ravitailleur 3D avec perche (déployée jusqu'au réceptacle au contact), repère distance/ETA,
   directeur de ravitaillement (phase, écarts avant/arrière, gauche/droite, haut/bas, feux UP/ALT/DOWN
   et AFT/POS/FWD, jauge et quantité transférée). Carte : ravitailleur et hippodrome.
+
+## Alertes carburant bingo (v1.11.0)
+- **Bingo automatique** = carburant pour rejoindre la destination (régime actuel en subsonique, sinon
+  croisière de planification) + approche (1,5 t) + réserve finale (3 t). `BINGO 8` pour l'imposer
+  (tonnes), `BINGO AUTO` pour revenir au calcul, `BINGO` seul pour l'afficher.
+- Niveaux : **JOKER** (bingo + 4 t, information), **BINGO FUEL** (caution), **MIN FUEL** (réserve
+  atteinte, warning), **EMERGENCY FUEL** (< 1,5 t) ; **H2 BINGO** quand l'hydrogène tient moins de
+  3 min en stato/scram.
+- Horizon : bandeau HUD au changement de niveau (12 s, ou survol) avec JP-7 / bingo, cap, distance,
+  temps et carburant nécessaires pour le retour, ravitailleur disponible ; ensuite annonciateur compact
+  permanent à partir du bingo ; chevron ambre du cap de retour sur l'échelle de cap.
+- Alarmes maîtres, messages et sons (caution / warning) associés.

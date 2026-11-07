@@ -9,6 +9,7 @@ mod audio;
 mod autoflight;
 mod fcs;
 mod gcs;
+mod fuel;
 mod geo;
 mod limits;
 mod map;
@@ -95,6 +96,9 @@ struct Game {
     recon: recon::Recon,
     wx: weather::Weather,
     refuel: refuel::Refuel,
+    bingo_manual: Option<f64>,
+    fuel_plan: fuel::Plan,
+    fuel_change_t: f64,
     cmd_hist: Vec<String>,
     hist_pos: usize,
 }
@@ -200,6 +204,9 @@ impl Game {
             recon: recon::Recon::new(),
             wx: weather::Weather::new(),
             refuel: refuel::Refuel::new(),
+            bingo_manual: None,
+            fuel_plan: fuel::Plan::default(),
+            fuel_change_t: -100.0,
             cmd_hist: Vec::new(),
             hist_pos: 0,
         }
@@ -517,6 +524,17 @@ impl Game {
         if self.bit_fail == Some(true) {
             a.push((Level::Caution, "BIT FAIL".to_string()));
         }
+        if !ac.on_ground {
+            match self.fuel_plan.level {
+                fuel::Level::Bingo => a.push((Level::Caution, "BINGO FUEL".to_string())),
+                fuel::Level::MinFuel => a.push((Level::Warning, "MIN FUEL".to_string())),
+                fuel::Level::Emergency => a.push((Level::Warning, "EMERGENCY FUEL".to_string())),
+                _ => {}
+            }
+            if self.fuel_plan.h2_bingo {
+                a.push((Level::Caution, "H2 BINGO".to_string()));
+            }
+        }
         if ac.fuel_dump {
             a.push((Level::Caution, "FUEL DUMP".to_string()));
         }
@@ -782,6 +800,24 @@ impl Game {
         for (l, m) in rfe {
             self.push(l, m);
         }
+        // Carburant : bingo / joker / minimum, annonces sur changement de niveau
+        let tk = self.refuel.tanker.as_ref().map(|t| (t.callsign, t.lat, t.lon));
+        let plan = fuel::plan(&self.ac, self.dest, self.bingo_manual, tk);
+        let (prev, prev_h2) = (self.fuel_plan.level, self.fuel_plan.h2_bingo);
+        if !self.ac.on_ground && self.ac.crashed.is_none() && (plan.level != prev || plan.h2_bingo != prev_h2) {
+            self.fuel_change_t = get_time();
+            if plan.level > prev {
+                let (icao, brg, dist, _, _) = plan.rtb;
+                let lvl = if plan.level >= fuel::Level::MinFuel { Level::Warning } else if plan.level == fuel::Level::Bingo { Level::Caution } else { Level::Info };
+                self.push(lvl, format!("{} — JP7 {:.1} t (BINGO {:.1} t) — RTB {icao} CAP {brg:03.0} {:.0} NM", plan.level.name(), self.ac.fuel / 1000.0, plan.bingo / 1000.0, dist / NM));
+            } else if plan.level < prev && plan.level == fuel::Level::Ok {
+                self.push(Level::Info, "CARBURANT : AU-DESSUS DU JOKER");
+            }
+            if plan.h2_bingo && !prev_h2 {
+                self.push(Level::Caution, "H2 BINGO — HYDROGENE POUR MOINS DE 3 MIN — DECELERER");
+            }
+        }
+        self.fuel_plan = plan;
 
         self.thermal.update(sim_dt, &self.ac);
         let tev: Vec<_> = self.thermal.events.drain(..).collect();
@@ -976,6 +1012,18 @@ impl Game {
             }
             "TANKER" | "RAVITAILLEUR" | "RAVITAILLEMENT" | "REFUEL" | "AAR" | "DECROCHER" | "DISCONNECT" => {
                 reply = self.refuel.command(&w, ac);
+            }
+            "BINGO" => {
+                if arg(1) == "AUTO" {
+                    self.bingo_manual = None;
+                    reply = Ok("BINGO AUTOMATIQUE (RETOUR DESTINATION + APPROCHE + RESERVE)".into());
+                } else if let Some(t) = num(1) {
+                    self.bingo_manual = Some(t * 1000.0);
+                    reply = Ok(format!("BINGO MANUEL {t:.1} t"));
+                } else {
+                    let p = &self.fuel_plan;
+                    reply = Ok(format!("BINGO {:.1} t{} — JOKER {:.1} t — JP7 {:.1} t (BINGO AUTO | BINGO 8)", p.bingo / 1000.0, if p.manual { " MANUEL" } else { "" }, p.joker / 1000.0, ac.fuel / 1000.0));
+                }
             }
             "HUD" | "INFOS" => {
                 pfd_plus::hud_show_all(10.0);
@@ -1353,7 +1401,7 @@ impl Game {
                     "CAMERA ON|OFF|EO|IR|TRACK|NADIR  ZOOM 8  PHOTO  SAR STRIP|SPOT|OFF  ELINT ON|OFF",
                     "CIBLE B  DIRECT CIBLE  PLAN RECON  ROUTE RECON|OFF  MENACES ON|OFF  RECON (page)",
                     "METEO CALME|BEAU|NUAGEUX|COUVERT|ORAGEUX  HUD (infos ephemeres 10 s, ou survol)",
-                    "TANKER [OACI|OFF]  RAVITAILLEMENT (autonome)  DECROCHER",
+                    "TANKER [OACI|OFF]  RAVITAILLEMENT (autonome)  DECROCHER  BINGO [AUTO|t]",
                     "TRAIN UP/DOWN | FREINS ON/OFF | AP ON/OFF | MANUEL | WARP 8",
                 ] {
                     self.log.push((self.sim_time, Level::Info, l.into()));
@@ -1545,7 +1593,7 @@ async fn main() {
                 let t = &g.recon.targets[g.recon.selected];
                 (!t.done()).then(|| pfd_plus::Cue { lat: t.lat, lon: t.lon, elev: 0.0, label: format!("CIBLE {}", t.code), color: Color::new(1.0, 0.85, 0.2, 1.0) })
             };
-            let info = pfd::PfdInfo { alerts: &alerts, link_name: ln, latency_ms: lat, dest: g.dest, warp: warp_eff, time, cue, wx: g.wx.info.clone(), threats: g.recon.threat_cues(&g.ac) };
+            let info = pfd::PfdInfo { alerts: &alerts, link_name: ln, latency_ms: lat, dest: g.dest, warp: warp_eff, time, cue, wx: g.wx.info.clone(), threats: g.recon.threat_cues(&g.ac), fuel: g.fuel_plan.clone(), fuel_since: get_time() - g.fuel_change_t };
             let (_, act) = mfd::draw_mfd(&world, &mut tiles, &g.wx, &g.refuel, &g.ac, &g.recon, mfd_r, &mut g.mfd, &info, g.style, time, lit);
             if act.fuel_dump {
                 g.apply_switch(gcs::Switch::FuelDump);
