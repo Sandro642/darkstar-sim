@@ -1,6 +1,4 @@
 //! Météo 3D dans l'horizon (« horizon intelligent ») :
-//! - flux de vent : particules advectées par le vent réel, traînées orientées selon le vent, longueur
-//!   selon sa force, couleur selon le danger, épaisseur selon l'humidité (masse d'air humide) ;
 //! - zones de danger : contours irréguliers des cumulonimbus (enveloppe, cœur, enclume ; sommet, distance) ;
 //! - couches de turbulence en air clair : nappes quadrillées aux altitudes de fort cisaillement ;
 //! - légende de l'échelle de danger.
@@ -70,29 +68,6 @@ pub fn draw(wx: &Weather, ac: &Aircraft, v: &View, time: f64) {
     let eye = EyeFrame::new(ac);
     let r = wx.part_r;
     scissor(Some(v.rect));
-
-    // --- Flux de vent : traînées ---
-    for p in &wx.parts {
-        let a = eye.local(p.lat, p.lon, p.alt);
-        let dist = a.length() as f64;
-        if dist < 30.0 {
-            continue;
-        }
-        let fade = (1.0 - dist / (r * 1.1)).clamp(0.0, 1.0) as f32;
-        if fade < 0.02 {
-            continue;
-        }
-        let spd = p.u.hypot(p.v);
-        let len = r * 0.03 * (spd / 25.0).clamp(0.5, 3.0);
-        let k = len / spd.max(0.5);
-        let b = local(&eye, p.lat, p.lon, p.alt, p.u * k, p.v * k, 0.0);
-        let col = danger_color(p.danger, (0.35 + 0.6 * fade.powf(0.7)) * (0.7 + 0.3 * p.danger.max(0.3)));
-        let w = 1.0 + 1.6 * p.rh + p.danger * 1.2;
-        seg(v, a, b, w, col);
-        if let Some(q) = v.project(b) {
-            draw_circle(q.x, q.y, w * 0.9, col);
-        }
-    }
 
     // --- Volumes de danger : cumulonimbus ---
     let pulse = 0.75 + 0.25 * ((time * 3.0).sin() as f32);

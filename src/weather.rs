@@ -67,18 +67,6 @@ pub struct WxInfo {
     pub ahead: Option<(&'static str, f64, f32, f64)>,
 }
 
-/// Particule de vent (visualisation 3D) : position, vent local, danger, humidité.
-pub struct Part {
-    pub lat: f64,
-    pub lon: f64,
-    pub alt: f64,
-    pub u: f64,
-    pub v: f64,
-    pub danger: f32,
-    pub rh: f32,
-}
-
-pub const N_PARTS: usize = 240;
 
 pub struct Weather {
     pub severity: usize,
@@ -88,12 +76,10 @@ pub struct Weather {
     /// Météo réelle (prioritaire quand disponible).
     pub use_real: bool,
     pub real: crate::wxreal::Real,
-    /// Visualisation 3D dans l'horizon (particules de vent, vecteurs, volumes de danger).
+    /// Visualisation 3D dans l'horizon (zones de danger, nappes de turbulence).
     pub show3d: bool,
-    pub parts: Vec<Part>,
-    /// Rayon de la zone de particules (m).
+    /// Portée de la visualisation 3D (m), selon la vitesse.
     pub part_r: f64,
-    rng: u64,
 }
 
 impl Cloud {
@@ -167,9 +153,7 @@ impl Weather {
             use_real: true,
             real: crate::wxreal::Real::new(),
             show3d: true,
-            parts: Vec::new(),
             part_r: 5_000.0,
-            rng: 0x2545_F491_4F6C_DD1D,
         }
     }
 
@@ -509,14 +493,7 @@ impl Weather {
         }
         let ahead = self.scan_ahead(ac);
         self.info = WxInfo { wind_dir: dir, wind_kt: spd, imc, turb, storm, source, oat, danger, cause, ahead };
-        self.update_parts(ac, dt);
-    }
-
-    fn rand(&mut self) -> f64 {
-        self.rng ^= self.rng << 13;
-        self.rng ^= self.rng >> 7;
-        self.rng ^= self.rng << 17;
-        (self.rng >> 11) as f64 / (1u64 << 53) as f64
+        self.part_r = (ac.tas * 25.0).clamp(5_000.0, 80_000.0);
     }
 
     /// Danger le plus fort sur la trajectoire (10 points jusqu'à ~5 min de vol, max 300 km).
@@ -543,46 +520,6 @@ impl Weather {
             }
         }
         best
-    }
-
-    /// Particules de vent : advectées par le vent local, réensemencées devant l'avion.
-    fn update_parts(&mut self, ac: &Aircraft, dt: f64) {
-        let r = (ac.tas * 25.0).clamp(5_000.0, 80_000.0);
-        self.part_r = r;
-        let hgt = (r * 0.12).clamp(400.0, 4_000.0);
-        let hdg = ac.track_deg();
-        let init = self.parts.is_empty();
-        // Orages proches : danger maximal dans et autour de la cellule
-        let cbs: Vec<(f64, f64, f64, f64, f64)> = self.clouds_near(ac.lat, ac.lon, r * 1.6).filter(|c| c.kind == CloudKind::Cb).map(|c| (c.lat, c.lon, c.radius, c.top, c.seed)).collect();
-        while self.parts.len() < N_PARTS {
-            self.parts.push(Part { lat: ac.lat, lon: ac.lon, alt: ac.alt, u: 0.0, v: 0.0, danger: 0.0, rh: 0.0 });
-        }
-        for k in 0..self.parts.len() {
-            let (mut la, mut lo, mut al) = (self.parts[k].lat, self.parts[k].lon, self.parts[k].alt);
-            let (d, brg) = dist_brg(ac.lat, ac.lon, la, lo);
-            let behind = wrap180(brg - hdg).abs() > 100.0 && d > r * 0.25;
-            if init || d > r * 1.1 || behind || (al - ac.alt).abs() > hgt * 1.2 || k % 97 == (self.gust_t * 10.0) as usize % 97 && d > r {
-                let along = if init { r * (-0.2 + 1.2 * self.rand()) } else { r * (0.3 + 0.7 * self.rand()) };
-                let lat_off = (self.rand() - 0.5) * 1.6 * r;
-                let (a1, o1) = destination(ac.lat, ac.lon, hdg, along);
-                let (a2, o2) = destination(a1, o1, wrap360(hdg + 90.0), lat_off);
-                la = a2;
-                lo = o2;
-                al = (ac.alt + (self.rand() - 0.5) * 2.0 * hgt).max(ac.d.elev + 30.0);
-            }
-            let (u, v, _, _) = self.wind_at(la, lo, al);
-            let (de, dn) = (u * dt, v * dt);
-            let (la2, lo2) = from_enu(la, lo, de, dn);
-            let (mut danger, _, rh) = self.field_danger(la2, lo2, al);
-            for &(cl, co, cr, ct, sd) in &cbs {
-                if al < ct + 800.0 {
-                    let (e, n) = enu_offset(cl, co, la2, lo2);
-                    let q = shape_q(sd, cr, e, n);
-                    danger = danger.max(((1.6 - q) / 1.15).clamp(0.0, 1.0) as f32);
-                }
-            }
-            self.parts[k] = Part { lat: la2, lon: lo2, alt: al, u, v, danger, rh };
-        }
     }
 }
 
