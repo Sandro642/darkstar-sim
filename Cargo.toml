@@ -1,6 +1,6 @@
 [package]
 name = "darkstar_sim"
-version = "1.28.1"
+version = "1.28.2"
 edition = "2024"
 
 [dependencies]

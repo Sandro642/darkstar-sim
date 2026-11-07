@@ -2,8 +2,9 @@
 //! - flotte de plusieurs Darkstar ; l'opérateur établit la liaison avec l'appareil à contrôler ;
 //! - chemins : LOS direct depuis Edwards, stations sol relais, avions relais BACN (E-11A), SATCOM,
 //!   et canal de secours Iridium (urgence seulement, latence élevée) ;
-//! - disponibilité réaliste : horizon radio selon l'altitude, couverture SATCOM géostationnaire,
-//!   panne de l'émetteur, bus électrique, occultation plasma en hypersonique dense ;
+//! - en exploitation normale la liaison est permanente (SATCOM couvre le globe, bascules
+//!   automatiques sans coupure) ; elle n'est perdue que sur incident : panne de l'émetteur ou du
+//!   terminal SATCOM hors portée radio, perte du bus électrique ;
 //! - bascule automatique vers un autre chemin ; sinon perte de liaison (télémétrie figée, procédure
 //!   autonome de l'avion) et reconnexion manuelle via le relais choisi (poignée de main de quelques
 //!   secondes, réussite incertaine en limite de portée).
@@ -98,10 +99,6 @@ fn radio_range(h1: f64, h2: f64) -> f64 {
     4_120.0 * (h1.max(0.0).sqrt() + h2.max(0.0).sqrt())
 }
 
-/// Occultation plasma : hypersonique dans l'air encore dense.
-pub fn blackout(ac: &Aircraft) -> bool {
-    ac.d.mach > 8.0 && ac.d.q > 20_000.0
-}
 
 impl Link {
     pub fn new() -> Link {
@@ -117,9 +114,6 @@ impl Link {
 
     /// Disponibilité d'un chemin : latence (ms) et marge (0..1), ou la raison de l'indisponibilité.
     pub fn avail(&self, p: Path, ac: &Aircraft) -> Result<(f64, f64), &'static str> {
-        if blackout(ac) {
-            return Err("OCCULTATION PLASMA");
-        }
         if p == Path::Emerg {
             return Ok((2_500.0, 1.0));
         }
@@ -153,9 +147,6 @@ impl Link {
             Path::Satcom => {
                 if self.sat_fail {
                     return Err("TERMINAL SATCOM EN PANNE");
-                }
-                if ac.lat.abs() > 75.0 {
-                    return Err("HORS COUVERTURE SATELLITE");
                 }
                 return Ok((380.0, 1.0));
             }
@@ -270,7 +261,7 @@ impl Link {
                 self.step = k.min(STEPS.len() - 1);
                 if t >= dur {
                     let margin = ok.map(|(_, m)| m).unwrap_or(0.0);
-                    let p_ok = if margin > 0.15 { 0.95 } else { 0.45 + margin * 3.0 };
+                    let p_ok = if margin > 0.15 { 1.0 } else { 0.45 + margin * 3.0 };
                     if self.rand() < p_ok {
                         self.state = State::Connected;
                         self.path = path;
@@ -360,6 +351,17 @@ mod tests {
         ac.lon = -135.0;
         assert!(!l.update(&ac, 0.016, 0.016));
         assert_eq!(l.path, Path::Satcom);
+        // Vol normal : pôle, hypersonique dense — la liaison n'est jamais perdue
+        for (lat, lon) in [(80.0, 0.0), (-70.0, 120.0), (10.0, 60.0)] {
+            ac.lat = lat;
+            ac.lon = lon;
+            ac.d.mach = 9.5;
+            ac.d.q = 45_000.0;
+            assert!(!l.update(&ac, 0.016, 0.016), "perte en vol normal a {lat},{lon}");
+            assert_eq!(l.state, State::Connected);
+        }
+        ac.lat = 30.0;
+        ac.lon = -135.0;
         // Panne SATCOM : perte de liaison, seul le secours reste
         l.sat_fail = true;
         assert!(l.update(&ac, 0.016, 0.016));

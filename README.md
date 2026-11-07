@@ -429,3 +429,7 @@ Le SR-72 est un avion de reconnaissance : sa charge utile est simulée.
   du seuil ; poussée et manette nulles imposées, pas de remise des gaz. Essai de vol automatique :
   14 NM d'Edwards moteurs coupés → toucher à 109 KEAS, -618 ft/min, arrêt sur la piste, poussée
   maximale mesurée 0 N.
+- v1.28.2 : liaison permanente en exploitation normale (couverture SATCOM mondiale, pas
+  d'occultation plasma, connexion initiale toujours établie) ; la perte de liaison ne survient que
+  sur incident (panne émetteur, panne SATCOM hors portée radio, perte du bus électrique), et le
+  canal de secours Iridium reste disponible pour l'EMERGENCY OVERRIDE.
