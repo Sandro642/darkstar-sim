@@ -488,3 +488,8 @@ Le SR-72 est un avion de reconnaissance : sa charge utile est simulée.
   tenue en approche du cercle, raccourci vers l'axe choisi selon la pente, finale pouvant plonger
   jusqu'à ~19° aérofreins sortis, arrondi anticipé à fort taux de chute. Essais : FL459 à 16 NM,
   FL300 au nord, FL250 au sud-ouest → posés sur la piste sans poussée.
+- v1.30.3 : EMERGENCY OVERRIDE — cas « FL150 très proche du terrain » corrigé : pente de la
+  spirale asservie à la pente réellement suivie (virages à 45°), sortie dès que l'avion est aligné
+  dans l'axe, S-turns en finale pour dissiper un excès d'énergie, correction plus forte en courte
+  finale. Quatre départs d'essai (FL459 à 16 NM, FL300 nord, FL250 sud-ouest, FL150 à 7,5 NM par
+  le travers) → posés et arrêtés sur la piste, poussée nulle.

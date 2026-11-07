@@ -331,7 +331,9 @@ impl Aircraft {
                     let lap = std::f64::consts::TAU * r;
                     let dist0 = if on_circle { theta * r } else { dc + theta * r };
                     // Sortie au point de tangence seulement près de la hauteur du profil (sinon un tour de plus)
-                    let at_exit = on_circle && theta.to_degrees() < 10.0 && dh < 1_200.0 * FT;
+                    // Sortie : au point de tangence, ou dès que l'avion se trouve aligné dans l'axe à bonne distance
+                    let aligned = wrap180(self.hdg_deg() - hdg).abs() < 25.0 && cross.abs() < 0.5 * NM && along > 3.0 * NM;
+                    let at_exit = ((on_circle && theta.to_degrees() < 10.0) || aligned) && dh < 3_200.0 * FT;
                     // Pas assez de hauteur pour finir l'arc : on coupe tout droit vers le point de tangence
                     // Cible du raccourci : point de l'axe un peu devant l'avion (jamais derrière)
                     let a_t = (along - 1.5 * NM).clamp(2.0 * NM, hac_along);
@@ -341,7 +343,8 @@ impl Aircraft {
                     // celle de l'arc restant, et que l'arc serait trop plat
                     let g_arc = (dh.max(0.0) / dist0.max(300.0)).atan().to_degrees();
                     let g_short = ((agl - dead_stick_path(a_t)).max(0.0) / dt_t.max(300.0)).atan().to_degrees();
-                    let short = on_circle && (g_arc < 2.5 || (g_arc < 4.0 && (g_short - 8.0).abs() < (g_arc - 8.0).abs()));
+                    // Jamais de raccourci qui imposerait une finale trop raide (> 14°)
+                    let short = on_circle && g_short <= 14.0 && (g_arc < 2.5 || (g_arc < 4.0 && (g_short - 8.0).abs() < (g_arc - 8.0).abs()));
                     if short || self.autoland.as_ref().unwrap().pat == 5 {
                         self.autoland.as_mut().unwrap().pat = 5;
                     }
@@ -370,7 +373,10 @@ impl Aircraft {
                         }
                         self.speedbrake = self.d.keas > tgt + 10.0;
                         self.ap.vert = VertMode::Pitch;
-                        self.ap.pitch_tgt = gamma_cmd.max(-20.0) + self.d.alpha.to_degrees();
+                        // Correction sur la pente réellement suivie (en virage serré la pente obtenue
+                        // diffère beaucoup de « assiette − incidence »)
+                        let g_now = self.gamma.to_degrees();
+                        self.ap.pitch_tgt = (self.theta.to_degrees() + 1.2 * (gamma_cmd.max(-20.0) - g_now)).clamp(-25.0, 20.0);
                         if let Some(al) = self.autoland.as_mut() {
                             al.phase = next;
                         }
@@ -400,7 +406,7 @@ impl Aircraft {
                 let err = h_path - agl;
                 // Correction d'écart douce sous 1500 ft (pas de plongée après le pré-arrondi)
                 // Au-dessus du profil, la finale peut plonger jusqu'à ~19° (aérofreins par l'énergie)
-                let corr = if agl < 1_500.0 * FT { (err / 150.0).clamp(-1.5, 2.5) } else { (err / 60.0).clamp(-10.0, 5.0) };
+                let corr = if agl < 1_500.0 * FT { (err / 100.0).clamp(-5.0, 2.5) } else { (err / 60.0).clamp(-10.0, 5.0) };
                 let mut gamma_cmd = path_gamma + corr;
                 // Protection de vitesse : sous VAPP - 10, on plonge pour garder l'énergie
                 let va = vapp(self);
@@ -431,6 +437,13 @@ impl Aircraft {
                 let e_now = agl + self.tas * self.tas / (2.0 * g);
                 let e_req = h_path + v_ref * v_ref / (2.0 * g);
                 self.speedbrake = e_now > e_req + 120.0 || self.d.keas > va + 120.0;
+                // S-turns : excès d'énergie en finale → virages alternés de ±35° autour de l'axe
+                // (trajet rallongé), tant que l'avion est loin du seuil
+                if e_now > e_req + 250.0 && along > 2.5 * NM && cross.abs() < 1.5 * NM {
+                    let s = if (along / 2_500.0).sin() >= 0.0 { 1.0 } else { -1.0 };
+                    self.ap.lat = LatMode::Hdg;
+                    self.ap.hdg_tgt = wrap360(hdg + 35.0 * s);
+                }
                 if along < 2.0 * NM && along > -1_000.0 && agl < 2_000.0 * FT && !self.gear_down {
                     // Train bloqué : sortie de secours par gravité
                     if self.fails.has(crate::systems::Fail::GearJam) {

@@ -371,6 +371,7 @@ mod tests {
             (35.0618, -117.6427, 45_882.0, 174.6, 270.0),
             (35.45, -117.88, 30_000.0, 180.0, 230.0),
             (34.80, -117.95, 25_000.0, 45.0, 220.0),
+            (34.95, -117.70, 15_000.0, 300.0, 180.0),
         ] {
             println!("=== depart {lat} {lon} FL{:.0} cap {hdg}", alt_ft / 100.0);
             override_case(lat, lon, alt_ft, hdg, tas);
@@ -409,7 +410,7 @@ mod tests {
                 }
             }
             let (al, cr) = ac.autoland.as_ref().map(|l| (along_before(l.thr_lat, l.thr_lon, l.hdg, ac.lat, ac.lon), cross_track(l.thr_lat, l.thr_lon, l.hdg, ac.lat, ac.lon))).unwrap_or((0.0, 0.0));
-            if t - lp > 30.0 || (t > 440.0 && t - lp > 5.0) {
+            if t - lp > 30.0 {
                 lp = t;
                 println!("t={t:5.0} alt={:6.0}ft keas={:4.0} hdg={:3.0} sb={} gear={:.1} seuil={al:6.0} ecart={cr:5.0}", ac.alt / FT, ac.d.keas, ac.hdg_deg(), ac.speedbrake, ac.gear_pos);
             }
