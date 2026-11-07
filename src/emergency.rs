@@ -268,16 +268,19 @@ impl Emergency {
                 ac.ap.at_on = false;
                 if self.dead_stick {
                     ac.throttle = 0.0;
+                    // Vitesse tenue par la pente (meilleure finesse ~250 KEAS) : pas d'emballement
+                    if ac.d.mach < 1.2 {
+                        let gamma = (-6.0 + (ac.d.keas - 250.0) * 0.25).clamp(-15.0, 2.0);
+                        ac.ap.pitch_tgt = gamma + ac.d.alpha.to_degrees();
+                    }
                 }
                 if self.phase == 0 {
                     self.events.push((Level::Warning, format!("VOL PLANE VERS {} — FINESSE {GLIDE_RATIO:.0}", apt.icao)));
                     self.phase = 1;
                 }
                 if self.dead_stick && d < 14.0 * NM && self.phase == 1 {
-                    if ac.gear_pos < 0.5 {
-                        ac.cmd_gear();
-                    }
-                    self.events.push((Level::Warning, format!("{} EN VUE — AUTOLAND PLANE ENGAGE, TRAIN SORTI", apt.icao)));
+                    // Le train sort à 2 NM (géré par l'autoland plané) : pas de traînée inutile
+                    self.events.push((Level::Warning, format!("{} EN VUE — AUTOLAND PLANE ENGAGE", apt.icao)));
                     self.cmds.push(format!("ATTERRIR PLANE {}", apt.icao));
                     self.phase = 2;
                     self.mode = None;
@@ -357,6 +360,66 @@ mod tests {
         ac.set_turbines(TurbState::Running, 0.8);
         ac.eng.fuel_flow = 1.5;
         ac
+    }
+
+    /// Rejeu du vol de l'utilisateur : moteurs perdus à FL450 / Mach 1, 16 NM d'Edwards, cap 175 —
+    /// EMERGENCY OVERRIDE doit amener l'avion arrêté sur une piste, sans poussée.
+    #[test]
+    fn override_from_too_high_lands() {
+        // Vol de l'utilisateur, puis autres départs : loin au nord, bas et proche, travers du terrain
+        for (lat, lon, alt_ft, hdg, tas) in [
+            (35.0618, -117.6427, 45_882.0, 174.6, 270.0),
+            (35.45, -117.88, 30_000.0, 180.0, 230.0),
+            (34.95, -117.70, 15_000.0, 300.0, 180.0),
+        ] {
+            println!("=== depart {lat} {lon} FL{:.0} cap {hdg}", alt_ft / 100.0);
+            override_case(lat, lon, alt_ft, hdg, tas);
+        }
+    }
+
+    fn override_case(lat: f64, lon: f64, alt_ft: f64, hdg: f64, tas: f64) {
+        let rf = Refuel::new();
+        let mut em = Emergency::new();
+        let mut ac = flying(lat, lon, alt_ft, 32_000.0);
+        ac.psi = hdg.to_radians();
+        ac.tas = tas;
+        ac.gear_down = false;
+        ac.gear_pos = 0.0;
+        ac.brakes = false;
+        ac.set_turbines(TurbState::Failed, 0.0);
+        em.start_override(&mut ac).unwrap();
+        let dt = 1.0 / 120.0;
+        let mut t: f64 = 0.0;
+        let mut lp = -100.0;
+        let mut max_thrust = 0.0f64;
+        while t < 1_500.0 && ac.crashed.is_none() && !(ac.on_ground && ac.tas < 3.0) {
+            em.update(dt, &mut ac, &rf);
+            for c in std::mem::take(&mut em.cmds) {
+                if let Some(code) = c.strip_prefix("ATTERRIR PLANE ") {
+                    let i = AIRPORTS.iter().position(|a| a.icao == code).unwrap();
+                    ac.engage_autoland_dead_stick(i).unwrap();
+                }
+            }
+            let cmd = ac.autoflight().unwrap_or((0.0, 0.0));
+            ac.step(dt, cmd.0, cmd.1);
+            max_thrust = max_thrust.max(ac.eng.t_turb + ac.eng.t_ram + ac.eng.t_scram);
+            for (_, m) in ac.events.drain(..).chain(em.events.drain(..)) {
+                if !m.starts_with("EMER") {
+                    println!("[{t:6.1}] {m}");
+                }
+            }
+            let (al, cr) = ac.autoland.as_ref().map(|l| (along_before(l.thr_lat, l.thr_lon, l.hdg, ac.lat, ac.lon), cross_track(l.thr_lat, l.thr_lon, l.hdg, ac.lat, ac.lon))).unwrap_or((0.0, 0.0));
+            if t - lp > 30.0 || (t > 440.0 && t - lp > 5.0) {
+                lp = t;
+                println!("t={t:5.0} alt={:6.0}ft keas={:4.0} hdg={:3.0} sb={} gear={:.1} seuil={al:6.0} ecart={cr:5.0}", ac.alt / FT, ac.d.keas, ac.hdg_deg(), ac.speedbrake, ac.gear_pos);
+            }
+            t += dt;
+        }
+        println!("crash={:?} sol={} tas={:.1} t={t:.0}s poussee max={max_thrust:.0}", ac.crashed, ac.on_ground, ac.tas);
+        assert!(ac.crashed.is_none(), "{:?}", ac.crashed);
+        assert!(ac.on_ground && ac.tas < 3.0, "pas arrete");
+        assert!(AIRPORTS.iter().any(|a| a.on_runway(ac.lat, ac.lon)), "pas sur une piste");
+        assert_eq!(max_thrust, 0.0);
     }
 
     #[test]

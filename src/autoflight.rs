@@ -35,6 +35,10 @@ pub struct Autoland {
     pub go_arounds: u32,
     /// Atterrissage plané sans moteur : poussée nulle, pas de remise des gaz possible.
     pub dead_stick: bool,
+    /// Circuit d'atterrissage plané : 0 vers le point haut, 1 branche d'éloignement, 2 demi-tour.
+    pub pat: u8,
+    /// Côté du circuit : -90 (gauche de l'axe) ou +90 (droite), choisi à l'entrée.
+    pub pat_side: f64,
 }
 
 /// Plané sans moteur (façon navette spatiale) : pente extérieure forte vers un point d'aboutissement
@@ -43,7 +47,6 @@ pub struct Autoland {
 const DS_OUTER_DEG: f64 = 9.0;
 const DS_AIM: f64 = 4_500.0;
 const DS_INNER_DEG: f64 = 3.0;
-const DS_KEAS: f64 = 225.0;
 
 /// Hauteur du profil plané à la distance `along` avant le seuil (m).
 pub fn dead_stick_path(along: f64) -> f64 {
@@ -61,7 +64,7 @@ impl Autoland {
             let (tla, tlo) = a.point(along_thr, 0.0);
             let iaf = destination(tla, tlo, wrap360(hdg + 180.0), IAF_DIST);
             let (d, _) = dist_brg(lat, lon, iaf.0, iaf.1);
-            let al = Autoland { apt: apt_idx, thr_lat: tla, thr_lon: tlo, hdg, elev: a.elev, iaf, phase: AlPhase::ToIaf, gs_captured: false, holding: false, go_arounds: 0, dead_stick: false };
+            let al = Autoland { apt: apt_idx, thr_lat: tla, thr_lon: tlo, hdg, elev: a.elev, iaf, phase: AlPhase::ToIaf, gs_captured: false, holding: false, go_arounds: 0, dead_stick: false, pat: 0, pat_side: -90.0 };
             if best.as_ref().map_or(true, |(bd, _)| d < *bd) {
                 best = Some((d, al));
             }
@@ -119,7 +122,7 @@ impl Aircraft {
             }
         }
         let (_, tla, tlo, hdg) = best.unwrap();
-        let al = Autoland { apt, thr_lat: tla, thr_lon: tlo, hdg, elev: a.elev, iaf: (tla, tlo), phase: AlPhase::Approach, gs_captured: false, holding: false, go_arounds: 0, dead_stick: true };
+        let al = Autoland { apt, thr_lat: tla, thr_lon: tlo, hdg, elev: a.elev, iaf: (tla, tlo), phase: AlPhase::Approach, gs_captured: false, holding: false, go_arounds: 0, dead_stick: true, pat: 0, pat_side: -90.0 };
         let num = al.runway_number();
         self.autoland = Some(al);
         self.autotakeoff = None;
@@ -246,6 +249,81 @@ impl Aircraft {
             AlPhase::Approach if dead_stick => {
                 self.ap.on = true;
                 self.ap.at_on = false;
+                // Gestion d'énergie : circuit d'atterrissage plané (« overhead pattern »). Trop haut
+                // (ou seuil dépassé en vol) : rejoindre le point haut au-dessus du seuil décalé de
+                // 3 NM à gauche, s'éloigner parallèlement à la piste en descendant fort (aérofreins),
+                // puis demi-tour vers la piste quand la hauteur, après le virage, rejoint le profil.
+                let a_eff = if cross.abs() > 300.0 { along + (cross.abs() - 300.0) * 0.7 } else { along };
+                let excess = agl - dead_stick_path(a_eff.max(0.0));
+                let done = self.autoland.as_ref().unwrap().gs_captured;
+                let exit_h0 = dead_stick_path(5.0 * NM);
+                let holding = self.autoland.as_ref().unwrap().holding;
+                let enter = !holding && ((excess > 2_000.0 * FT && along > 1.0 * NM && !done) || (along < 0.0 && agl > exit_h0));
+                if enter {
+                    // Circuit du côté où se trouve déjà l'avion (transit le plus court)
+                    let (le, ln) = enu_offset(tla, tlo, self.lat, self.lon);
+                    let lr = wrap360(hdg - 90.0).to_radians();
+                    let side = if le * lr.sin() + ln * lr.cos() >= 0.0 { -90.0 } else { 90.0 };
+                    let al = self.autoland.as_mut().unwrap();
+                    al.holding = true;
+                    al.pat = 1;
+                    al.pat_side = side;
+                    say = Some("AUTOLAND PLANE : TROP HAUT — CONE D'ALIGNEMENT (SPIRALE DE DESCENTE)".into());
+                }
+                if self.autoland.as_ref().unwrap().holding {
+                    // Cône d'alignement (façon navette) : cercle tangent à l'axe à 5 NM du seuil, du
+                    // côté où arrive l'avion ; la sortie (point de tangence) tombe dans l'axe, face à
+                    // la piste. Pente planifiée (6 à 15°, nombre de tours adapté) pour arriver au point
+                    // de tangence à la hauteur du profil ; la vitesse reste prioritaire.
+                    let va = vapp(self);
+                    let tgt = va + 60.0;
+                    let side = self.autoland.as_ref().unwrap().pat_side; // -90 gauche, +90 droite
+                    let r = (1.3 * self.tas * self.tas / (9.81 * 30f64.to_radians().tan())).max(2.0 * NM);
+                    let hac_along = 5.0 * NM;
+                    let (tl, to) = destination(tla, tlo, wrap360(hdg + 180.0), hac_along);
+                    let (cl, co) = destination(tl, to, wrap360(hdg + side), r);
+                    let (dc, bc) = dist_brg(self.lat, self.lon, cl, co);
+                    // Virage vers le centre : à gauche si le cercle est à gauche de l'axe
+                    let turn = if side < 0.0 { 1.0 } else { -1.0 };
+                    let corr = ((dc - r) / NM * 25.0).clamp(-50.0, 50.0) * turn;
+                    self.ap.lat = LatMode::Hdg;
+                    self.ap.hdg_tgt = if dc > r * 2.0 { bc } else { wrap360(bc + 90.0 * turn - corr) };
+                    // Angle restant jusqu'au point de tangence (rayon centre → tangence = côté opposé)
+                    let rad_now = wrap360(bc + 180.0);
+                    let rad_exit = wrap360(hdg - side);
+                    let theta = if turn > 0.0 { (rad_now - rad_exit).rem_euclid(360.0) } else { (rad_exit - rad_now).rem_euclid(360.0) }.to_radians();
+                    let exit_h = dead_stick_path(hac_along);
+                    let dh = agl - exit_h;
+                    let on_circle = dc < r * 1.5;
+                    let lap = std::f64::consts::TAU * r;
+                    let dist0 = if on_circle { theta * r } else { dc + theta * r };
+                    let at_exit = on_circle && theta.to_degrees() < 10.0;
+                    let short = on_circle && dh < dist0 * 5f64.to_radians().tan() && dh < 3_000.0 * FT;
+                    if at_exit || short || agl < 1_200.0 * FT {
+                        let al = self.autoland.as_mut().unwrap();
+                        al.holding = false;
+                        al.gs_captured = true;
+                        say = Some("AUTOLAND PLANE : SORTIE DU CONE D'ALIGNEMENT — FINALE".into());
+                    } else {
+                        let n = ((dh.max(0.0) / 10f64.to_radians().tan() - dist0) / lap).round().max(0.0);
+                        let gamma_req = (dh.max(0.0) / (dist0 + n * lap).max(600.0)).atan().to_degrees();
+                        let mut gamma_cmd = -gamma_req.clamp(6.0, 15.0);
+                        if self.d.keas < tgt - 20.0 {
+                            gamma_cmd -= ((tgt - 20.0 - self.d.keas) * 0.3).min(8.0);
+                        }
+                        self.speedbrake = self.d.keas > tgt + 10.0;
+                        self.ap.vert = VertMode::Pitch;
+                        self.ap.pitch_tgt = gamma_cmd.max(-20.0) + self.d.alpha.to_degrees();
+                        if let Some(al) = self.autoland.as_mut() {
+                            al.phase = next;
+                        }
+                        if let Some(s) = say {
+                            self.msg(Level::Info, s);
+                        }
+                        self.throttle = 0.0;
+                        return out;
+                    }
+                }
                 // Latéral : poursuite d'un point de l'axe 2 NM devant, puis LOC près de l'axe
                 if cross.abs() < 600.0 && along < 10.0 * NM {
                     self.ap.lat = LatMode::Loc;
@@ -256,10 +334,10 @@ impl Aircraft {
                     self.ap.hdg_tgt = dist_brg(self.lat, self.lon, pla, plo).1;
                 }
                 // Vertical : suivi du profil plané par la pente (assiette = pente + incidence)
-                let h_path = dead_stick_path(along);
+                let h_path = dead_stick_path(a_eff);
                 // Pente du profil anticipée ~5 s devant : le pré-arrondi commence avant la cassure
                 let look = (self.tas * 5.0).max(300.0);
-                let h_ahead = dead_stick_path((along - look).max(-600.0));
+                let h_ahead = dead_stick_path((a_eff - look).max(-600.0));
                 let path_gamma = ((h_ahead - h_path) / look).atan().to_degrees();
                 let slope = -path_gamma;
                 let err = h_path - agl;
@@ -273,12 +351,29 @@ impl Aircraft {
                 if self.d.keas < va - 10.0 && agl > 1_500.0 * FT {
                     gamma_cmd = gamma_cmd.min(-(slope.max(4.0)) - (va - 10.0 - self.d.keas) * 0.3);
                 }
+                // Courte finale : sous VAPP, échanger un peu de hauteur contre de la vitesse
+                // (arrondi d'autant plus tôt que la chute est forte)
+                if self.d.keas < va + 5.0 && agl <= 1_500.0 * FT && agl > 60.0 * FT {
+                    gamma_cmd = gamma_cmd.min(-(4.5 + (va + 5.0 - self.d.keas) * 0.2).min(8.0));
+                }
                 gamma_cmd = gamma_cmd.clamp(-14.0, 2.0);
                 self.ap.vert = VertMode::Pitch;
                 self.ap.pitch_tgt = gamma_cmd + self.d.alpha.to_degrees();
                 // Vitesse tenue aux aérofreins sur la pente extérieure
-                self.speedbrake = slope > 5.0 && self.d.keas > DS_KEAS.max(va + 55.0);
-                if along < 2.0 * NM && !self.gear_down {
+                // Aérofreins : vitesse tenue sur la pente forte ; en courte finale, excès de vitesse
+                // dissipé avant le seuil (pas de remise des gaz : il faut pouvoir s'arrêter)
+                // Énergie totale (hauteur + vitesse) comparée à celle du profil à vitesse de référence
+                let g = 9.81;
+                let rho_k = (crate::atmosphere::isa(self.alt).rho / 1.225).sqrt();
+                // Vitesse de référence : sur la pente intérieure l'avion décélère (~0,8 m/s²) jusqu'au
+                // toucher à VAPP + 10 ; elle croît donc avec la distance restante
+                let v_td = (va + 10.0) * KT / rho_k;
+                let v_out = (va + 70.0) * KT / rho_k;
+                let v_ref = (v_td * v_td + 2.0 * 0.8 * (a_eff + 600.0).max(0.0)).sqrt().min(v_out);
+                let e_now = agl + self.tas * self.tas / (2.0 * g);
+                let e_req = h_path + v_ref * v_ref / (2.0 * g);
+                self.speedbrake = e_now > e_req + 120.0 || self.d.keas > va + 120.0;
+                if along < 2.0 * NM && along > -1_000.0 && agl < 2_000.0 * FT && !self.gear_down {
                     // Train bloqué : sortie de secours par gravité
                     if self.fails.has(crate::systems::Fail::GearJam) {
                         self.cmd_gear_alt();

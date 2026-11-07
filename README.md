@@ -463,3 +463,7 @@ Le SR-72 est un avion de reconnaissance : sa charge utile est simulée.
   hydraulique → FCS / train / portes d'entrée d'air, électricité → calculateurs...) ; à la
   récupération, chaque voyant de panne allumé devient une panne réelle (FCS en loi directe,
   hydraulique, génératrices, train bloqué → sortie par gravité en autoland plané...).
+- v1.29.5 : EMERGENCY OVERRIDE corrigé (rejeu du vol utilisateur) — train sorti seulement en courte
+  finale, vitesse tenue pendant le plané, cône d'alignement façon navette quand l'avion est trop
+  haut (spirale tangente à l'axe, pente planifiée), gestion d'énergie totale aux aérofreins en
+  finale. Essais : départ FL459 à 16 NM, FL300 au nord, FL150 par le travers → posés sur la piste.
