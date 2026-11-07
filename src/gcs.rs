@@ -44,7 +44,7 @@ pub fn draw_topbar(r: Rect, t: &TopBar) -> TopActions {
     let y = r.y + (r.h - 22.0) / 2.0;
     draw_rectangle(r.x + 12.0, y + 3.0, 4.0, 16.0, ACCENT);
     txt("DARKSTAR", r.x + 22.0, y + 17.0, 19.0, WHITE);
-    txt(&format!("GCS FTV-01  v{}", crate::updater::VERSION), r.x + 118.0, y + 16.0, 12.0, DIM);
+    txt(&format!("GCS {}  v{}", crate::link::tail(), crate::updater::VERSION), r.x + 118.0, y + 16.0, 12.0, DIM);
 
     let mut x = r.x + 280.0;
     x += chip(x, y, "SIM", &fmt_time(t.sim_time), WHITE) + 8.0;

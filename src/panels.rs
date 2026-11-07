@@ -283,7 +283,7 @@ pub fn draw_engines(ac: &Aircraft, r: Rect, time: f64) {
 }
 
 pub fn draw_card(ac: &Aircraft, mi: &Mission, r: Rect) {
-    panel(r, "CARTE D'ESSAIS — FTV-01");
+    panel(r, &format!("CARTE D'ESSAIS — {}", crate::link::tail()));
     let x = r.x + 12.0;
     let mut y = r.y + 40.0;
     txt_r(&format!("T+ {}", fmt_time(mi.elapsed)), r.x + r.w - 10.0, r.y + 16.0, 14.0, WHITE);

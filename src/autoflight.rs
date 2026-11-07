@@ -20,6 +20,7 @@ pub enum AlPhase {
     Rollout,
 }
 
+#[derive(Clone)]
 pub struct Autoland {
     pub apt: usize,
     pub thr_lat: f64,
@@ -56,6 +57,7 @@ impl Autoland {
     }
 }
 
+#[derive(Clone)]
 pub struct Takeoff {
     pub hdg: f64,
     pub alt_ft: f64,

@@ -69,6 +69,7 @@ pub enum VertMode {
     QHold,
 }
 
+#[derive(Clone)]
 pub struct Autopilot {
     pub on: bool,
     pub lat: LatMode,
@@ -95,6 +96,7 @@ pub struct Autopilot {
     pub max_perf: bool,
 }
 
+#[derive(Clone)]
 pub struct Engines {
     pub turb: TurbState,
     pub n2: f64,
@@ -173,6 +175,7 @@ pub struct Derived {
     pub gamma_dot: f64,
 }
 
+#[derive(Clone)]
 pub struct Aircraft {
     pub lat: f64,
     pub lon: f64,

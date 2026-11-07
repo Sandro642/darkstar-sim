@@ -406,3 +406,14 @@ Le SR-72 est un avion de reconnaissance : sa charge utile est simulée.
 - v1.26.1 : bloc radar météo sur l'horizon (mode WXR / WXR+TURB, inclinaison, portée, écho le plus
   significatif avec position horaire et distance, couleur selon l'intensité) ; annonce retirée de
   l'écran de navigation.
+- v1.27.0 : **flotte et liaison de données** — au lancement, choix du Darkstar (FTV-01 à FTV-04,
+  disponibilité réelle : maintenance, en vol avec une autre station), du départ (point d'attente :
+  instruction `ALIGNEMENT` pour rouler jusqu'à la piste ; ou aligné sur la piste) et établissement
+  de la liaison (poignée de main en 5 étapes). Chemins : LOS (Edwards / Palmdale), stations sol
+  relais, avions relais BACN, SATCOM, secours Iridium (urgence seulement) ; horizon radio selon
+  l'altitude, occultation plasma en hypersonique dense, pannes `PANNE LIAISON` / `PANNE SATCOM`.
+  Bascule automatique ; à la perte : télémétrie figée, ordres non transmis, l'avion maintient cap
+  et altitude puis déclenche lui-même l'urgence après 5 min ; reconnexion via le relais choisi
+  (panneau sur l'horizon ou `RECONNEXION`, `RELAIS SOL KNID`, `RELAIS BACN 1`, `RELAIS SECOURS`).
+  `EMERGENCY OVERRIDE` : vol plané moteurs au ralenti puis autoland ; `EJECTION CONFIRME` : boîte
+  noire éjectée avec la capsule, données sauvegardées.

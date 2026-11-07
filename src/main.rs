@@ -6,6 +6,8 @@ mod airports;
 mod atmosphere;
 mod elec;
 mod emergency;
+mod link;
+mod connect;
 mod mishap;
 mod syspage;
 mod feel;
@@ -112,6 +114,19 @@ struct Game {
     refuel: refuel::Refuel,
     combat: combat::Combat,
     emerg: emergency::Emergency,
+    /// Liaison de données avec le Darkstar contrôlé (relais, perte, reconnexion).
+    link: link::Link,
+    /// Dernière trame reçue avant la perte de liaison (affichage figé).
+    stale: Option<Aircraft>,
+    /// Écran de connexion à la flotte (démarrage).
+    connect: Option<connect::ConnectUi>,
+    link_msg: String,
+    /// Instructions générées à bord (procédure d'urgence) : pas besoin de liaison.
+    onboard: bool,
+    /// Roulage automatique du point d'attente vers la piste : (points, index, cap final).
+    taxi: Option<(Vec<(f64, f64)>, usize, f64)>,
+    /// Terrain du point d'attente occupé.
+    hold_apt: Option<usize>,
     /// Ressenti de vol (mouvements de vue, vibrations, voile).
     feel: feel::Feel,
     bingo_manual: Option<f64>,
@@ -262,6 +277,13 @@ impl Game {
             refuel: refuel::Refuel::new(),
             combat: combat::Combat::new(),
             emerg: emergency::Emergency::new(),
+            link: link::Link::new(),
+            stale: None,
+            connect: None,
+            link_msg: String::new(),
+            onboard: false,
+            taxi: None,
+            hold_apt: None,
             feel: feel::Feel::new(),
             bingo_manual: None,
             fuel_plan: fuel::Plan::default(),
@@ -495,14 +517,34 @@ impl Game {
         self.cues.push(audio::Cue::Ack);
     }
 
-    fn link(&self) -> (&'static str, f64) {
-        let base = &AIRPORTS[apt_index("KEDW")];
-        let (d, _) = dist_brg(self.ac.lat, self.ac.lon, base.lat, base.lon);
-        if d < 350_000.0 {
-            ("LOS", 45.0)
-        } else {
-            ("SATCOM", 380.0)
+    fn link(&self) -> (String, f64) {
+        match self.link.state {
+            link::State::Connected if self.link.path == link::Path::Emerg => ("IRIDIUM".into(), 2_500.0),
+            link::State::Connected => (self.link.path.name(), self.link.latency(&self.ac)),
+            link::State::Connecting { .. } => ("CONNEXION".into(), 0.0),
+            _ => ("PERDUE".into(), 0.0),
         }
+    }
+
+    /// Place l'appareil choisi sur son terrain : aligné sur la piste ou au point d'attente.
+    fn place(&mut self, fleet: usize, hold: bool) {
+        link::set_tail(fleet);
+        let ai = apt_index(link::FLEET[fleet].1);
+        let mut ac = Aircraft::new_on_runway(ai);
+        self.taxi = None;
+        self.hold_apt = None;
+        if hold {
+            let a = &AIRPORTS[ai];
+            let along = a.len / 2.0 - 160.0;
+            let (la, lo) = a.point(along, a.width / 2.0 + 110.0);
+            let (cla, clo) = a.point(along, 0.0);
+            ac.lat = la;
+            ac.lon = lo;
+            ac.psi = dist_brg(la, lo, cla, clo).1.to_radians();
+            self.hold_apt = Some(ai);
+        }
+        self.ac = ac;
+        self.stale = None;
     }
 
     fn alerts(&self) -> Vec<(Level, String)> {
@@ -808,7 +850,9 @@ impl Game {
         // Latence de la liaison de données sur les commandes de vol
         let (_, lat_ms) = self.link();
         let now = get_time();
-        self.link_buf.push_back((now, self.stick.0, self.stick.1));
+        // Sans liaison complète, les ordres de manche ne sont pas transmis
+        let st = if self.link.full() { self.stick } else { (0.0, 0.0) };
+        self.link_buf.push_back((now, st.0, st.1));
         while let Some(&(t, p, r)) = self.link_buf.front() {
             if now - t >= lat_ms / 1000.0 {
                 self.last_cmd = (p, r);
@@ -866,7 +910,9 @@ impl Game {
         // Procédure d'urgence : décisions et instructions automatiques
         self.emerg.update(sim_dt, &mut self.ac, &self.refuel);
         for c in std::mem::take(&mut self.emerg.cmds) {
+            self.onboard = true;
             self.exec_command(&c);
+            self.onboard = false;
         }
         let eev: Vec<_> = self.emerg.events.drain(..).collect();
         for (l, m) in eev {
@@ -906,6 +952,69 @@ impl Game {
             }
         }
 
+        // Liaison de données : bascules, perte, procédure autonome
+        if self.ac.crashed.is_none() {
+            let lost_now = self.link.update(&self.ac, real_dt, sim_dt);
+            if lost_now {
+                self.stale = Some(self.ac.clone());
+                let ac = &mut self.ac;
+                if !ac.on_ground && ac.autoland.is_none() && self.emerg.mode.is_none() {
+                    ac.ap.on = true;
+                    ac.ap.lat = LatMode::Hdg;
+                    ac.ap.hdg_tgt = ac.hdg_deg().round();
+                    ac.ap.vert = VertMode::Alt;
+                    ac.ap.alt_tgt_ft = (ac.alt / FT / 100.0).round() * 100.0;
+                }
+            }
+            if self.link.state == link::State::Connected {
+                self.stale = None;
+            } else if self.stale.is_none() {
+                self.stale = Some(self.ac.clone());
+            }
+            // Procédure autonome : après 5 min sans liaison, l'avion déclenche lui-même l'urgence
+            if self.link.state == link::State::Lost && self.link.lost_t > 300.0 && self.emerg.mode.is_none() && !self.ac.on_ground && self.ac.autoland.is_none() {
+                self.push(Level::Warning, "PERTE DE LIAISON PROLONGEE — URGENCE AUTONOME DECLENCHEE PAR L'AVION");
+                if let Ok(m) = self.emerg.start(&self.ac, &self.refuel) {
+                    self.push(Level::Warning, m);
+                }
+            }
+        }
+        let lev: Vec<_> = self.link.events.drain(..).collect();
+        for (l, s) in lev {
+            self.link_msg = s.clone();
+            self.push(l, s);
+        }
+        // Roulage automatique vers la piste
+        if let Some((pts, i, fin)) = &mut self.taxi {
+            let ac = &mut self.ac;
+            ac.tas = 0.0;
+            ac.brakes = true;
+            let turn = 20f64.to_radians() * sim_dt;
+            if *i < pts.len() {
+                let (d, brg) = dist_brg(ac.lat, ac.lon, pts[*i].0, pts[*i].1);
+                let err = wrap180(brg - ac.hdg_deg()).to_radians();
+                ac.psi = (ac.psi + err.clamp(-turn, turn)).rem_euclid(std::f64::consts::TAU);
+                if err.abs() < 30f64.to_radians() {
+                    let step = (6.0 * sim_dt).min(d);
+                    let (la, lo) = destination(ac.lat, ac.lon, brg, step);
+                    ac.lat = la;
+                    ac.lon = lo;
+                }
+                if d < 2.0 {
+                    *i += 1;
+                }
+            } else {
+                let err = wrap180(*fin - ac.hdg_deg()).to_radians();
+                ac.psi = (ac.psi + err.clamp(-turn, turn)).rem_euclid(std::f64::consts::TAU);
+                if err.abs() < 0.5f64.to_radians() {
+                    let num = airports::Airport::runway_number(*fin);
+                    self.taxi = None;
+                    self.hold_apt = None;
+                    self.flash(format!("ALIGNE PISTE {num:02} — PRET AU DECOLLAGE"), ui::GREEN_S);
+                    self.push(Level::Info, format!("TOUR : {}, ALIGNE PISTE {num:02}, AUTORISE DECOLLAGE A VOTRE CONVENANCE", link::tail()));
+                }
+            }
+        }
         let ev: Vec<_> = self.ac.events.drain(..).collect();
         for (l, s) in ev {
             self.push(l, s);
@@ -1035,6 +1144,15 @@ impl Game {
             return;
         }
         self.push(Level::Info, format!("GCS > {}", w.join(" ")));
+        // Sans liaison complète : seules les instructions locales et de liaison passent ; le canal de
+        // secours transmet aussi les instructions d'urgence
+        const LOCAL: [&str; 17] = ["AIDE", "HELP", "HUD", "INFOS", "METEO", "WX", "WEATHER", "RESSENTI", "FEEL", "PANNE", "PANNES", "FAIL", "MAJ", "RECONNEXION", "RECONNECT", "RELAIS", "LIAISON"];
+        const EMERG: [&str; 5] = ["EMERGENCY", "URGENCE", "MAYDAY", "EJECTION", "EJECT"];
+        if !self.link.full() && !LOCAL.contains(&w[0]) && !(self.link.emergency_ok() && EMERG.contains(&w[0])) && !self.onboard {
+            self.cues.push(audio::Cue::Refused);
+            self.push(Level::Caution, "LIAISON PERDUE — INSTRUCTION NON TRANSMISE (RECONNEXION / RELAIS)");
+            return;
+        }
         let num = |i: usize| w.get(i).and_then(|s| s.trim_start_matches("FL").parse::<f64>().ok());
         let arg = |i: usize| w.get(i).copied().unwrap_or("");
         let apt_arg = |i: usize| AIRPORTS.iter().position(|a| a.icao == arg(i));
@@ -1179,6 +1297,52 @@ impl Game {
             "ARMEMENT" | "ARMES" => {
                 self.tab = gcs::Tab::Armement;
                 reply = Ok("PAGE ARMEMENT".into());
+            }
+            "RECONNEXION" | "RECONNECT" | "RELAIS" | "LIAISON" => {
+                let p = match (arg(1), arg(2)) {
+                    ("LOS", _) => Some(link::Path::Los),
+                    ("SAT" | "SATCOM", _) => Some(link::Path::Satcom),
+                    ("SECOURS" | "IRIDIUM" | "URGENCE", _) => Some(link::Path::Emerg),
+                    ("BACN" | "BACN1" | "BACN-1", n) => Some(link::Path::Bacn(if n == "2" { 1 } else { 0 })),
+                    ("BACN2" | "BACN-2", _) => Some(link::Path::Bacn(1)),
+                    ("SOL", icao) => link::STATIONS.iter().position(|s| *s == icao).map(link::Path::Ground),
+                    ("", _) => {
+                        // Meilleur chemin estimé d'après la dernière position connue, sinon le secours
+                        let last = self.stale.as_ref().unwrap_or(&self.ac);
+                        let best = link::Path::all()
+                            .into_iter()
+                            .filter(|p| *p != link::Path::Emerg)
+                            .filter_map(|p| self.link.estimate(p, last).ok().map(|(l, _)| (p, l)))
+                            .min_by(|a, b| a.1.total_cmp(&b.1))
+                            .map(|(p, _)| p);
+                        Some(best.unwrap_or(link::Path::Emerg))
+                    }
+                    _ => None,
+                };
+                match p {
+                    Some(_) if self.link.state == link::State::Connected && self.link.path != link::Path::Emerg && w[0] == "LIAISON" => {
+                        reply = Ok(format!("LIAISON {} {:.0} ms", self.link.path.name(), self.link.latency(&self.ac)));
+                    }
+                    Some(p) => {
+                        self.link.connect(p);
+                        reply = Ok(format!("TENTATIVE DE LIAISON VIA {}", p.name()));
+                    }
+                    None => reply = Err("RELAIS : LOS | SOL <ICAO> | BACN 1|2 | SATCOM | SECOURS".into()),
+                }
+            }
+            "ALIGNEMENT" | "ALIGNER" | "LINEUP" | "ALIGN" => match self.hold_apt {
+                Some(ai) if ac.on_ground && self.taxi.is_none() => {
+                    let a = &AIRPORTS[ai];
+                    let along = a.len / 2.0 - 160.0;
+                    let entry = a.point(along, 0.0);
+                    let fin = wrap360(a.hdg + 180.0);
+                    self.taxi = Some((vec![entry], 0, fin));
+                    reply = Ok(format!("ROULAGE VERS LA PISTE {:02} — ALIGNEMENT", airports::Airport::runway_number(fin)));
+                }
+                _ => reply = Err("PAS AU POINT D'ATTENTE".into()),
+            },
+            "EMERGENCY" | "URGENCE" | "MAYDAY" if matches!(arg(1), "OVERRIDE" | "OVRD") => {
+                reply = self.emerg.start_override(ac);
             }
             "EMERGENCY" | "URGENCE" | "MAYDAY" => {
                 if arg(1) == "OFF" {
@@ -1391,6 +1555,15 @@ impl Game {
                 ac.g_min = ac.d.nz.min(1.0);
                 reply = Ok("MÉMOIRE G MAX / MIN REMISE À ZÉRO".into());
             }
+            "PANNE" | "FAIL" if matches!(arg(1), "LIAISON" | "EMETTEUR" | "SATCOM") => {
+                let on = !matches!(arg(2), "OFF" | "REPARER");
+                if arg(1) == "SATCOM" {
+                    self.link.sat_fail = on;
+                } else {
+                    self.link.tx_fail = on;
+                }
+                reply = Ok(format!("PANNE {} {}", arg(1), if on { "INJECTÉE" } else { "RÉPARÉE" }));
+            }
             "PANNE" | "FAIL" => {
                 let on = !matches!(arg(2), "OFF" | "REPARER");
                 match systems::fail_by_code(arg(1)) {
@@ -1410,6 +1583,8 @@ impl Game {
                         ac.set_failure(f, false);
                     }
                 }
+                self.link.tx_fail = false;
+                self.link.sat_fail = false;
                 reply = Ok("TOUTES LES PANNES RÉPARÉES".into());
             }
             "FIN" | "END" | "TERMINER" => {
@@ -1665,7 +1840,7 @@ impl Game {
         } else if !self.atc[4] && ac.d.mach > 10.0 {
             self.atc[4] = true;
             say = Some("CONTRÔLE ESSAIS : MACH 10 ! L'AVION LE PLUS RAPIDE DU MONDE.");
-        } else if !self.atc[5] && self.link().0 == "SATCOM" {
+        } else if !self.atc[5] && self.link().0 == "SATCOM" && false {
             self.atc[5] = true;
             say = Some("GCS : HORS PORTÉE LOS — BASCULE SUR LIAISON SATCOM, LATENCE ACCRUE.");
         }
@@ -1718,7 +1893,15 @@ async fn main() {
             g.exec_command(c);
         }
     }
-    let mut show_help = scenario.is_empty();
+    // Lancement normal : établir d'abord la liaison avec un Darkstar de la flotte
+    if (scenario.is_empty() && shot.is_none()) || std::env::var("DARKSTAR_CONNECT").is_ok() {
+        let ui = connect::ConnectUi::new();
+        g.place(ui.sel, ui.hold);
+        g.link.state = link::State::Idle;
+        g.log.clear();
+        g.connect = Some(ui);
+    }
+    let mut show_help = scenario.is_empty() && g.connect.is_none();
     let mut map_full = false;
     let mut frame = 0u64;
 
@@ -1777,11 +1960,31 @@ async fn main() {
                 g.console = None;
             }
             g.stick = (0.0, 0.0);
-        } else if !g.ended {
+        } else if !g.ended && g.connect.is_none() {
             while get_char_pressed().is_some() {}
             g.input(real_dt);
         }
-        if !g.ended {
+        if g.connect.is_some() {
+            // Poignée de main de la liaison (simulation suspendue)
+            g.link.update(&g.ac, real_dt, 0.0);
+            let lev: Vec<_> = g.link.events.drain(..).collect();
+            for (l, s) in lev {
+                g.link_msg = s.clone();
+                g.push(l, s);
+            }
+            if g.link.state == link::State::Connected {
+                g.connect = None;
+                let tail = link::tail();
+                let apt = AIRPORTS[apt_index(link::FLEET.iter().find(|f| f.0 == tail).map(|f| f.1).unwrap_or("KPMD"))].name;
+                g.push(Level::Info, format!("GCS EN LIGNE — DARKSTAR {tail} CONTROLE PAR GCS-1"));
+                if let Some(ai) = g.hold_apt {
+                    let num = airports::Airport::runway_number(AIRPORTS[ai].hdg + 180.0);
+                    g.push(Level::Info, format!("TOUR {apt} : {tail}, MAINTENEZ AU POINT D'ATTENTE PISTE {num:02} (instruction ALIGNEMENT)"));
+                } else {
+                    g.push(Level::Info, format!("TOUR {apt} : {tail}, ALIGNE PISTE, PRET AU DECOLLAGE"));
+                }
+            }
+        } else if !g.ended {
             g.update(real_dt);
         }
 
@@ -1816,8 +2019,9 @@ async fn main() {
             let mfd_h = (mfd_w / mfd::COCKPIT_ASPECT).floor();
             let mfd_r = Rect::new(body.x, body.y, mfd_w, mfd_h);
             let lit: [bool; 6] = std::array::from_fn(|i| g.tab == BEZEL_PAGES[i]);
-            let info = pfd_info(&g, &alerts, ln, lat, warp_eff, time);
-            let (_, act) = mfd::draw_mfd(&world, &mut tiles, &g.wx, &g.refuel, &g.ac, &g.recon, mfd_r, &mut g.mfd, &info, g.style, time, lit, &g.feel);
+            let info = pfd_info(&g, &alerts, &ln, lat, warp_eff, time);
+            let shown = g.stale.as_ref().unwrap_or(&g.ac);
+            let (_, act) = mfd::draw_mfd(&world, &mut tiles, &g.wx, &g.refuel, shown, &g.recon, mfd_r, &mut g.mfd, &info, g.style, time, lit, &g.feel);
             drop(info);
             handle_mfd(&mut g, act);
             let lay = mfd::layout(mfd_r).1;
@@ -1837,6 +2041,13 @@ async fn main() {
                 combat::draw_hud(&g.combat, svs_r);
             }
             emergency::draw_hud(&g.emerg, &g.ac, svs_r, time);
+            // Liaison perdue ou réduite au secours : bandeau et choix du relais
+            if g.connect.is_none() && g.ac.crashed.is_none() && !g.link.full() {
+                let last = g.stale.as_ref().unwrap_or(&g.ac);
+                if let Some(p) = link::draw_lost(&g.link, last, svs_r, time) {
+                    g.link.connect(p);
+                }
+            }
             // Bouton MENU du PFD : ouvre l'onglet CONSOLE
             let menu_btn = pfd::menu_rect(lay.pfd);
             if g.tab == gcs::Tab::Console {
@@ -1941,7 +2152,7 @@ async fn main() {
                 }
                 gcs::Tab::Recon => {
                     let ln = g.link().0;
-                    if let Some(a) = recon::draw_recon(&g.ac, &g.recon, &mut tiles, cr, ln) {
+                    if let Some(a) = recon::draw_recon(&g.ac, &g.recon, &mut tiles, cr, &ln) {
                         let t = g.mission.elapsed;
                         g.recon.apply(a, &mut g.ac, t);
                         g.cues.push(audio::Cue::Ack);
@@ -1962,7 +2173,7 @@ async fn main() {
                 mission_t: g.mission.elapsed,
                 warp: warp_eff,
                 warp_capped,
-                link: ln,
+                link: &ln,
                 latency_ms: lat,
                 master_warn,
                 master_caut,
@@ -1987,6 +2198,22 @@ async fn main() {
         }
         if show_help {
             panels::draw_help(Rect::new(0.0, 0.0, sw, sh));
+        }
+        if let Some(ui) = &g.connect {
+            match connect::draw(ui, &g.link, &g.link_msg, sw, sh, time) {
+                Some(connect::ConnectAction::Select(i)) => {
+                    let hold = ui.hold;
+                    g.connect = Some(connect::ConnectUi { sel: i, hold });
+                    g.place(i, hold);
+                }
+                Some(connect::ConnectAction::Hold(h)) => {
+                    let sel = ui.sel;
+                    g.connect = Some(connect::ConnectUi { sel, hold: h });
+                    g.place(sel, h);
+                }
+                Some(connect::ConnectAction::Connect) => g.link.connect(link::Path::Los),
+                None => {}
+            }
         }
 
         // --- Mise à jour ---
@@ -2211,7 +2438,7 @@ fn draw_debrief(lines: &[String], r: Rect) {
     let b = Rect::new(r.x + (r.w - w) / 2.0, r.y + (r.h - h) / 2.0, w, h);
     ui::rrect(b, 12.0, Color::new(0.03, 0.04, 0.06, 0.97));
     ui::rrect_lines(b, 12.0, 1.5, ui::ACCENT);
-    ui::txt("FIN DE VOL - DEBRIEFING DARKSTAR FTV-01", b.x + 22.0, b.y + 34.0, 20.0, ui::ACCENT);
+    ui::txt(&format!("FIN DE VOL - DEBRIEFING DARKSTAR {}", link::tail()), b.x + 22.0, b.y + 34.0, 20.0, ui::ACCENT);
     let mut y = b.y + 66.0;
     for l in lines {
         let c = if l.starts_with("ISSUE : PERTE") { RED } else if l.starts_with("  ") { ui::DIM } else if l.starts_with("TRACE") { ui::CYAN_S } else { WHITE };

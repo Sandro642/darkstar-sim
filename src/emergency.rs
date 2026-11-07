@@ -36,6 +36,8 @@ pub struct Emergency {
     pub events: Vec<(Level, String)>,
     /// Instructions à exécuter par la station sol.
     pub cmds: Vec<String>,
+    /// Override : vol plané moteurs au ralenti puis atterrissage automatique.
+    pub dead_stick: bool,
 }
 
 fn powered(ac: &Aircraft) -> bool {
@@ -52,7 +54,7 @@ fn glide_range(ac: &Aircraft, elev: f64) -> f64 {
 
 impl Emergency {
     pub fn new() -> Emergency {
-        Emergency { mode: None, phase: 0, t: 0.0, refuel_tried: false, events: Vec::new(), cmds: Vec::new() }
+        Emergency { mode: None, phase: 0, t: 0.0, refuel_tried: false, events: Vec::new(), cmds: Vec::new(), dead_stick: false }
     }
 
     /// Choix de l'option selon l'ordre de priorité ; renvoie aussi la justification.
@@ -107,6 +109,33 @@ impl Emergency {
         self.set(mode);
         self.events.push((Level::Warning, "MAYDAY MAYDAY MAYDAY — DARKSTAR 01 — TRANSPONDEUR 7700".into()));
         Ok(format!("URGENCE : {} — {why}", self.label(ac)))
+    }
+
+    /// Urgence en OVERRIDE (commandes de vol perdues, liaison dégradée) : vol plané vers le terrain
+    /// joignable le plus proche, moteurs au ralenti, puis atterrissage automatique.
+    pub fn start_override(&mut self, ac: &mut Aircraft) -> Result<String, String> {
+        if ac.on_ground {
+            return Err("AU SOL".into());
+        }
+        if ac.crashed.is_some() {
+            return Err("VEHICULE PERDU".into());
+        }
+        let best = AIRPORTS
+            .iter()
+            .enumerate()
+            .map(|(i, a)| (i, dist_brg(ac.lat, ac.lon, a.lat, a.lon).0))
+            .filter(|(i, d)| *d < glide_range(ac, AIRPORTS[*i].elev) * 1.1)
+            .min_by(|a, b| a.1.total_cmp(&b.1));
+        match best {
+            Some((i, d)) => {
+                self.dead_stick = true;
+                ac.throttle = 0.0;
+                self.set(Mode::Glide(i));
+                self.events.push((Level::Warning, "MAYDAY MAYDAY MAYDAY — OVERRIDE : AUTOLAND PLANE AUTORISE".into()));
+                Ok(format!("OVERRIDE : VOL PLANE MOTEURS AU RALENTI VERS {} {:.0} NM PUIS AUTOLAND", AIRPORTS[i].icao, d / NM))
+            }
+            None => Err("AUCUN TERRAIN EN VOL PLANE — EJECTION CONFIRME (BOITE NOIRE SAUVEGARDEE)".into()),
+        }
     }
 
     fn set(&mut self, m: Mode) {
@@ -230,11 +259,23 @@ impl Emergency {
                 ac.ap.vert = VertMode::Pitch;
                 ac.ap.pitch_tgt = if ac.d.mach > 1.2 { 2.0 } else { -3.0 };
                 ac.ap.at_on = false;
+                if self.dead_stick {
+                    ac.throttle = 0.0;
+                }
                 if self.phase == 0 {
                     self.events.push((Level::Warning, format!("VOL PLANE VERS {} — FINESSE {GLIDE_RATIO:.0}", apt.icao)));
                     self.phase = 1;
                 }
-                if d < 6.0 * NM && self.phase == 1 {
+                if self.dead_stick && d < 14.0 * NM && self.phase == 1 {
+                    if ac.gear_pos < 0.5 {
+                        ac.cmd_gear();
+                    }
+                    self.events.push((Level::Warning, format!("{} EN VUE — AUTOLAND PLANE ENGAGE, TRAIN SORTI", apt.icao)));
+                    self.cmds.push("ATTERRIR".into());
+                    self.phase = 2;
+                    self.mode = None;
+                    self.dead_stick = false;
+                } else if d < 6.0 * NM && self.phase == 1 {
                     self.events.push((Level::Warning, format!("{} EN VUE — ATTERRISSAGE PLANE MANUEL (X, TRAIN)", apt.icao)));
                     self.phase = 2;
                     self.mode = None;
@@ -248,8 +289,9 @@ impl Emergency {
                 ac.ap.at_on = false;
                 ac.autoland = None;
                 ac.throttle = 0.0;
-                let steps: [(f64, Level, String); 4] = [
+                let steps: [(f64, Level, String); 5] = [
                     (0.0, Level::Warning, "EJECTION ! EJECTION ! EJECTION !".into()),
+                    (1.5, Level::Warning, "BOITE NOIRE EJECTEE AVEC LA CAPSULE — DONNEES DE VOL SAUVEGARDEES".into()),
                     (3.0, Level::Warning, format!("PARACHUTE OUVERT — BALISE DE DETRESSE 406 MHZ : {:.4} {:.4}", ac.lat, ac.lon)),
                     (6.0, Level::Warning, "AUTODESTRUCTION ARMEE — EFFACEMENT DES DONNEES ET DES CLES DE CHIFFREMENT".into()),
                     (9.0, Level::Warning, "CHARGES DE DESTRUCTION : 3... 2... 1...".into()),
