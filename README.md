@@ -422,3 +422,10 @@ Le SR-72 est un avion de reconnaissance : sa charge utile est simulée.
   profil vertical avec le fil du plan de descente à 3°, arrondi, piste, repères, traînée et avion
   abstrait, écart au plan. Silhouette du Darkstar de la page SYSTEMES partout (thermique, FCS,
   symbole avion de l'écran de navigation et de la carte, écran de connexion).
+- v1.28.1 : **autoland plané réellement sans moteur** (`ATTERRIR PLANE`, et via `EMERGENCY OVERRIDE`
+  qui coupe turbines / statoréacteur / scramjet et vidange JP-7 et H2) : profil façon navette —
+  pente extérieure de 9° vers un point d'aboutissement 4,5 km avant le seuil, vitesse tenue aux
+  aérofreins, pré-arrondi anticipé vers une pente intérieure de 3°, train à 2 NM, arrondi au-dessus
+  du seuil ; poussée et manette nulles imposées, pas de remise des gaz. Essai de vol automatique :
+  14 NM d'Edwards moteurs coupés → toucher à 109 KEAS, -618 ft/min, arrêt sur la piste, poussée
+  maximale mesurée 0 N.

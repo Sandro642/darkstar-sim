@@ -1436,6 +1436,16 @@ impl Game {
                 Some(_) => reply = Err("AU SOL".into()),
                 None => reply = Err("USAGE : DIRECT KEDW (code OACI)".into()),
             },
+            "LAND" | "ATTERRIR" | "AUTOLAND" | "ATTERRISSAGE" if matches!(arg(1), "PLANE" | "DEADSTICK") => {
+                let i = if arg(2).is_empty() { Some(self.dest) } else { apt_arg(2) };
+                match i {
+                    Some(i) => {
+                        self.dest = i;
+                        reply = ac.engage_autoland_dead_stick(i).map(|_| format!("AUTOLAND PLANE {}", AIRPORTS[i].icao));
+                    }
+                    None => reply = Err(format!("AÉROPORT INCONNU : {}", arg(2))),
+                }
+            }
             "LAND" | "ATTERRIR" | "AUTOLAND" | "ATTERRISSAGE" => {
                 let i = if arg(1).is_empty() { Some(self.dest) } else { apt_arg(1) };
                 match i {

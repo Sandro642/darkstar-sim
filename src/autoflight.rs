@@ -33,6 +33,23 @@ pub struct Autoland {
     /// Attente (orbite) à l'IAF pour perdre altitude / vitesse avant l'approche.
     pub holding: bool,
     pub go_arounds: u32,
+    /// Atterrissage plané sans moteur : poussée nulle, pas de remise des gaz possible.
+    pub dead_stick: bool,
+}
+
+/// Plané sans moteur (façon navette spatiale) : pente extérieure forte vers un point d'aboutissement
+/// avant le seuil, vitesse tenue aux aérofreins, puis pré-arrondi sur une pente intérieure faible où
+/// la vitesse décroît jusqu'à l'arrondi.
+const DS_OUTER_DEG: f64 = 9.0;
+const DS_AIM: f64 = 4_500.0;
+const DS_INNER_DEG: f64 = 3.0;
+const DS_KEAS: f64 = 225.0;
+
+/// Hauteur du profil plané à la distance `along` avant le seuil (m).
+pub fn dead_stick_path(along: f64) -> f64 {
+    let outer = (along - DS_AIM) * DS_OUTER_DEG.to_radians().tan();
+    let inner = (along + 600.0) * DS_INNER_DEG.to_radians().tan();
+    outer.max(inner).max(0.0)
 }
 
 impl Autoland {
@@ -44,7 +61,7 @@ impl Autoland {
             let (tla, tlo) = a.point(along_thr, 0.0);
             let iaf = destination(tla, tlo, wrap360(hdg + 180.0), IAF_DIST);
             let (d, _) = dist_brg(lat, lon, iaf.0, iaf.1);
-            let al = Autoland { apt: apt_idx, thr_lat: tla, thr_lon: tlo, hdg, elev: a.elev, iaf, phase: AlPhase::ToIaf, gs_captured: false, holding: false, go_arounds: 0 };
+            let al = Autoland { apt: apt_idx, thr_lat: tla, thr_lon: tlo, hdg, elev: a.elev, iaf, phase: AlPhase::ToIaf, gs_captured: false, holding: false, go_arounds: 0, dead_stick: false };
             if best.as_ref().map_or(true, |(bd, _)| d < *bd) {
                 best = Some((d, al));
             }
@@ -83,6 +100,33 @@ impl Aircraft {
         self.ap.vert = VertMode::Alt;
         self.ap.lat = LatMode::Hdg;
         self.msg(Level::Info, format!("AUTOLAND ARMÉ : {} PISTE {:02} — RALLIEMENT IAF 15 NM", AIRPORTS[apt].icao, num));
+        Ok(())
+    }
+
+    /// Atterrissage automatique plané, sans moteur : sens de piste face à l'avion, approche directe.
+    pub fn engage_autoland_dead_stick(&mut self, apt: usize) -> Result<(), String> {
+        if self.on_ground {
+            return Err("AU SOL".into());
+        }
+        let a = &AIRPORTS[apt];
+        // Seuil le plus proche dans l'axe de la position actuelle (pas de circuit possible en plané)
+        let mut best: Option<(f64, f64, f64, f64)> = None;
+        for (along_thr, hdg) in [(-a.len / 2.0, a.hdg), (a.len / 2.0, wrap360(a.hdg + 180.0))] {
+            let (tla, tlo) = a.point(along_thr, 0.0);
+            let along = along_before(tla, tlo, hdg, self.lat, self.lon);
+            if best.is_none_or(|b| along > b.0) {
+                best = Some((along, tla, tlo, hdg));
+            }
+        }
+        let (_, tla, tlo, hdg) = best.unwrap();
+        let al = Autoland { apt, thr_lat: tla, thr_lon: tlo, hdg, elev: a.elev, iaf: (tla, tlo), phase: AlPhase::Approach, gs_captured: false, holding: false, go_arounds: 0, dead_stick: true };
+        let num = al.runway_number();
+        self.autoland = Some(al);
+        self.autotakeoff = None;
+        self.ap.on = true;
+        self.ap.at_on = false;
+        self.throttle = 0.0;
+        self.msg(Level::Warning, format!("AUTOLAND PLANE SANS MOTEUR : {} PISTE {num:02} — PAS DE REMISE DES GAZ POSSIBLE", a.icao));
         Ok(())
     }
 
@@ -197,7 +241,53 @@ impl Aircraft {
         let mut out = None;
         let mut say: Option<String> = None;
 
+        let dead_stick = self.autoland.as_ref().is_some_and(|a| a.dead_stick);
         match phase {
+            AlPhase::Approach if dead_stick => {
+                self.ap.on = true;
+                self.ap.at_on = false;
+                // Latéral : poursuite d'un point de l'axe 2 NM devant, puis LOC près de l'axe
+                if cross.abs() < 600.0 && along < 10.0 * NM {
+                    self.ap.lat = LatMode::Loc;
+                } else {
+                    let ahead = (along - 2.0 * NM).max(-1_000.0);
+                    let (pla, plo) = destination(tla, tlo, wrap360(hdg + 180.0), ahead);
+                    self.ap.lat = LatMode::Hdg;
+                    self.ap.hdg_tgt = dist_brg(self.lat, self.lon, pla, plo).1;
+                }
+                // Vertical : suivi du profil plané par la pente (assiette = pente + incidence)
+                let h_path = dead_stick_path(along);
+                // Pente du profil anticipée ~5 s devant : le pré-arrondi commence avant la cassure
+                let look = (self.tas * 5.0).max(300.0);
+                let h_ahead = dead_stick_path((along - look).max(-600.0));
+                let path_gamma = ((h_ahead - h_path) / look).atan().to_degrees();
+                let slope = -path_gamma;
+                let err = h_path - agl;
+                // Correction d'écart douce sous 1500 ft (pas de plongée après le pré-arrondi)
+                let corr = if agl < 1_500.0 * FT { (err / 150.0).clamp(-1.5, 2.5) } else { (err / 60.0).clamp(-5.0, 5.0) };
+                let mut gamma_cmd = path_gamma + corr;
+                // Protection de vitesse : sous VAPP - 10, on plonge pour garder l'énergie
+                let va = vapp(self);
+                // Protection de vitesse au-dessus de 1500 ft seulement : en courte finale la
+                // décélération sur la pente intérieure est voulue (arrondi à vitesse réduite)
+                if self.d.keas < va - 10.0 && agl > 1_500.0 * FT {
+                    gamma_cmd = gamma_cmd.min(-(slope.max(4.0)) - (va - 10.0 - self.d.keas) * 0.3);
+                }
+                gamma_cmd = gamma_cmd.clamp(-14.0, 2.0);
+                self.ap.vert = VertMode::Pitch;
+                self.ap.pitch_tgt = gamma_cmd + self.d.alpha.to_degrees();
+                // Vitesse tenue aux aérofreins sur la pente extérieure
+                self.speedbrake = slope > 5.0 && self.d.keas > DS_KEAS.max(va + 55.0);
+                if along < 2.0 * NM && !self.gear_down {
+                    self.cmd_gear();
+                }
+                // Arrondi déclenché d'autant plus haut que le taux de chute est fort
+                if agl < 15.0 + (-self.d.vs).max(0.0) * 3.0 && along < 300.0 {
+                    next = AlPhase::Flare;
+                    self.speedbrake = false;
+                    say = Some("AUTOLAND PLANE : FLARE".into());
+                }
+            }
             AlPhase::ToIaf => {
                 let (iaf_lat, iaf_lon) = self.autoland.as_ref().unwrap().iaf;
                 let (d, brg) = dist_brg(self.lat, self.lon, iaf_lat, iaf_lon);
@@ -290,7 +380,7 @@ impl Aircraft {
                     self.throttle = (self.throttle - 0.5 / 120.0).max(0.0);
                 }
                 let half = AIRPORTS[apt].len * 0.5;
-                if !self.on_ground && along < -half {
+                if !self.on_ground && along < -half && !dead_stick {
                     next = AlPhase::ToIaf;
                     let al = self.autoland.as_mut().unwrap();
                     al.go_arounds += 1;
@@ -322,6 +412,10 @@ impl Aircraft {
                     return out;
                 }
             }
+        }
+        if dead_stick {
+            self.ap.at_on = false;
+            self.throttle = 0.0;
         }
         if let Some(s) = say {
             self.msg(Level::Info, s);

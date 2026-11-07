@@ -1650,6 +1650,62 @@ mod tests {
     }
 
     #[test]
+    fn dead_stick_autoland() {
+        // Plané moteurs coupés vers Edwards depuis 14 NM, sur l'axe, au profil extérieur
+        let edw = crate::airports::AIRPORTS.iter().position(|a| a.icao == "KEDW").unwrap();
+        let apt = &crate::airports::AIRPORTS[edw];
+        let along0 = 14.0 * NM;
+        let (la, lo) = apt.point(-apt.len / 2.0 - along0, 0.0);
+        let mut ac = Aircraft::new_on_runway(edw);
+        ac.lat = la;
+        ac.lon = lo;
+        ac.psi = apt.hdg.to_radians();
+        ac.on_ground = false;
+        ac.brakes = false;
+        ac.gear_down = false;
+        ac.gear_pos = 0.0;
+        ac.alt = apt.elev + crate::autoflight::dead_stick_path(along0);
+        ac.tas = 125.0;
+        ac.gamma = -8f64.to_radians();
+        ac.theta = ac.gamma + 4f64.to_radians();
+        ac.set_turbines(TurbState::Off, 0.0);
+        ac.throttle = 0.0;
+        // Après vidange (procédure d'urgence moteurs coupés)
+        ac.fuel = 2_500.0;
+        ac.h2 = 300.0;
+        ac.engage_autoland_dead_stick(edw).unwrap();
+        let dt = 1.0 / 120.0;
+        let mut t: f64 = 0.0;
+        let mut max_thrust = 0.0f64;
+        let mut last = (0.0, 0.0, 0.0);
+        let mut max_throttle = 0.0f64;
+        let mut lp = -100.0;
+        while t < 900.0 && ac.autoland.is_some() && ac.crashed.is_none() {
+            let cmd = ac.autoflight().unwrap_or((0.0, 0.0));
+            if let Some(l) = &ac.autoland {
+                last = (along_before(l.thr_lat, l.thr_lon, l.hdg, ac.lat, ac.lon), cross_track(l.thr_lat, l.thr_lon, l.hdg, ac.lat, ac.lon), ac.d.agl);
+            }
+            ac.step(dt, cmd.0, cmd.1);
+            max_thrust = max_thrust.max(ac.eng.t_turb + ac.eng.t_ram + ac.eng.t_scram);
+            max_throttle = max_throttle.max(ac.throttle);
+            for (_, m) in ac.events.drain(..) {
+                println!("[{t:6.1}] {m}");
+            }
+            if t - lp > 10.0 {
+                lp = t;
+                let al = ac.autoland.as_ref().map(|l| along_before(l.thr_lat, l.thr_lon, l.hdg, ac.lat, ac.lon)).unwrap_or(0.0);
+                println!("t={t:5.0} keas={:4.0} agl={:6.0}ft vs={:6.0}fpm sb={} gear={:.1} seuil={:6.0}m", ac.d.keas, ac.d.agl / FT, ac.d.vs / FT * 60.0, ac.speedbrake, ac.gear_pos, al);
+            }
+            t += dt;
+        }
+        println!("crash={:?} sol={} tas={:.1} poussee max={max_thrust:.0} N manette max={max_throttle:.2} dernier seuil/ecart/hauteur={last:?}", ac.crashed, ac.on_ground, ac.tas);
+        assert!(ac.crashed.is_none(), "{:?}", ac.crashed);
+        assert!(ac.on_ground && ac.tas < 3.0, "pas arrete sur la piste");
+        assert_eq!(max_thrust, 0.0, "poussee pendant le plane");
+        assert_eq!(max_throttle, 0.0, "manette pendant le plane");
+    }
+
+    #[test]
     fn pitch_hold() {
         let mut ac = Aircraft::new_on_runway(0);
         ac.on_ground = false;

@@ -130,9 +130,16 @@ impl Emergency {
             Some((i, d)) => {
                 self.dead_stick = true;
                 ac.throttle = 0.0;
+                // Moteurs coupés : plus aucune poussée (turbines, statoréacteur, scramjet)
+                ac.set_turbines(TurbState::Off, 0.0);
+                ac.eng.ram = RamState::Off;
+                ac.eng.scram = ScramState::Off;
+                // Vidange carburant et hydrogène : masse réduite pour l'arrondi sans moteur
+                ac.fuel_dump = true;
+                ac.h2_dump = true;
                 self.set(Mode::Glide(i));
                 self.events.push((Level::Warning, "MAYDAY MAYDAY MAYDAY — OVERRIDE : AUTOLAND PLANE AUTORISE".into()));
-                Ok(format!("OVERRIDE : VOL PLANE MOTEURS AU RALENTI VERS {} {:.0} NM PUIS AUTOLAND", AIRPORTS[i].icao, d / NM))
+                Ok(format!("OVERRIDE : MOTEURS COUPES, VOL PLANE VERS {} {:.0} NM PUIS AUTOLAND PLANE", AIRPORTS[i].icao, d / NM))
             }
             None => Err("AUCUN TERRAIN EN VOL PLANE — EJECTION CONFIRME (BOITE NOIRE SAUVEGARDEE)".into()),
         }
@@ -271,7 +278,7 @@ impl Emergency {
                         ac.cmd_gear();
                     }
                     self.events.push((Level::Warning, format!("{} EN VUE — AUTOLAND PLANE ENGAGE, TRAIN SORTI", apt.icao)));
-                    self.cmds.push("ATTERRIR".into());
+                    self.cmds.push(format!("ATTERRIR PLANE {}", apt.icao));
                     self.phase = 2;
                     self.mode = None;
                     self.dead_stick = false;
