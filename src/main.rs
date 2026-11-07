@@ -5,6 +5,7 @@ mod alarms;
 mod airports;
 mod atmosphere;
 mod elec;
+mod emergency;
 mod audio;
 mod combat;
 mod autoflight;
@@ -98,6 +99,7 @@ struct Game {
     wx: weather::Weather,
     refuel: refuel::Refuel,
     combat: combat::Combat,
+    emerg: emergency::Emergency,
     bingo_manual: Option<f64>,
     fuel_plan: fuel::Plan,
     fuel_change_t: f64,
@@ -207,6 +209,7 @@ impl Game {
             wx: weather::Weather::new(),
             refuel: refuel::Refuel::new(),
             combat: combat::Combat::new(),
+            emerg: emergency::Emergency::new(),
             bingo_manual: None,
             fuel_plan: fuel::Plan::default(),
             fuel_change_t: -100.0,
@@ -804,6 +807,15 @@ impl Game {
         for (l, m) in rfe {
             self.push(l, m);
         }
+        // Procédure d'urgence : décisions et instructions automatiques
+        self.emerg.update(sim_dt, &mut self.ac, &self.refuel);
+        for c in std::mem::take(&mut self.emerg.cmds) {
+            self.exec_command(&c);
+        }
+        let eev: Vec<_> = self.emerg.events.drain(..).collect();
+        for (l, m) in eev {
+            self.push(l, m);
+        }
         // Carburant : bingo / joker / minimum, annonces sur changement de niveau
         let tk = self.refuel.tanker.as_ref().map(|t| (t.callsign, t.lat, t.lon));
         let plan = fuel::plan(&self.ac, self.dest, self.bingo_manual, tk);
@@ -1072,6 +1084,22 @@ impl Game {
             "ARMEMENT" | "ARMES" => {
                 self.tab = gcs::Tab::Armement;
                 reply = Ok("PAGE ARMEMENT".into());
+            }
+            "EMERGENCY" | "URGENCE" | "MAYDAY" => {
+                if arg(1) == "OFF" {
+                    self.emerg.cancel();
+                    reply = Ok("URGENCE ANNULEE".into());
+                } else {
+                    reply = self.emerg.start(ac, &self.refuel);
+                }
+            }
+            "EJECTION" | "EJECT" => {
+                if matches!(arg(1), "CONFIRME" | "CONFIRM") && airborne {
+                    self.emerg.eject_now();
+                    reply = Ok("EJECTION CONFIRMEE".into());
+                } else {
+                    reply = Err("CONFIRMER : EJECTION CONFIRME".into());
+                }
             }
             "HUD" | "INFOS" => {
                 pfd_plus::hud_show_all(10.0);
@@ -1451,6 +1479,7 @@ impl Game {
                     "METEO CALME|BEAU|NUAGEUX|COUVERT|ORAGEUX  HUD (infos ephemeres 10 s, ou survol)",
                     "TANKER [OACI|OFF]  RAVITAILLEMENT (autonome)  DECROCHER  BINGO [AUTO|t]",
                     "CHAFF  FLARE  ECM ON|OFF  CMDS AUTO|MAN  TIR [I|J|K] (HACM)  ARMEMENT (page)",
+                    "EMERGENCY [OFF] (ravitaillement > terrain proche > ejection)  EJECTION CONFIRME",
                     "TRAIN UP/DOWN | FREINS ON/OFF | AP ON/OFF | MANUEL | WARP 8",
                 ] {
                     self.log.push((self.sim_time, Level::Info, l.into()));
@@ -1674,6 +1703,7 @@ async fn main() {
             if !g.ac.on_ground {
                 combat::draw_hud(&g.combat, svs_r);
             }
+            emergency::draw_hud(&g.emerg, &g.ac, svs_r, time);
             // Bouton MENU du PFD : ouvre l'onglet CONSOLE
             let menu_btn = Rect::new(svs_r.x + 6.0, svs_r.y + svs_r.h + 7.0, 70.0, 18.0);
             if g.tab == gcs::Tab::Console {

@@ -291,3 +291,18 @@ Le SR-72 est un avion de reconnaissance : sa charge utile est simulée.
   site n'est détruit que si l'erreur ELINT est inférieure à 400 m ; un site détruit n'émet plus.
 - Page **ARMEMENT** (12e onglet, instruction `ARMEMENT`) : contre-mesures, missiles en vol (distance,
   vitesse, temps d'impact, leurrés), HACM et sites tirables.
+
+## Procédure d'urgence (v1.13.0)
+- `EMERGENCY` (ou `URGENCE`, `MAYDAY`) : MAYDAY / transpondeur 7700, puis décision automatique dans
+  cet ordre :
+  1. **ravitaillement en vol** si un ravitailleur est joignable avec le carburant restant (ou le
+     ravitailleur d'alerte si l'autonomie dépasse 20 min et qu'il reste plus de 5 t), sous Mach 1,5 ;
+  2. sinon **terrain joignable le plus proche** : au carburant (moteurs disponibles) avec descente
+     hypersonique, réouverture des entrées et redémarrage des turbines si besoin puis atterrissage
+     automatique ; ou en **vol plané** (finesse 7) si les moteurs sont perdus ;
+  3. sinon **éjection** : siège, parachute, balise de détresse avec la position, effacement des
+     données et des clés, puis **autodestruction** de la cellule.
+- Réévaluation automatique en cas d'échec (ravitaillement abandonné, turbines qui ne redémarrent pas,
+  autoland refusé, terrain hors de portée en plané).
+- `EMERGENCY OFF` pour annuler ; `EJECTION CONFIRME` pour s'éjecter immédiatement.
+- Bandeau EMERGENCY 7700 sur l'horizon avec l'option en cours ; compte à rebours d'autodestruction.

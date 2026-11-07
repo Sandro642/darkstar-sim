@@ -51,14 +51,19 @@ pub struct Plan {
     pub tanker: Option<(&'static str, f64)>,
 }
 
+/// Consommation de JP-7 par mètre sol : régime actuel s'il est représentatif (subsonique), sinon
+/// croisière de planification.
+pub fn burn_per_m(ac: &Aircraft) -> f64 {
+    let (gs, ff) = (ac.ground_speed(), ac.eng.fuel_flow);
+    if ff > 0.05 && gs > 100.0 && ac.d.mach < 1.2 { (ff / gs).clamp(PLAN_BURN_PER_M * 0.5, PLAN_BURN_PER_M * 3.0) } else { PLAN_BURN_PER_M }
+}
+
 /// Calcule le plan carburant. `manual` : bingo imposé (kg).
 pub fn plan(ac: &Aircraft, dest: usize, manual: Option<f64>, tanker: Option<(&'static str, f64, f64)>) -> Plan {
     let apt = &AIRPORTS[dest];
     let (dist, brg) = dist_brg(ac.lat, ac.lon, apt.lat, apt.lon);
     let gs = ac.ground_speed();
-    let ff = ac.eng.fuel_flow;
-    // Consommation par mètre : régime actuel s'il est représentatif (subsonique, JP-7), sinon planification
-    let per_m = if ff > 0.05 && gs > 100.0 && ac.d.mach < 1.2 { (ff / gs).clamp(PLAN_BURN_PER_M * 0.5, PLAN_BURN_PER_M * 3.0) } else { PLAN_BURN_PER_M };
+    let per_m = burn_per_m(ac);
     let need = dist * per_m;
     let auto_bingo = need + APPROACH + RESERVE;
     let bingo = manual.unwrap_or(auto_bingo);
