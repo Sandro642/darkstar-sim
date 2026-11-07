@@ -127,6 +127,8 @@ struct Game {
     /// Écran de connexion à la flotte (démarrage).
     connect: Option<connect::ConnectUi>,
     link_msg: String,
+    /// Minimums en approche : 0 rien, 1 « approaching minimums » annoncé, 2 décision attendue, 3 décidé.
+    mins: u8,
     /// Surveillance des chambres de combustion (courbes et état calculé).
     chambers: health::ChamberMon,
     /// Instructions générées à bord (procédure d'urgence) : pas besoin de liaison.
@@ -291,6 +293,7 @@ impl Game {
             stale: None,
             connect: None,
             link_msg: String::new(),
+            mins: 0,
             chambers: health::ChamberMon::new(),
             onboard: false,
             taxi: None,
@@ -540,88 +543,17 @@ impl Game {
     /// Deuxième chance réussie : le véhicule répond par le secours Iridium. L'autonomie de bord a
     /// stabilisé l'avion, moteurs perdus ; seules les instructions d'urgence passent.
     fn recover_vehicle(&mut self) {
+        // Reconnexion immédiate : l'avion reprend exactement l'état de la dernière trame avant la
+        // déconnexion (attitude, vitesse, configuration, modes, pannes réelles), liaison rétablie
         let mut ac = self.last_ac.clone().unwrap_or_else(|| self.ac.clone());
-        let kind = self.mishap.as_ref().map(|m| m.kind);
-        let lights = self.mishap.as_ref().map(|m| m.lights()).unwrap_or([0; 32]);
         ac.crashed = None;
-        ac.phi = 0.0;
-        ac.gamma = -5f64.to_radians();
-        ac.theta = ac.gamma + 4f64.to_radians();
-        // Pression dynamique ramenée sous 30 kPa (l'avion a perdu de la vitesse en se stabilisant)
-        let rho = atmosphere::isa(ac.alt).rho;
-        ac.tas = ac.tas.min((2.0 * 30_000.0 / rho).sqrt()).max(90.0);
-        ac.set_turbines(TurbState::Off, 0.0);
-        ac.eng.ram = RamState::Off;
-        ac.eng.scram = ScramState::Off;
-        ac.throttle = 0.0;
-        ac.autoland = None;
-        // Parois et peau refroidies sous leurs limites (la cellule a survécu)
-        ac.skin_temp = ac.skin_temp.min(SKIN_LIMIT_C + 273.15 - 60.0);
-        ac.eng.ram_wall = ac.eng.ram_wall.min(systems::RAM_WALL_CAUTION - 200.0);
-        ac.eng.scram_wall = ac.eng.scram_wall.min(systems::SCRAM_WALL_CAUTION - 200.0);
-        match kind {
-            Some(mishap::Kind::Electrical) => {
-                ac.elec.lost = false;
-                ac.elec.bus_ok = true;
-                ac.elec.batt = ac.elec.batt.max(0.4);
-            }
-            Some(mishap::Kind::Explosion) | Some(mishap::Kind::Missile) => ac.eng.combustor_failed = true,
-            Some(mishap::Kind::Structural) => ac.set_failure(systems::Fail::FcsDirect, true),
-            _ => {}
-        }
-        ac.ap.on = true;
-        ac.ap.at_on = false;
-        ac.ap.lat = LatMode::Hdg;
-        ac.ap.hdg_tgt = ac.hdg_deg().round();
-        ac.ap.vert = VertMode::Pitch;
-        ac.ap.pitch_tgt = -1.0;
         self.ac = ac;
         self.mishap = None;
         self.crash_report.clear();
         self.stale = None;
-        self.link.state = link::State::Connected;
-        self.link.path = link::Path::Emerg;
-        self.push(Level::Warning, "2E CHANCE : LE VEHICULE REPOND ! TELEMESURE PARTIELLE VIA IRIDIUM");
-        self.push(Level::Warning, "AUTONOMIE DE BORD : ASSIETTE RECUPEREE — MOTEURS PERDUS");
-        self.push(Level::Warning, "INSTRUCTIONS TRANSMISES PAR IRIDIUM (LATENCE 2,5 S), MANCHE INDISPONIBLE — EMERGENCY OVERRIDE (autoland plane) OU EJECTION CONFIRME");
-        // Le panneau d'alarmes reflète l'état réel : chaque voyant de panne resté allumé devient une
-        // panne effective (les voyants de simple condition s'éteignent si la condition a cessé)
-        self.apply_tree(&lights);
-    }
-
-    /// Pannes réelles correspondant aux voyants du panneau d'alarmes (ordre de alarms::LIGHTS).
-    fn apply_tree(&mut self, l: &[u8; 32]) {
-        use systems::Fail;
-        let on = |i: usize| l[i] > 0;
-        let ac = &mut self.ac;
-        for (i, f) in [(0, Fail::GenL), (1, Fail::GenR), (10, Fail::ScramCool), (13, Fail::FuelPump), (15, Fail::H2Leak), (22, Fail::Adc), (23, Fail::FcsDirect), (26, Fail::Hyd), (28, Fail::GearJam), (29, Fail::InletJam)] {
-            if on(i) {
-                ac.set_failure(f, true);
-            }
-        }
-        for k in 0..2 {
-            if on(2 + k) {
-                ac.eng.fadec_fault[k] = true;
-            }
-            if on(4 + k) {
-                ac.eng.side[k] = TurbState::Failed;
-                ac.eng.n2s[k] = 0.0;
-            }
-        }
-        if on(4) && on(5) {
-            ac.eng.turb = TurbState::Failed;
-        }
-        if on(11) {
-            ac.eng.combustor_failed = true;
-        }
-        ac.fuel_dump |= on(16);
-        ac.h2_dump |= on(17);
-        if on(31) {
-            for s in self.thermal.sensors.iter_mut().step_by(5) {
-                s.failed = true;
-            }
-        }
         self.tree = None;
+        self.link.state = link::State::Connected;
+        self.push(Level::Info, format!("RECONNEXION IMMEDIATE : LIAISON RETABLIE VIA {} — REPRISE DU VOL DANS LA CONFIGURATION PRECEDENTE", self.link.path.name()));
     }
 
     /// Place l'appareil choisi sur son terrain : aligné sur la piste ou au point d'attente.
@@ -1085,6 +1017,30 @@ impl Game {
             self.link_msg = s.clone();
             self.push(l, s);
         }
+        // Minimums (hauteur de décision 200 ft au-dessus du seuil) en approche ILS / autoland
+        match self.ac.approach.filter(|_| !self.ac.on_ground && self.ac.crashed.is_none()) {
+            Some((_, _, _, _, tel)) => {
+                let h = (self.ac.alt - tel) / FT;
+                let dead = self.ac.autoland.as_ref().is_some_and(|a| a.dead_stick);
+                if h > 1_500.0 {
+                    self.mins = 0;
+                } else if !dead && self.mins == 0 && h < 300.0 && self.ac.d.vs < 0.0 {
+                    self.mins = 1;
+                    self.flash("APPROACHING MINIMUMS", ui::AMBER);
+                    self.cues.push(audio::Cue::Ack);
+                } else if !dead && self.mins == 1 && h < 200.0 {
+                    self.mins = 2;
+                    self.flash("MINIMUMS", ui::AMBER);
+                    self.cues.push(audio::Cue::Ack);
+                    self.push(Level::Caution, "MINIMUMS — DECISION : CONTINUE OU GO AROUND");
+                } else if self.mins == 2 && h < 60.0 {
+                    // Sans décision avant 60 ft : l'approche continue
+                    self.mins = 3;
+                    self.push(Level::Info, "MINIMUMS : PAS DE DECISION — APPROCHE CONTINUEE");
+                }
+            }
+            None => self.mins = 0,
+        }
         // Roulage automatique vers la piste
         if let Some((pts, i, fin)) = &mut self.taxi {
             let ac = &mut self.ac;
@@ -1219,7 +1175,7 @@ impl Game {
         }
         match second {
             Some(true) => self.recover_vehicle(),
-            Some(false) => self.push(Level::Warning, "2E CHANCE : AUCUNE REPONSE DU VEHICULE — PERTE CONFIRMEE"),
+            Some(false) => self.push(Level::Warning, "RECONNEXION : AUCUNE REPONSE DU VEHICULE — PERTE CONFIRMEE"),
             None => {}
         }
         if self.ac.crashed.is_some() {
@@ -1415,7 +1371,7 @@ impl Game {
                 if let Some(m) = &mut self.mishap {
                     m.try_second();
                 }
-                reply = Ok("2E CHANCE : TENTATIVE DE RECONNEXION PAR LE SECOURS IRIDIUM".into());
+                reply = Ok("RECONNEXION IMMEDIATE EN COURS".into());
             }
             // Injection d'incident grave (essais) : perte du véhicule de la cause choisie
             "INCIDENT" if airborne => {
@@ -1477,6 +1433,14 @@ impl Game {
                 }
                 _ => reply = Err("PAS AU POINT D'ATTENTE".into()),
             },
+            "CONTINUE" | "CONTINUER" | "LAND" if w.len() == 1 && self.mins == 2 => {
+                self.mins = 3;
+                reply = Ok("CONTINUE — ATTERRISSAGE".into());
+            }
+            "GO" | "GA" | "REMISE" | "REMETTRE" | "GOAROUND" => {
+                self.mins = 3;
+                reply = ac.go_around();
+            }
             "EMERGENCY" | "URGENCE" | "MAYDAY" if matches!(arg(1), "OVERRIDE" | "OVRD") => {
                 reply = self.emerg.start_override(ac);
             }
@@ -2182,13 +2146,13 @@ async fn main() {
             let lay = mfd::layout(mfd_r).1;
             let svs_r = lay.inner;
             draw_console(&g, svs_r);
-            // Essai automatique de la deuxième chance (DARKSTAR_AUTO2=1)
+            // Essai automatique de la reconnexion immédiate (DARKSTAR_AUTO2=1)
             let auto2 = std::env::var("DARKSTAR_AUTO2").is_ok() && g.mishap.as_ref().is_some_and(|m| m.lost() && m.second == mishap::Second::Available);
             if g.mishap.as_ref().is_some_and(|m| m.draw_los(svs_r)) || auto2 {
                 if let Some(m) = &mut g.mishap {
                     m.try_second();
                 }
-                g.push(Level::Info, "GCS > 2E CHANCE : TENTATIVE DE RECONNEXION PAR LE SECOURS IRIDIUM");
+                g.push(Level::Info, "GCS > RECONNEXION IMMEDIATE");
             }
             if let Some(m) = &g.mishap {
                 // Analyse de l'enregistreur après quelques secondes de perte du signal
@@ -2203,6 +2167,27 @@ async fn main() {
                 combat::draw_hud(&g.combat, svs_r);
             }
             emergency::draw_hud(&g.emerg, &g.ac, svs_r, time);
+            // Décision aux minimums : CONTINUE ou GO AROUND
+            if g.mins == 2 {
+                let (cx, y) = (svs_r.x + svs_r.w / 2.0, svs_r.y + svs_r.h * 0.62);
+                let blink = (time * 2.0).fract() < 0.6;
+                ui::rrect(Rect::new(cx - 160.0, y - 30.0, 320.0, 68.0), 8.0, Color::new(0.0, 0.0, 0.0, 0.8));
+                if blink {
+                    ui::txt_c("MINIMUMS", cx, y - 10.0, 20.0, ui::AMBER);
+                }
+                let bc = Rect::new(cx - 150.0, y + 4.0, 140.0, 26.0);
+                let bg = Rect::new(cx + 10.0, y + 4.0, 140.0, 26.0);
+                for (b, l, c) in [(bc, "CONTINUE", ui::GREEN_S), (bg, "GO AROUND", ui::AMBER)] {
+                    ui::rrect(b, 6.0, if ui::hovered(b) { Color::new(0.15, 0.17, 0.2, 1.0) } else { Color::new(0.08, 0.09, 0.11, 1.0) });
+                    ui::rrect_lines(b, 6.0, 1.5, c);
+                    ui::txt_c(l, b.x + b.w / 2.0, b.y + 18.0, 14.0, c);
+                }
+                if ui::clicked(bc) {
+                    g.exec_command("CONTINUE");
+                } else if ui::clicked(bg) {
+                    g.exec_command("GO AROUND");
+                }
+            }
             // Liaison perdue ou réduite au secours : bandeau et choix du relais
             if g.connect.is_none() && g.ac.crashed.is_none() && !g.link.full() {
                 let last = g.stale.as_ref().unwrap_or(&g.ac);

@@ -467,3 +467,10 @@ Le SR-72 est un avion de reconnaissance : sa charge utile est simulée.
   finale, vitesse tenue pendant le plané, cône d'alignement façon navette quand l'avion est trop
   haut (spirale tangente à l'axe, pente planifiée), gestion d'énergie totale aux aérofreins en
   finale. Essais : départ FL459 à 16 NM, FL300 au nord, FL150 par le travers → posés sur la piste.
+- v1.30.0 : **minimums** en approche ILS / autoland — « APPROACHING MINIMUMS » (300 ft), puis
+  « MINIMUMS » (200 ft) avec choix CONTINUE / GO AROUND sur l'horizon (boutons ou instructions
+  `CONTINUE`, `GO AROUND`) ; sans décision à 60 ft l'approche continue ; remise des gaz : pleine
+  poussée, montée 3000 ft sol, train rentré, autoland relancé (impossible en plané sans moteur).
+  **Reconnexion immédiate** (remplace la « 2e chance ») : l'avion reprend exactement l'état de la
+  dernière trame avant la déconnexion (attitude, vitesse, configuration, modes, pannes réelles),
+  liaison rétablie sur le chemin précédent ; le panneau d'alarmes reprend l'état réel.

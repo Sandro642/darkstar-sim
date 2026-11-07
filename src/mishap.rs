@@ -348,7 +348,7 @@ impl Mishap {
                 let hov = hovered(bt);
                 rrect(bt, 6.0, if hov { Color::new(0.08, 0.3, 0.36, 1.0) } else { Color::new(0.04, 0.18, 0.22, 0.95) });
                 rrect_lines(bt, 6.0, 1.5, CYAN_S);
-                txt_c("2E CHANCE : TENTER UNE RECONNEXION (SECOURS)", bt.x + bt.w / 2.0, bt.y + 17.0, 12.0, WHITE);
+                txt_c("RECONNEXION IMMEDIATE", bt.x + bt.w / 2.0, bt.y + 17.0, 12.0, WHITE);
                 return clicked(bt);
             }
             Second::Trying(t0) => {
@@ -356,7 +356,7 @@ impl Mishap {
                 rrect(bt, 6.0, Color::new(0.0, 0.0, 0.0, 0.85));
                 draw_rectangle(bt.x + 2.0, bt.y + bt.h - 5.0, (bt.w - 4.0) * k, 3.0, CYAN_S);
                 let step = crate::link::STEPS[((k * 5.0) as usize).min(4)];
-                txt_c(&format!("IRIDIUM : {step}..."), bt.x + bt.w / 2.0, bt.y + 16.0, 12.0, CYAN_S);
+                txt_c(&format!("RECONNEXION : {step}..."), bt.x + bt.w / 2.0, bt.y + 16.0, 12.0, CYAN_S);
             }
             Second::Failed => {
                 rrect(bt, 6.0, Color::new(0.0, 0.0, 0.0, 0.85));

@@ -133,6 +133,39 @@ impl Aircraft {
         Ok(())
     }
 
+    /// Remise des gaz (décision aux minimums) : pleine poussée, montée vers 3000 ft sol, train rentré.
+    pub fn go_around(&mut self) -> Result<String, String> {
+        if self.on_ground {
+            return Err("AU SOL".into());
+        }
+        let elev = self.approach.map(|a| a.4).unwrap_or(self.d.elev);
+        if let Some(al) = self.autoland.as_mut() {
+            if al.dead_stick {
+                return Err("PLANE SANS MOTEUR : PAS DE REMISE DES GAZ POSSIBLE".into());
+            }
+            al.phase = AlPhase::ToIaf;
+            al.go_arounds += 1;
+            al.gs_captured = false;
+            al.holding = false;
+        } else {
+            self.ap.lat = LatMode::Hdg;
+            self.ap.hdg_tgt = self.hdg_deg().round();
+        }
+        self.ap.on = true;
+        self.ap.loc_armed = false;
+        self.ap.gs_armed = false;
+        self.ap.vert = VertMode::Alt;
+        self.ap.alt_tgt_ft = (elev / FT + 3_000.0).round();
+        self.ap.at_on = true;
+        self.ap.spd_keas = Some(230.0);
+        self.speedbrake = false;
+        self.throttle = self.thr_max().min(1.0);
+        if self.gear_down {
+            self.cmd_gear();
+        }
+        Ok(format!("REMISE DES GAZ — MONTEE {:.0} FT", self.ap.alt_tgt_ft))
+    }
+
     pub fn engage_takeoff(&mut self, alt_ft: f64) -> Result<(), String> {
         if !self.on_ground {
             return Err("DÉJÀ EN VOL".into());
