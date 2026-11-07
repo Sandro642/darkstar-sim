@@ -184,19 +184,12 @@ impl Mishap {
         Mishap { second: Second::Available, start: now_s(), cause: cause.to_string(), kind, t_los, msgs, next: 0, lights, snap }
     }
 
-    /// Probabilité que le véhicule réponde encore (selon la cause) : un avion qui a percuté le sol ou
-    /// s'est autodétruit ne répondra jamais ; une perte électrique ou une explosion moteur laisse
-    /// souvent la cellule intacte.
+    /// Le véhicule répond toujours à la deuxième chance, sauf s'il a percuté le sol (ou s'est
+    /// autodétruit après éjection) : la cellule existe encore et le secours Iridium a sa batterie.
     pub fn chance(&self) -> f64 {
-        let c = self.cause.to_uppercase();
         match self.kind {
             Kind::Impact | Kind::SelfDestruct => 0.0,
-            Kind::Electrical => 0.7,
-            Kind::Explosion => 0.5,
-            Kind::Missile => 0.25,
-            Kind::Structural if c.contains("GOUVERNES") => 0.35,
-            Kind::Structural if c.contains("FACTEUR") => 0.2,
-            Kind::Structural => 0.1,
+            _ => 1.0,
         }
     }
 
@@ -211,8 +204,7 @@ impl Mishap {
     pub fn second_result(&mut self) -> Option<bool> {
         if let Second::Trying(t0) = self.second {
             if now_s() - t0 >= 8.0 {
-                let r = (now_s() * 1000.0).fract();
-                let ok = r < self.chance();
+                let ok = self.chance() > 0.5;
                 if !ok {
                     self.second = Second::Failed;
                 }

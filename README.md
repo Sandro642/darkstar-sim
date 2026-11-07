@@ -454,3 +454,5 @@ Le SR-72 est un avion de reconnaissance : sa charge utile est simulée.
   rupture détruit les deux moteurs d'un coup sans perdre la cellule (vol plané, EMERGENCY OVERRIDE
   ou éjection). Pire cas mesuré (manette 200 %, override, Mach 9,8) : 55 s entre la première
   alerte et la rupture.
+- v1.29.3 : deuxième chance garantie — le véhicule répond toujours à la reconnexion par le secours
+  Iridium, sauf s'il a percuté le sol (ou s'est autodétruit après éjection).
