@@ -9,7 +9,7 @@ use crate::ui::*;
 use macroquad::prelude::*;
 
 pub const HUD_GREEN: Color = Color::new(0.35, 1.0, 0.5, 0.95);
-const PANEL_DARK: Color = Color::new(0.075, 0.078, 0.082, 1.0);
+const PANEL_DARK: Color = Color::new(0.045, 0.047, 0.05, 0.92);
 
 /// Champ vertical de la vue extérieure (degrés) et site par défaut du regard (vers la planche).
 pub const FOVY: f32 = 56.0;
@@ -129,30 +129,6 @@ pub fn dial(c: Vec2, r: f32, f: f32, label: &str, ticks: &[&str]) {
     txt_c(label, c.x, c.y + r * 0.45, 12.0, WHITE);
 }
 
-/// Interrupteur gardé à capot rouge ; vrai si cliqué.
-pub fn guarded(r: Rect, label: &str, on: bool, time: f64) -> bool {
-    plate(r);
-    let gw = r.w * 0.34;
-    let g = Rect::new(r.x + r.w - gw - 12.0, r.y + 12.0, gw, r.h - 24.0);
-    // Capot relevé (rouge) quand l'interrupteur est actif
-    let red = Color::new(0.78, 0.08, 0.06, 1.0);
-    if on {
-        rrect(Rect::new(g.x, g.y - g.h * 0.55, g.w, g.h * 0.55), 4.0, red);
-        draw_circle(g.x + g.w / 2.0, g.y + g.h * 0.55, 6.0, Color::new(0.85, 0.85, 0.87, 1.0));
-        if (time * 2.0).fract() < 0.6 {
-            draw_circle(g.x + g.w / 2.0, g.y + g.h * 0.85, 4.0, AMBER);
-        }
-    } else {
-        rrect(g, 5.0, red);
-        draw_rectangle(g.x + 3.0, g.y + 3.0, g.w - 6.0, g.h * 0.2, Color::new(1.0, 1.0, 1.0, 0.18));
-    }
-    let lines: Vec<&str> = label.split(' ').collect();
-    for (i, l) in lines.iter().enumerate() {
-        txt(l, r.x + 14.0, r.y + 24.0 + i as f32 * 18.0, 15.0, Color::new(0.75, 1.0, 0.45, 1.0));
-    }
-    clicked(r)
-}
-
 /// Levier de train (tirer vers le bas = sortie) ; vrai si cliqué.
 pub fn gear_lever(r: Rect, down: bool) -> bool {
     plate(r);
@@ -201,4 +177,21 @@ pub fn dsply(r: Rect) {
             txt_c(l, c.x + (r.w - 50.0) / 8.0, r.y + 16.0, 11.0, Color::new(0.75, 1.0, 0.45, 1.0));
         }
     }
+}
+
+/// Interrupteur gardé du cockpit 3D (capot rouge modélisé) : légende, voyant d'activation, zone cliquable.
+pub fn guard_label(r: Rect, label: &str, on: bool, time: f64) -> bool {
+    let fs = (r.h / 5.5).clamp(7.0, 12.0);
+    let col = Color::new(0.75, 1.0, 0.45, 0.95);
+    for (i, l) in label.split(' ').enumerate() {
+        txt(l, r.x + 1.0, r.y + fs + i as f32 * (fs + 1.0) + 1.0, fs, Color::new(0.0, 0.0, 0.0, 0.8));
+        txt(l, r.x, r.y + fs + i as f32 * (fs + 1.0), fs, col);
+    }
+    if on && (time * 2.0).fract() < 0.6 {
+        draw_circle(r.x + r.w - 6.0, r.y + r.h - 6.0, 4.0, AMBER);
+    }
+    if hovered(r) {
+        draw_rectangle_lines(r.x, r.y, r.w, r.h, 1.0, Color::new(1.0, 1.0, 1.0, 0.25));
+    }
+    clicked(r)
 }

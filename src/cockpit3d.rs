@@ -198,6 +198,36 @@ impl Builder {
         self.quad([c(x0, y0, z1), c(x1, y0, z1), c(x1, y1, z1), c(x0, y1, z1)], m, s, tint, 1);
     }
 
+    /// Boîte à arêtes chanfreinées (normales adoucies sur les chanfreins).
+    fn rbox(&mut self, a: Vec3, b: Vec3, ch: f32, m: Mat, tint: [f32; 3]) {
+        let c = (a + b) * 0.5;
+        let h = (b - a) * 0.5;
+        let ch = ch.min(h.x).min(h.y).min(h.z) * 0.9;
+        // Faces principales réduites du chanfrein
+        let face = |b: &mut Builder, n: Vec3, u: Vec3, v: Vec3, hu: f32, hv: f32, d: f32| {
+            let o = c + n * d;
+            b.quad([o - u * hu - v * hv, o + u * hu - v * hv, o + u * hu + v * hv, o - u * hu + v * hv], m, 0.1, tint, 1);
+        };
+        let (x, y, z) = (Vec3::X, Vec3::Y, Vec3::Z);
+        face(self, z, x, y, h.x - ch, h.y - ch, h.z);
+        face(self, -z, x, y, h.x - ch, h.y - ch, h.z);
+        face(self, x, z, y, h.z - ch, h.y - ch, h.x);
+        face(self, -x, z, y, h.z - ch, h.y - ch, h.x);
+        face(self, y, x, z, h.x - ch, h.z - ch, h.y);
+        face(self, -y, x, z, h.x - ch, h.z - ch, h.y);
+        // Chanfreins sur les 12 arêtes
+        for (n1, n2, t, ht) in [(x, y, z, h.z), (x, -y, z, h.z), (-x, y, z, h.z), (-x, -y, z, h.z), (x, z, y, h.y), (x, -z, y, h.y), (-x, z, y, h.y), (-x, -z, y, h.y), (y, z, x, h.x), (y, -z, x, h.x), (-y, z, x, h.x), (-y, -z, x, h.x)] {
+            let d1 = n1 * (h.dot(n1.abs())) + n2 * (h.dot(n2.abs()) - ch);
+            let d2 = n1 * (h.dot(n1.abs()) - ch) + n2 * (h.dot(n2.abs()));
+            let tl = t * (ht - ch);
+            let nn = (n1 + n2).normalize();
+            let (p0, p1, p2, p3) = (c + d1 - tl, c + d1 + tl, c + d2 + tl, c + d2 - tl);
+            let uv = uv_in(m, 0.3, 0.3);
+            self.tri([p0, p1, p2], [nn; 3], [uv; 3], tint);
+            self.tri([p0, p2, p3], [nn; 3], [uv; 3], tint);
+        }
+    }
+
     /// Tube à normales lissées le long d'un chemin (arceaux, manche, rembourrages).
     fn tube(&mut self, path: &[Vec3], r: f32, sides: usize, m: Mat, tint: [f32; 3]) {
         let ring = |k: usize| -> Vec<(Vec3, Vec3)> {
@@ -288,6 +318,8 @@ fn on_wing(s: f32, u: f32, y: f32) -> Vec3 {
 }
 
 const DARK: [f32; 3] = [0.42, 0.44, 0.46];
+/// Interrupteurs gardés sur les ailes : (côté, position u, hauteur).
+const GUARDS: [(f32, f32, f32); 3] = [(-1.0, 0.60, -0.37), (1.0, 0.60, -0.37), (1.0, 0.80, -0.64)];
 const BLACKISH: [f32; 3] = [0.26, 0.27, 0.29];
 
 fn build() -> Vec<Tri> {
@@ -346,10 +378,25 @@ fn build() -> Vec<Tri> {
         let p = on_panel(-0.10 + k as f32 * 0.04, -0.53);
         b.boxq(p + v(-0.012, -0.012, -0.012), p + v(0.012, 0.012, 0.0), Mat::Teal, [1.0, 1.0, 1.0]);
     }
-    // Capots rouges des interrupteurs gardés
-    for x in [-0.10f32, 0.0, 0.10] {
-        let p = on_panel(x, -0.60);
-        b.boxq(p + v(-0.022, -0.03, -0.028), p + v(0.022, 0.03, 0.0), Mat::Red, [1.0, 1.0, 1.0]);
+    // Capots rouges des interrupteurs gardés (SCRAM ENABLE, EMER FUEL, EMER H2 DUMP) sur les ailes
+    for (s, u, y) in GUARDS {
+        let p = on_wing(s, u, y);
+        b.rbox(p + v(-0.02, -0.028, -0.024), p + v(0.02, 0.028, 0.0), 0.006, Mat::Red, [1.0, 1.0, 1.0]);
+    }
+    // Boutons verts sous l'écran moteurs (aile gauche)
+    for k in 0..3 {
+        let p = on_wing(-1.0, 0.25 + k as f32 * 0.22, -0.62);
+        b.rbox(p + v(-0.014, -0.012, -0.012), p + v(0.014, 0.012, 0.0), 0.004, Mat::Teal, [0.55, 1.0, 0.55]);
+    }
+    // Poignée d'éjection annelée jaune et noire, à l'avant du siège
+    let ring: Vec<Vec3> = (0..=20).map(|k| {
+        let a = k as f32 / 20.0 * std::f32::consts::TAU;
+        v(0.08 * a.cos(), -0.93 + 0.012 * a.sin(), 0.22 + 0.05 * a.sin())
+    }).collect();
+    b.tube(&ring, 0.013, 8, Mat::Boot, [1.0, 1.0, 1.0]);
+    // Bourrelets du siège (bas de l'image)
+    for s in [-1.0f32, 1.0] {
+        b.tube(&spline(&[v(s * 0.30, -1.05, -0.10), v(s * 0.26, -0.95, 0.10), v(s * 0.18, -0.98, 0.22)], 6), 0.07, 12, Mat::Metal, BLACKISH);
     }
     for s in [-1.0f32, 1.0] {
         // Appui de fenêtre rembourré et paroi nervurée
@@ -362,6 +409,16 @@ fn build() -> Vec<Tri> {
         for k in (1..rail.len() - 1).step_by(2) {
             let p = rail[k] + v(-s * 0.06, -0.06, 0.0);
             b.boxq(p + v(-0.012, -0.72, -0.012), p + v(0.012, 0.0, 0.012), Mat::Metal, DARK);
+        }
+        // Interrupteurs à bascule en relief sur la console
+        for row in 0..3 {
+            for col in 0..4 {
+                let x = s * (0.48 + col as f32 * 0.07);
+                let z = -0.05 + row as f32 * 0.12;
+                let y = -0.60 - (x.abs() - 0.42) * 0.17 + 0.004;
+                b.rbox(v(x - 0.012, y, z - 0.012), v(x + 0.012, y + 0.012, z + 0.012), 0.003, Mat::Metal, [0.35, 0.36, 0.38]);
+                b.tube(&[v(x, y + 0.012, z), v(x, y + 0.04, z - 0.01)], 0.004, 6, Mat::Metal, [0.85, 0.86, 0.88]);
+            }
         }
         // Console latérale inclinée, dense en interrupteurs
         let (xi, xo) = (s * 0.42, s * 0.78);
@@ -430,13 +487,17 @@ pub fn draw(ac: &Aircraft, rect: Rect, cam: Cam, throttle: f32) -> Spots {
                     n = -n;
                 }
                 let diffuse: f32 = lights.iter().map(|(l, w)| n.dot(*l).max(0.0) * w).sum();
+                // Reflets (Blinn) des fenêtres sur les surfaces métalliques
+                let view_dir = (-t.p[k]).normalize_or_zero();
+                let spec: f32 = lights.iter().map(|(l, w)| (n.dot((*l + view_dir).normalize_or_zero()).max(0.0)).powf(28.0) * w * 0.9).sum();
                 // Recoins plus sombres : bas de la cabine et loin de l'œil
                 let occl = (1.0 + t.p[k].y * 0.35).clamp(0.55, 1.0) * (1.0 - (t.p[k].length() - 0.6).max(0.0) * 0.12).clamp(0.6, 1.0);
                 let shade = (0.16 + diffuse) * occl;
+                let hl = spec * occl * 255.0;
                 vs[k] = Vertex {
                     position: to_w(t.p[k]),
                     uv: t.uv[k],
-                    color: [(t.tint[0] * shade * 255.0).min(255.0) as u8, (t.tint[1] * shade * 255.0).min(255.0) as u8, (t.tint[2] * shade * 255.0).min(255.0) as u8, 255],
+                    color: [(t.tint[0] * shade * 255.0 + hl).min(255.0) as u8, (t.tint[1] * shade * 255.0 + hl).min(255.0) as u8, (t.tint[2] * shade * 255.0 + hl).min(255.0) as u8, 255],
                     normal: Vec4::ZERO,
                 };
             }
@@ -483,13 +544,13 @@ pub fn draw(ac: &Aircraft, rect: Rect, cam: Cam, throttle: f32) -> Spots {
     };
     Spots {
         mfd: panel(-0.16, -0.225, 0.16, -0.495),
-        engines: wing(-1.0, 0.12, -0.34, 0.92, -0.45),
+        engines: wing(-1.0, 0.10, -0.43, 0.95, -0.56),
         radio: panel(0.026, -0.06, 0.111, -0.14),
         dsply: panel(-0.115, -0.15, -0.025, -0.205),
-        switches: [panel(-0.125, -0.57, -0.075, -0.63), panel(-0.025, -0.57, 0.025, -0.63), panel(0.075, -0.57, 0.125, -0.63)],
-        cg: dial(on_wing(1.0, 0.45, -0.38), 0.05),
-        h2: dial(on_wing(1.0, 0.45, -0.53), 0.042),
-        gear: wing(-1.0, 0.25, -0.50, 0.42, -0.66),
-        greens: view.project(to_w(on_wing(-1.0, 0.70, -0.58))).filter(|_| facing),
+        switches: GUARDS.map(|(s, u, y)| wing(s, u - 0.33, y + 0.05, u + 0.18, y - 0.05)),
+        cg: dial(on_wing(1.0, 0.32, -0.50), 0.05),
+        h2: dial(on_wing(1.0, 0.30, -0.66), 0.04),
+        gear: wing(-1.0, 0.12, -0.63, 0.28, -0.78),
+        greens: view.project(to_w(on_wing(-1.0, 0.62, -0.72))).filter(|_| facing),
     }
 }

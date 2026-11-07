@@ -2235,17 +2235,17 @@ fn draw_cockpit(g: &mut Game, world: &world::World, tiles: &mut tiles::Tiles, al
     }
     let (scram_on, fuel_dump, h2_dump) = (g.ac.eng.scram != ScramState::Off, g.ac.fuel_dump, g.ac.h2_dump);
     if let Some(r) = sp.switches[0] {
-        if cockpit::guarded(r, "SCRAM ENABLE", scram_on, time) {
+        if cockpit::guard_label(r, "SCRAM ENABLE", scram_on, time) {
             g.apply_switch(gcs::Switch::ScramEnable);
         }
     }
     if let Some(r) = sp.switches[1] {
-        if cockpit::guarded(r, "EMER FUEL DUMP", fuel_dump, time) {
+        if cockpit::guard_label(r, "EMER FUEL DUMP", fuel_dump, time) {
             g.apply_switch(gcs::Switch::FuelDump);
         }
     }
     if let Some(r) = sp.switches[2] {
-        if cockpit::guarded(r, "EMER H2 DUMP", h2_dump, time) {
+        if cockpit::guard_label(r, "EMER H2 DUMP", h2_dump, time) {
             g.apply_switch(gcs::Switch::H2Dump);
         }
     }

@@ -344,3 +344,7 @@ Le SR-72 est un avion de reconnaissance : sa charge utile est simulée.
   lunettes d'instruments en relief, boutons éclairés et capots rouges en 3D, appuis rembourrés,
   consoles inclinées denses, manette bi-levier, manche cylindrique à soufflet annelé ; palette
   quasi noire, éclairage lissé par sommet depuis les fenêtres, atlas de textures unique, rendu par lots.
+- v1.17.0 : cockpit enrichi — pièces arrondies (arêtes chanfreinées), reflets des fenêtres sur les
+  métaux, capots rouges SCRAM ENABLE / EMER FUEL / EMER H2 DUMP en 3D sur les ailes de la console
+  (comme sur l'appareil), boutons verts sous l'écran moteurs, poignée d'éjection jaune et noire,
+  bourrelets du siège, rangées d'interrupteurs à bascule en relief sur les consoles latérales.
