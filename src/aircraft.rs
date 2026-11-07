@@ -128,6 +128,9 @@ pub struct Engines {
     /// Santé des chambres de combustion (1 = neuf, 0 = rupture).
     pub health: f64,
     pub combustor_failed: bool,
+    /// Temps passé au-delà de la limite de rupture des parois (s) et rupture à appliquer.
+    pub burst_t: f64,
+    pub burst_now: bool,
     /// Températures de paroi des chambres stato / scram (°C).
     pub ram_wall: f64,
     pub scram_wall: f64,
@@ -373,6 +376,8 @@ impl Aircraft {
                 t_side: [0.0; 2],
                 health: 1.0,
                 combustor_failed: false,
+                burst_t: 0.0,
+                burst_now: false,
                 ram_wall: 15.0,
                 scram_wall: 15.0,
             },
@@ -1248,11 +1253,36 @@ impl Aircraft {
         if self.fcs_overload_t > 0.3 {
             self.crash("DESTRUCTION DES GOUVERNES (FCS) — CHARGE AÉRODYNAMIQUE EXCESSIVE");
         }
-        if self.eng.ram == RamState::Lit && self.eng.ram_wall > systems::RAM_WALL_BURST {
-            self.crash("EXPLOSION DE LA CHAMBRE DE COMBUSTION DU STATORÉACTEUR");
+        // Paroi au-delà de la limite de rupture : compte à rebours (8 s) avant la rupture
+        let over = (self.eng.ram == RamState::Lit && self.eng.ram_wall > systems::RAM_WALL_BURST) || (self.eng.scram == ScramState::Lit && self.eng.scram_wall > systems::SCRAM_WALL_BURST);
+        if over && !self.eng.combustor_failed {
+            if self.eng.burst_t == 0.0 {
+                let which = if self.eng.ram == RamState::Lit { "STATO" } else { "SCRAM" };
+                self.msg(Level::Warning, format!("PAROI {which} AU-DELA DE LA LIMITE — RUPTURE DANS 20 S : REDUIRE LA MANETTE"));
+            }
+            self.eng.burst_t += dt;
+            if self.eng.burst_t > 20.0 {
+                self.eng.burst_now = true;
+            }
+        } else {
+            self.eng.burst_t = (self.eng.burst_t - dt * 0.5).max(0.0);
         }
-        if self.eng.scram == ScramState::Lit && self.eng.scram_wall > systems::SCRAM_WALL_BURST {
-            self.crash("EXPLOSION DE LA CHAMBRE DE COMBUSTION DU SCRAMJET");
+        // Rupture de la chambre commune : les deux moteurs sont détruits d'un coup (la cellule survit)
+        if std::mem::take(&mut self.eng.burst_now) && !self.eng.combustor_failed {
+            let e = &mut self.eng;
+            e.combustor_failed = true;
+            e.health = 0.0;
+            e.scram = ScramState::Off;
+            e.ram = RamState::Off;
+            e.t_scram = 0.0;
+            e.t_ram = 0.0;
+            e.side = [TurbState::Failed; 2];
+            e.turb = TurbState::Failed;
+            e.n2s = [0.0; 2];
+            e.n2 = 0.0;
+            self.jolt = 2.5;
+            self.msg(Level::Warning, "RUPTURE DE LA CHAMBRE DE COMBUSTION — MOTEURS G ET D DETRUITS");
+            self.msg(Level::Warning, "PLUS AUCUNE POUSSEE : VOL PLANE — EMERGENCY OVERRIDE (autoland plane) OU EJECTION");
         }
         // Circuit électrique : génératrices en ligne, sinon pile à combustible (H2/O2), sinon batterie
         let gens = (0..2)
@@ -1328,9 +1358,17 @@ impl Aircraft {
         let cavity = air.t - 273.15 + (air.t * 0.2 * mach * mach).min(900.0) * 0.5;
         let rw = if e.ram == RamState::Lit { ram_wall_t } else if e.scram == ScramState::Lit { e.scram_wall * 0.75 } else { cavity };
         let sw = if e.scram == ScramState::Lit { scram_wall_t } else { cavity };
-        e.ram_wall += (rw - e.ram_wall) * (dt / 4.0).min(1.0);
-        e.scram_wall += (sw - e.scram_wall) * (dt / 4.0).min(1.0);
-        let mut ev: Vec<(Level, String)> = Vec::new();
+        // Inertie thermique des parois (~20 s) : le temps de voir monter la température et de réagir
+        let (ram_before, scram_before) = (e.ram_wall, e.scram_wall);
+        e.ram_wall += (rw - e.ram_wall) * (dt / 20.0).min(1.0);
+        e.scram_wall += (sw - e.scram_wall) * (dt / 20.0).min(1.0);
+        let mut ev_walls: Vec<(Level, String)> = Vec::new();
+        for (name, before, now, caution) in [("STATO", ram_before, e.ram_wall, systems::RAM_WALL_CAUTION), ("SCRAM", scram_before, e.scram_wall, systems::SCRAM_WALL_CAUTION)] {
+            if before <= caution && now > caution {
+                ev_walls.push((Level::Caution, format!("PAROI {name} CHAUDE — REDUIRE LA MANETTE AVANT LA LIMITE DE RUPTURE")));
+            }
+        }
+        let mut ev: Vec<(Level, String)> = ev_walls;
 
         // Turbines gauche / droite (turboréacteurs à PC)
         let start_time = if e.alert_start { 8.0 } else { 25.0 };
@@ -1464,18 +1502,18 @@ impl Aircraft {
         let burning = e.scram == ScramState::Lit || e.ram == RamState::Lit || e.turb == TurbState::Running;
         if overboost > 0.0 && burning {
             let before = e.health;
-            e.health = (e.health - (overboost + 1.5 * rich) * 0.012 * dt).max(0.0);
-            if before >= 0.3 && e.health < 0.3 {
-                ev.push((Level::Caution, "ENGINE DEGRADED : USURE DES CHAMBRES ELEVEE (page MOTEURS)".into()));
+            e.health = (e.health - (overboost + 1.5 * rich) * 0.003 * dt).max(0.0);
+            for (lvl, l, msg) in [
+                (0.5, Level::Caution, "USURE DES CHAMBRES : SURVEILLANCE — REDUIRE LE SURREGIME"),
+                (0.3, Level::Caution, "ENGINE DEGRADED : USURE DES CHAMBRES ELEVEE (page MOTEURS)"),
+                (0.15, Level::Warning, "RUPTURE DES CHAMBRES IMMINENTE — REDUIRE LA MANETTE"),
+            ] {
+                if before >= lvl && e.health < lvl {
+                    ev.push((l, msg.into()));
+                }
             }
             if e.health <= 0.0 && !e.combustor_failed {
-                e.combustor_failed = true;
-                e.scram = ScramState::Off;
-                e.ram = RamState::Off;
-                e.t_scram = 0.0;
-                e.t_ram = 0.0;
-                self.jolt = 2.5;
-                ev.push((Level::Warning, "RUPTURE CHAMBRE DE COMBUSTION — STATO/SCRAM PERDUS".into()));
+                e.burst_now = true;
             }
         }
 
@@ -1647,6 +1685,47 @@ mod tests {
         println!("crash={:?} sol={} tas={:.1}", ac.crashed, ac.on_ground, ac.tas);
         assert!(ac.crashed.is_none(), "{:?}", ac.crashed);
         assert!(ac.on_ground && ac.tas < 3.0);
+    }
+
+    #[test]
+    fn combustor_wear_gives_time_and_kills_both_engines() {
+        // Scramjet à Mach 9,8, FADEC inhibé, manette à fond : surrégime maximal
+        let mut ac = Aircraft::new_on_runway(0);
+        ac.on_ground = false;
+        ac.gear_down = false;
+        ac.gear_pos = 0.0;
+        ac.brakes = false;
+        ac.alt = 105_000.0 * FT;
+        ac.tas = 9.8 * crate::atmosphere::isa(ac.alt).a;
+        ac.eng.inlet_open = false;
+        ac.eng.scram = ScramState::Lit;
+        ac.set_turbines(TurbState::Running, 0.62);
+        ac.ap.on = true;
+        ac.ap.alt_tgt_ft = 105_000.0;
+        ac.ap.hdg_tgt = ac.hdg_deg();
+        ac.skin_temp = skin_equilibrium(ac.alt, ac.tas);
+        ac.cmd_override_engine(true);
+        ac.throttle = 2.0;
+        let dt = 1.0 / 120.0;
+        let mut t: f64 = 0.0;
+        let mut first_alert = None;
+        while t < 1_800.0 && !ac.eng.combustor_failed && ac.crashed.is_none() {
+            ac.step(dt, 0.0, 0.0);
+            for (_, m) in ac.events.drain(..) {
+                if first_alert.is_none() && (m.starts_with("USURE") || m.starts_with("PAROI") || m.starts_with("ENGINE DEGRADED")) {
+                    first_alert = Some(t);
+                    println!("[{t:6.1}] {m}");
+                }
+            }
+            t += dt;
+        }
+        println!("rupture a t={t:.0} s, premiere alerte a {first_alert:?}, crash={:?}", ac.crashed);
+        assert!(ac.crashed.is_none(), "{:?}", ac.crashed);
+        assert!(ac.eng.combustor_failed, "pas de rupture en 30 min");
+        let alert = first_alert.expect("aucune alerte avant la rupture");
+        // Pire cas (manette à 200 %, override) : au moins 45 s entre la première alerte et la rupture
+        assert!(t - alert > 45.0, "trop peu de temps pour reagir ({:.0} s)", t - alert);
+        assert_eq!(ac.eng.side, [TurbState::Failed; 2], "les deux moteurs doivent etre detruits");
     }
 
     #[test]

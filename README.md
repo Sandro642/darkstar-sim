@@ -446,3 +446,11 @@ Le SR-72 est un avion de reconnaissance : sa charge utile est simulée.
   données réagencées : alerte carburant sous l'arc d'inclinaison sur fond sombre, radar météo sur
   une ligne compacte, repères hors champ sous la ligne d'horizon, rappel de saisie limité au début
   de l'essai, statut autoland porté par la bannière d'approche ; pompes carburant ajustées.
+- v1.29.2 : **bords de carte** — tuiles correctement placées quand la vue chevauche ±180°,
+  calottes polaires (au-delà de 85°, hors projection Mercator) affichées en banquise avec repère,
+  centre de carte limité à ±80° en suivi. **Chambres** : usure 4 fois plus lente avec alertes à
+  50 %, 30 % et 15 % (sans pourcentage affiché), inertie thermique des parois de 20 s, alerte dès
+  le seuil de paroi chaude, compte à rebours de 20 s au-delà de la limite avant la rupture ; la
+  rupture détruit les deux moteurs d'un coup sans perdre la cellule (vol plané, EMERGENCY OVERRIDE
+  ou éjection). Pire cas mesuré (manette 200 %, override, Mach 9,8) : 55 s entre la première
+  alerte et la rupture.

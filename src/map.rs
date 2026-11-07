@@ -66,7 +66,8 @@ impl MapView {
 
     pub fn draw(&mut self, world: &World, tiles: &mut Tiles, wx: &crate::weather::Weather, rf: &crate::refuel::Refuel, cb: &crate::combat::Combat, recon: &crate::recon::Recon, ac: &Aircraft, r: Rect, dest: usize, time: f64) {
         if self.follow {
-            self.center = (ac.lat, ac.lon);
+            // Mercator : au-delà de ±85° la carte n'existe pas ; centre limité, avion décalé vers le bord
+            self.center = (ac.lat.clamp(-80.0, 80.0), ac.lon);
         }
         let z = self.zoom;
         let (clat, clon) = self.center;
@@ -119,7 +120,8 @@ impl MapView {
             for ty in (y0.floor() as i64).max(0)..=(y1.floor() as i64).min(n as i64 - 1) {
                 for txu in (x0.floor() as i64)..=(x1.floor() as i64) {
                     let tx = txu.rem_euclid(n as i64) as u32;
-                    let lo_a = clon + wrap180(tiles::tile_lon(txu as f64, zt) - clon);
+                    // Position non repliée (txu peut sortir de 0..n quand la vue chevauche ±180°)
+                    let lo_a = tiles::tile_lon(txu as f64, zt);
                     let p0 = vec2(cx + (lo_a - clon) as f32 * z, cy - (merc(tiles::tile_lat(ty as f64, zt)) - cm) as f32 * z);
                     let p1 = vec2(p0.x + (360.0 / n) as f32 * z, cy - (merc(tiles::tile_lat(ty as f64 + 1.0, zt)) - cm) as f32 * z);
                     let mid = (p0 + p1) * 0.5 - vec2(cx, cy);
@@ -152,6 +154,18 @@ impl MapView {
                             }
                         }
                     }
+                }
+            }
+        }
+        // Calottes polaires (au-delà de la projection Mercator) : banquise unie et repère
+        for (lim, sgn) in [(85.05f64, 1.0f32), (-85.05, -1.0)] {
+            let y = cy - (merc(lim) - cm) as f32 * z;
+            let (y0, y1) = if sgn > 0.0 { (r.y, y) } else { (y, r.y + r.h) };
+            if y1 > y0 {
+                draw_rectangle(r.x, y0, r.w, y1 - y0, Color::new(0.72, 0.78, 0.84, 1.0));
+                draw_line(r.x, y, r.x + r.w, y, 1.0, Color::new(0.4, 0.5, 0.6, 1.0));
+                if y1 - y0 > 14.0 {
+                    txt_c(if sgn > 0.0 { "CALOTTE POLAIRE NORD (> 85 N)" } else { "CALOTTE POLAIRE SUD (> 85 S)" }, r.x + r.w / 2.0, (y0 + y1) / 2.0 + 4.0, 11.0, Color::new(0.2, 0.25, 0.3, 1.0));
                 }
             }
         }
