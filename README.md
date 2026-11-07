@@ -348,3 +348,7 @@ Le SR-72 est un avion de reconnaissance : sa charge utile est simulée.
   métaux, capots rouges SCRAM ENABLE / EMER FUEL / EMER H2 DUMP en 3D sur les ailes de la console
   (comme sur l'appareil), boutons verts sous l'écran moteurs, poignée d'éjection jaune et noire,
   bourrelets du siège, rangées d'interrupteurs à bascule en relief sur les consoles latérales.
+- v1.18.0 : cockpit **modélisé dans Blender** (`tools/cockpit_model.py`, régénérable) — courbes en
+  tubes, chanfreins réels, occlusion ambiante cuite par Cycles, ~27 000 faces ; chargé depuis
+  `assets/cockpit.obj` et rendu avec un vrai tampon de profondeur (occlusion exacte), leviers de
+  manette animés.

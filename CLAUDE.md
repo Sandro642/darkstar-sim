@@ -28,3 +28,11 @@
   appel. Gros maillages via `svs::draw_mesh_chunked`.
 - Raccourcis clavier : codes physiques ; n'utiliser que des touches identiques en AZERTY/QWERTY
   (pas A, Q, Z, W, M).
+
+## Modèle 3D du cockpit (Blender)
+- Source : `tools/cockpit_model.py` (Blender 5.2, installé dans /Applications). Régénérer :
+  `/Applications/Blender.app/Contents/MacOS/Blender -b --python tools/cockpit_model.py`
+  → `assets/cockpit.obj` + `.mtl` (occlusion ambiante cuite dans les couleurs de sommets),
+  embarqués par `include_str!` dans `src/cockpit3d.rs`.
+- Les emplacements d'instruments (PYR, on_panel, on_wing, GUARDS) doivent rester identiques entre le
+  script Blender et `src/cockpit3d.rs` (superpositions 2D des instruments).
