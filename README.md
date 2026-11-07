@@ -403,3 +403,6 @@ Le SR-72 est un avion de reconnaissance : sa charge utile est simulée.
   l'image caméra reste dégagée. Volet carburant refait : silhouette du Darkstar de la page SYSTEMES
   avec réservoirs JP-7 / H2 remplis selon le niveau, débit et quantités à gauche, pression et
   pompes à droite.
+- v1.26.1 : bloc radar météo sur l'horizon (mode WXR / WXR+TURB, inclinaison, portée, écho le plus
+  significatif avec position horaire et distance, couleur selon l'intensité) ; annonce retirée de
+  l'écran de navigation.

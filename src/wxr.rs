@@ -182,12 +182,57 @@ impl Wxr {
         draw_line(c.x, c.y, s.x, s.y, 1.0, Color::new(0.3, 1.0, 0.5, 0.18 + 0.05 * (time * 8.0).sin() as f32));
     }
 
-    /// Annonce WXR (coin bas gauche de l'écran de navigation).
-    pub fn annunciate(&self, x: f32, y: f32) {
-        if self.on {
-            txt(&format!("WXR{}  TILT {}", if self.turb { "+TURB" } else { "" }, self.tilt_label()), x, y, 12.0, GREEN_S);
-        } else {
-            txt("WXR OFF", x, y, 12.0, AMBER);
+    /// Écho le plus significatif : (niveau, azimut relatif deg, distance m) — le plus fort, puis le plus proche.
+    pub fn strongest(&self) -> Option<(u8, f32, f64)> {
+        let mut best: Option<(u8, f32, f64)> = None;
+        for col in 0..AZ {
+            for k in 0..RG {
+                let (l, _) = self.bins[col * RG + k];
+                if l == 0 {
+                    continue;
+                }
+                let d = (k as f64 + 0.5) / RG as f64 * self.range_m;
+                let az = -HALF_SCAN + (col as f32 + 0.5) / AZ as f32 * 2.0 * HALF_SCAN;
+                if best.is_none_or(|b| l > b.0 || (l == b.0 && d < b.2)) {
+                    best = Some((l, az, d));
+                }
+            }
+        }
+        best
+    }
+
+    /// Bloc radar météo sur l'horizon (zone centrale `r`, côté droit sous le bloc vent).
+    pub fn draw_hud(&self, r: Rect, time: f64) {
+        // À gauche de l'échelle de plan de descente ILS
+        let x = r.x + r.w - 212.0;
+        let y = r.y + 196.0;
+        let b = Rect::new(x, y, 160.0, 36.0);
+        rrect(b, 5.0, Color::new(0.0, 0.0, 0.0, 0.62));
+        if !self.on {
+            rrect_lines(b, 5.0, 1.0, AMBER);
+            txt("WXR OFF", x + 8.0, y + 15.0, 12.0, AMBER);
+            return;
+        }
+        rrect_lines(b, 5.0, 1.0, Color::new(0.3, 1.0, 0.5, 0.45));
+        txt(&format!("WXR{}", if self.turb { "+TURB" } else { "" }), x + 8.0, y + 15.0, 12.0, GREEN_S);
+        txt_r(&format!("TILT {}  {:.0}NM", self.tilt_label(), self.range_m / NM), x + b.w - 8.0, y + 15.0, 11.0, GREEN_S);
+        match self.strongest() {
+            Some((l, az, d)) => {
+                let clock = ((az / 30.0).round() as i32).rem_euclid(12);
+                let clock = if clock == 0 { 12 } else { clock };
+                let what = match l {
+                    4 => "TURBULENCE",
+                    3 => "ECHO FORT",
+                    2 => "ECHO MODERE",
+                    _ => "ECHO FAIBLE",
+                };
+                let blink = l < 3 || (time * 2.0).fract() < 0.7;
+                draw_rectangle(x + 8.0, y + 22.0, 8.0, 8.0, level_color(l, 1.0));
+                if blink {
+                    txt(&format!("{what} {clock}H {:.0}NM", d / NM), x + 22.0, y + 30.0, 11.0, level_color(l, 1.0));
+                }
+            }
+            None => txt("AUCUN ECHO", x + 8.0, y + 30.0, 11.0, Color::new(0.6, 0.65, 0.7, 1.0)),
         }
     }
 

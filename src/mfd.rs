@@ -114,6 +114,7 @@ pub fn draw_mfd(world: &World, tiles: &mut crate::tiles::Tiles, wx: &crate::weat
     crate::refuel::draw_hud(rf, ac, lay.inner, time);
     if info.mishap.is_none() {
         crate::recon::draw_cam_hud(ac, recon, lay.inner, time);
+        st.wxr.draw_hud(lay.inner, time);
     }
     act.fuel_dump = draw_fuel(ac, panes[0]);
     pane_frame(panes[1]);
@@ -316,7 +317,6 @@ fn draw_hsi(ac: &Aircraft, r: Rect, st: &mut MfdState, dest: usize) {
     draw_triangle(vec2(cx, cy - 12.0), vec2(cx - 9.0, cy + 7.0), vec2(cx + 9.0, cy + 7.0), y);
     draw_rectangle(cx - 2.0, cy + 6.0, 4.0, 5.0, y);
     scissor(None);
-    st.wxr.annunciate(r.x + 8.0, r.y + r.h - 8.0);
     let gs = (ac.tas * ac.gamma.cos()).max(1.0);
     txt_r(&format!("{} {:.0}NM  ETE {}", apt.icao, dist / NM, crate::mission::fmt_time(dist / gs)), r.x + r.w - 8.0, r.y + r.h - 8.0, 12.0, MAGENTA_S);
 }
