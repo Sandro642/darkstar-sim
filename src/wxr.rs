@@ -48,13 +48,14 @@ pub fn level_color(l: u8, a: f32) -> Color {
 }
 
 /// Nuage ramené au repère avion (est, nord) pour un test rapide.
-struct Echo {
+struct Echo<'a> {
     e: f64,
     n: f64,
     r: f64,
     base: f64,
     top: f64,
     kind: CloudKind,
+    cloud: &'a crate::weather::Cloud,
 }
 
 impl Wxr {
@@ -91,7 +92,7 @@ impl Wxr {
             .filter(|c| c.kind != CloudKind::St)
             .map(|c| {
                 let (e, n) = enu_offset(ac.lat, ac.lon, c.lat, c.lon);
-                Echo { e, n, r: c.radius, base: c.base, top: c.top, kind: c.kind }
+                Echo { e, n, r: c.radius, base: c.base, top: c.top, kind: c.kind, cloud: c }
             })
             .collect();
         let hdg = ac.hdg_deg();
@@ -116,7 +117,10 @@ impl Wxr {
                     if hi < x.base || lo > x.top {
                         continue;
                     }
-                    let q = (e - x.e).hypot(n - x.n) / x.r;
+                    if (e - x.e).abs() > x.r * 4.0 || (n - x.n).abs() > x.r * 4.0 {
+                        continue;
+                    }
+                    let q = x.cloud.shape_q(e - x.e, n - x.n);
                     let l = match x.kind {
                         CloudKind::Cb if q < 0.45 => 3,
                         CloudKind::Cb if q < 0.8 => 2,

@@ -1,8 +1,7 @@
 //! Météo 3D dans l'horizon (« horizon intelligent ») :
 //! - flux de vent : particules advectées par le vent réel, traînées orientées selon le vent, longueur
 //!   selon sa force, couleur selon le danger, épaisseur selon l'humidité (masse d'air humide) ;
-//! - vecteurs de vent : rangées de flèches 3D devant l'avion, à son altitude, chiffrées au centre ;
-//! - volumes de danger : cylindres filaires autour des cumulonimbus (sommet, distance) ;
+//! - zones de danger : contours irréguliers des cumulonimbus (enveloppe, cœur, enclume ; sommet, distance) ;
 //! - couches de turbulence en air clair : nappes quadrillées aux altitudes de fort cisaillement ;
 //! - légende de l'échelle de danger.
 //! Échelle : cyan (calme) → vert → jaune → orange → rouge → magenta (sévère).
@@ -95,43 +94,6 @@ pub fn draw(wx: &Weather, ac: &Aircraft, v: &View, time: f64) {
         }
     }
 
-    // --- Vecteurs de vent : 3 rangées x 5 flèches (vent à l'altitude de l'avion), dessinées un peu
-    // en contrebas pour être vues en perspective plutôt que par la tranche ---
-    if !ac.on_ground {
-        let hdg = ac.track_deg();
-        let drop = -(r * 0.05).max(150.0).min((ac.alt - ac.d.elev) * 0.5);
-        for (row, f) in [0.35f64, 0.6, 0.9].iter().enumerate() {
-            for col in [-2i32, -1, 1, 2] {
-                let (a1, o1) = destination(ac.lat, ac.lon, hdg, r * f);
-                let (la, lo) = destination(a1, o1, wrap360(hdg + 90.0), col as f64 * r * 0.22 * f);
-                let (u, w, dir, kt) = wx.wind_at(la, lo, ac.alt);
-                let (dg, _, _) = wx.field_danger(la, lo, ac.alt);
-                let spd = u.hypot(w).max(0.1);
-                let (ue, un) = (u / spd, w / spd);
-                let half = r * 0.045 * (spd / 30.0).clamp(0.35, 2.2);
-                let tail = local(&eye, la, lo, ac.alt, -ue * half, -un * half, drop);
-                let tip = local(&eye, la, lo, ac.alt, ue * half, un * half, drop);
-                let c = danger_color(dg, 0.85 - row as f32 * 0.15);
-                seg(v, tail, tip, 2.5, c);
-                // Pointe : deux branches dans le plan horizontal
-                let hl = half * 0.45;
-                for s in [-1.0f64, 1.0] {
-                    let (be, bn) = (-ue * 0.9 + s * -un * 0.45, -un * 0.9 + s * ue * 0.45);
-                    let wing = local(&eye, la, lo, ac.alt, ue * half + be * hl, un * half + bn * hl, drop);
-                    seg(v, tip, wing, 2.5, c);
-                }
-                if col == 1 && row == 2 {
-                    if let Some(q) = v.project(local(&eye, la, lo, ac.alt, 0.0, 0.0, drop)) {
-                        let lbl = format!("{:03.0}/{:.0}", dir, kt);
-                        let tw = txt_w(&lbl, 11.0) + 8.0;
-                        rrect(Rect::new(q.x - tw / 2.0, q.y + 8.0, tw, 15.0), 4.0, Color::new(0.0, 0.0, 0.0, 0.45));
-                        txt_c(&lbl, q.x, q.y + 19.0, 11.0, c);
-                    }
-                }
-            }
-        }
-    }
-
     // --- Volumes de danger : cumulonimbus ---
     let pulse = 0.75 + 0.25 * ((time * 3.0).sin() as f32);
     // Les 4 orages les plus proches devant ; étiquettes sans chevauchement
@@ -147,20 +109,26 @@ pub fn draw(wx: &Weather, ac: &Aircraft, v: &View, time: f64) {
     cbs.truncate(4);
     let mut labels: Vec<Rect> = Vec::new();
     for (d, cl) in cbs {
-        let rad = cl.radius * 1.3;
-        let c = danger_color(1.0, 0.75 * pulse);
-        let n = 24;
-        let ring = |alt: f64, k: usize| {
-            let a = k as f64 / n as f64 * std::f64::consts::TAU;
-            local(&eye, cl.lat, cl.lon, alt, rad * a.sin(), rad * a.cos(), 0.0)
+        // Zones irrégulières : enveloppe (bas, milieu, sommet élargi en enclume) et cœur
+        let outer = cl.contour(1.15, 32);
+        let core = cl.contour(0.45, 24);
+        let ring = |pts: &[(f64, f64)], alt: f64, k: usize, grow: f64| {
+            let (e, n) = pts[k % pts.len()];
+            local(&eye, cl.lat, cl.lon, alt, e * grow, n * grow, 0.0)
         };
-        for alt in [cl.base, (cl.base + cl.top) / 2.0, cl.top] {
-            for k in 0..n {
-                seg(v, ring(alt, k), ring(alt, k + 1), if alt == cl.top { 2.0 } else { 1.2 }, c);
+        let mid = (cl.base + cl.top) / 2.0;
+        for (alt, grow, w) in [(cl.base, 1.0, 1.2), (mid, 1.0, 1.2), (cl.top, 1.35, 2.0)] {
+            let c = danger_color(0.7, 0.7 * pulse);
+            for k in 0..outer.len() {
+                seg(v, ring(&outer, alt, k, grow), ring(&outer, alt, k + 1, grow), w, c);
             }
         }
-        for k in (0..n).step_by(6) {
-            seg(v, ring(cl.base, k), ring(cl.top, k), 1.2, c);
+        let cc = danger_color(1.0, 0.85 * pulse);
+        for k in 0..core.len() {
+            seg(v, ring(&core, mid, k, 1.0), ring(&core, mid, k + 1, 1.0), 2.0, cc);
+        }
+        for k in (0..outer.len()).step_by(8) {
+            seg(v, ring(&outer, cl.base, k, 1.0), ring(&outer, cl.top, k, 1.35), 1.0, danger_color(0.7, 0.5 * pulse));
         }
         if let Some(q) = v.project(eye.local(cl.lat, cl.lon, cl.top + 800.0)) {
             let lbl = format!("CB FL{:.0}  {:.0} NM", cl.top / FT / 100.0, d / NM);

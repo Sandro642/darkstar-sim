@@ -96,6 +96,49 @@ pub struct Weather {
     rng: u64,
 }
 
+impl Cloud {
+    /// Distance normalisée d'un point (est / nord en m depuis le centre) à la cellule : < 1 dedans.
+    /// Forme irrégulière comme une vraie cellule : étirement selon un axe aléatoire (lignes de
+    /// grains), bords déchiquetés par un bruit à deux échelles, lobes secondaires.
+    pub fn shape_q(&self, e: f64, n: f64) -> f64 {
+        shape_q(self.seed, self.radius, e, n)
+    }
+
+    /// Contour (est, nord en m depuis le centre) où `shape_q` vaut `q`, sur `n` rayons.
+    pub fn contour(&self, q: f64, n: usize) -> Vec<(f64, f64)> {
+        (0..n)
+            .map(|k| {
+                let a = k as f64 / n as f64 * std::f64::consts::TAU;
+                let (se, sn) = (a.sin(), a.cos());
+                let mut last = 0.0;
+                let step = self.radius * 0.1;
+                let mut d = step;
+                while d < self.radius * 4.0 {
+                    if self.shape_q(se * d, sn * d) < q {
+                        last = d;
+                    }
+                    d += step;
+                }
+                (se * last, sn * last)
+            })
+            .collect()
+    }
+}
+
+/// Forme irrégulière d'une cellule (graine, rayon nominal) : voir `Cloud::shape_q`.
+pub fn shape_q(s: f64, r: f64, e: f64, n: f64) -> f64 {
+    let ang = s * std::f64::consts::PI * 7.0;
+    let (sa, ca) = ang.sin_cos();
+    let (x, y) = (e * ca + n * sa, -e * sa + n * ca);
+    let aspect = 1.0 + 0.9 * ((s * 13.7).fract());
+    let (xs, ys) = (x / aspect.sqrt(), y * aspect.sqrt());
+    let seed = (s * 1000.0) as i64;
+    let big = vnoise(xs / (r * 0.9) + s * 50.0, ys / (r * 0.9), 41 + seed % 7);
+    let small = vnoise(xs / (r * 0.3) + s * 90.0, ys / (r * 0.3), 43 + seed % 5);
+    let warp = 1.0 + 0.55 * (big - 0.5) * 2.0 + 0.25 * (small - 0.5) * 2.0;
+    (xs.hypot(ys) / r) / warp.max(0.35)
+}
+
 fn hash(a: i64, b: i64, c: i64) -> f64 {
     let mut h = (a as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15) ^ (b as u64).wrapping_mul(0xC2B2_AE3D_27D4_EB4F) ^ (c as u64).wrapping_mul(0x1656_67B1_9E37_79F9);
     h ^= h >> 31;
@@ -487,7 +530,10 @@ impl Weather {
             let alt = (ac.alt + d * climb).max(0.0);
             let (mut v, mut c, _) = self.field_danger(la, lo, alt);
             for cl in self.clouds_near(la, lo, 15_000.0) {
-                if cl.kind == CloudKind::Cb && alt < cl.top + 600.0 && dist_brg(la, lo, cl.lat, cl.lon).0 < cl.radius * 1.5 {
+                if cl.kind == CloudKind::Cb && alt < cl.top + 600.0 && {
+                    let (e, n) = enu_offset(cl.lat, cl.lon, la, lo);
+                    cl.shape_q(e, n) < 1.15
+                } {
                     v = 1.0;
                     c = "ORAGE";
                 }
@@ -507,7 +553,7 @@ impl Weather {
         let hdg = ac.track_deg();
         let init = self.parts.is_empty();
         // Orages proches : danger maximal dans et autour de la cellule
-        let cbs: Vec<(f64, f64, f64, f64)> = self.clouds_near(ac.lat, ac.lon, r * 1.6).filter(|c| c.kind == CloudKind::Cb).map(|c| (c.lat, c.lon, c.radius, c.top)).collect();
+        let cbs: Vec<(f64, f64, f64, f64, f64)> = self.clouds_near(ac.lat, ac.lon, r * 1.6).filter(|c| c.kind == CloudKind::Cb).map(|c| (c.lat, c.lon, c.radius, c.top, c.seed)).collect();
         while self.parts.len() < N_PARTS {
             self.parts.push(Part { lat: ac.lat, lon: ac.lon, alt: ac.alt, u: 0.0, v: 0.0, danger: 0.0, rh: 0.0 });
         }
@@ -528,10 +574,11 @@ impl Weather {
             let (de, dn) = (u * dt, v * dt);
             let (la2, lo2) = from_enu(la, lo, de, dn);
             let (mut danger, _, rh) = self.field_danger(la2, lo2, al);
-            for &(cl, co, cr, ct) in &cbs {
+            for &(cl, co, cr, ct, sd) in &cbs {
                 if al < ct + 800.0 {
-                    let dd = dist_brg(la2, lo2, cl, co).0;
-                    danger = danger.max((1.0 - (dd - cr) / (cr * 1.5)).clamp(0.0, 1.0) as f32);
+                    let (e, n) = enu_offset(cl, co, la2, lo2);
+                    let q = shape_q(sd, cr, e, n);
+                    danger = danger.max(((1.6 - q) / 1.15).clamp(0.0, 1.0) as f32);
                 }
             }
             self.parts[k] = Part { lat: la2, lon: lo2, alt: al, u, v, danger, rh };
@@ -692,9 +739,13 @@ pub fn draw_map(wx: &Weather, ac: &Aircraft, to_s: &dyn Fn(f64, f64) -> Vec2, z:
             CloudKind::Cu => draw_circle(p.x, p.y, rad, Color::new(0.2, 0.85, 0.3, 0.22)),
             CloudKind::St => draw_circle(p.x, p.y, rad, Color::new(0.7, 0.75, 0.8, 0.14)),
             CloudKind::Cb => {
-                draw_circle(p.x, p.y, rad * 1.5, Color::new(0.2, 0.85, 0.3, 0.2));
-                draw_circle(p.x, p.y, rad, Color::new(1.0, 0.85, 0.1, 0.35));
-                draw_circle(p.x, p.y, rad * 0.55, Color::new(1.0, 0.1, 0.1, 0.5));
+                let scale = 1.0 / m_per_px as f32;
+                for (q, col) in [(1.15, Color::new(0.2, 0.85, 0.3, 0.22)), (0.8, Color::new(1.0, 0.85, 0.1, 0.35)), (0.45, Color::new(1.0, 0.1, 0.1, 0.5))] {
+                    let pts: Vec<Vec2> = c.contour(q, 28).into_iter().map(|(e, n)| vec2(p.x + e as f32 * scale, p.y - n as f32 * scale)).collect();
+                    for k in 0..pts.len() {
+                        draw_triangle(p, pts[k], pts[(k + 1) % pts.len()], col);
+                    }
+                }
                 if z > 20.0 {
                     txt(&format!("CB FL{:.0}", c.top / FT / 100.0), p.x + rad + 3.0, p.y + 4.0, 11.0, Color::new(1.0, 0.4, 0.3, 1.0));
                 }

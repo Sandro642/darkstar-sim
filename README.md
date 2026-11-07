@@ -378,3 +378,5 @@ Le SR-72 est un avion de reconnaissance : sa charge utile est simulée.
   (balayage multiple) ou manuelle (`WXR TILT -3`, faisceau de 3,5°), portée de l'écran de navigation
   (max 320 NM, `WXR RANGE 160`). Dans l'horizon (`WXR HORIZON ON/OFF`) : rideaux translucides aux
   échos significatifs et bande de synthèse colorée sur la ligne d'horizon.
+- v1.23.1 : zones orageuses de forme irrégulière (étirement, bords déchiquetés, lobes) dans l'horizon,
+  sur le radar météo et sur la carte ; flèches de vent retirées de l'horizon.
