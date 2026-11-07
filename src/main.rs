@@ -90,6 +90,8 @@ struct Game {
     flashes: Vec<(String, Color, f64)>,
     prev_agl_ft: f64,
     prev_mach_int: i32,
+    /// États précédents des aérofreins et des freins (annonces d'événements sur l'horizon).
+    prev_brk: Option<(bool, bool)>,
     /// Fin de vol (instruction FIN) : simulation figée, débriefing affiché.
     ended: bool,
     debrief: Vec<String>,
@@ -242,6 +244,7 @@ impl Game {
             flashes: Vec::new(),
             prev_agl_ft: 0.0,
             prev_mach_int: 0,
+            prev_brk: None,
             ended: false,
             debrief: Vec::new(),
             crash_report: Vec::new(),
@@ -953,6 +956,27 @@ impl Game {
             self.flash("SUBSONIQUE", WHITE);
         }
         self.prev_mach_int = m_int;
+        // Événements aérofreins / freins
+        let now_brk = (self.ac.speedbrake, self.ac.brakes);
+        if let Some((sb, br)) = self.prev_brk {
+            if self.ac.crashed.is_none() {
+                if now_brk.0 != sb {
+                    let auto = if self.ac.ap.at_speedbrake { " (AUTO)" } else { "" };
+                    self.flash(if now_brk.0 { format!("AEROFREINS SORTIS{auto}") } else { "AEROFREINS RENTRES".into() }, ui::CYAN_S);
+                }
+                if now_brk.1 != br {
+                    let s = match (now_brk.1, self.ac.on_ground, self.ac.ground_speed() < 3.0) {
+                        (true, true, true) => "FREIN DE PARC SERRE",
+                        (true, true, false) => "FREINAGE",
+                        (true, false, _) => "FREINS ARMES",
+                        (false, true, true) => "FREIN DE PARC DESSERRE",
+                        (false, _, _) => "FREINS RELACHES",
+                    };
+                    self.flash(s, if now_brk.1 { ui::GREEN_S } else { WHITE });
+                }
+            }
+        }
+        self.prev_brk = Some(now_brk);
         // Aide à la rotation au décollage manuel : rappel du sens du manche (flèche BAS = tirer)
         if self.ac.on_ground && !self.ac.ap.on && self.ac.autotakeoff.is_none() && self.ac.d.keas > 175.0 && self.ac.theta < 2f64.to_radians() && self.ac.crashed.is_none() {
             self.flash("ROTATION : FLECHE BAS (TIRER)", ui::AMBER);

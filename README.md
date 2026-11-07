@@ -395,3 +395,6 @@ Le SR-72 est un avion de reconnaissance : sa charge utile est simulée.
   (turbines G / D, statoréacteur, scramjet), éventail du radar météo, échelles de centrage et
   d'incidence, vue en plan carburant (réservoirs JP-7 et H2 remplis selon le niveau), rangée
   d'icônes d'accès direct aux pages.
+- v1.25.1 : horizon — annonces d'événements aérofreins (sortis / rentrés, auto) et freins (frein de
+  parc serré / desserré, freinage, freins armés / relâchés) ; mémos permanents AEROFREINS (ambre si
+  poussée), FREIN PARC (ambre si poussée au frein), FREINAGE avec décélération.

@@ -355,15 +355,36 @@ fn draw_svs_overlay(ac: &Aircraft, v: &View, s: Rect, info: &PfdInfo) {
     // Annonces d'override et de limitation FADEC
     let mut oy = if ac.on_ground || vis.rwr < 0.01 { s.y + 36.0 } else { s.y + 152.0 };
     let blink = (info.time * 2.0).fract() < 0.65;
-    for (on, label) in [(ac.ovr_engine, "ENG OVRD"), (ac.ovr_fbw, "FBW OVRD"), (!ac.ovr_engine && ac.fadec_limit < 0.995, "FADEC LIMIT")] {
+    // Aérofreins et freins (mémos permanents tant qu'ils sont actifs)
+    let gs = ac.ground_speed() / KT;
+    let sb_label = if ac.ap.at_speedbrake { "AEROFREINS A" } else { "AEROFREINS" };
+    // Aérofreins sortis avec poussée : ambre (configuration incohérente)
+    let sb_col = if ac.throttle > 0.3 { AMBER } else { CYAN_S };
+    let park = ac.on_ground && ac.brakes && gs < 3.0;
+    let park_col = if ac.throttle > 0.5 { AMBER } else { GREEN_S };
+    let braking = ac.on_ground && ac.brakes && gs >= 3.0;
+    let memos: [(bool, &str, Color, bool); 6] = [
+        (ac.ovr_engine, "ENG OVRD", AMBER, true),
+        (ac.ovr_fbw, "FBW OVRD", AMBER, true),
+        (!ac.ovr_engine && ac.fadec_limit < 0.995, "FADEC LIMIT", AMBER, false),
+        (ac.speedbrake, sb_label, sb_col, sb_col == AMBER),
+        (park, "FREIN PARC", park_col, park_col == AMBER),
+        (braking, "FREINAGE", WHITE, false),
+    ];
+    for (on, label, col, flash) in memos {
         if on {
             draw_rectangle(s.x + 8.0, oy - 13.0, 92.0, 17.0, Color::new(0.0, 0.0, 0.0, 0.6));
-            draw_rectangle_lines(s.x + 8.0, oy - 13.0, 92.0, 17.0, 1.0, AMBER);
-            if blink || label == "FADEC LIMIT" {
-                txt_c(label, s.x + 54.0, oy, 13.0, AMBER);
+            draw_rectangle_lines(s.x + 8.0, oy - 13.0, 92.0, 17.0, 1.0, col);
+            if blink || !flash {
+                txt_c(label, s.x + 54.0, oy, if label.len() > 10 { 11.0 } else { 13.0 }, col);
             }
             oy += 21.0;
         }
+    }
+    if braking {
+        // Décélération au freinage
+        let dec = (-ac.d.accel / 9.81).max(0.0);
+        txt(&format!("DECEL {dec:.2} G"), s.x + 10.0, oy - 2.0, 11.0, WHITE);
     }
 
     // Alertes
