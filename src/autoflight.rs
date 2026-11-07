@@ -49,6 +49,11 @@ const DS_AIM: f64 = 4_500.0;
 const DS_INNER_DEG: f64 = 3.0;
 
 /// Hauteur du profil plané à la distance `along` avant le seuil (m).
+/// Profil plané corrigé du vent (`kw` = TAS / vitesse sol le long de l'axe).
+fn dsp(kw: f64, along: f64) -> f64 {
+    dead_stick_path(if along > 0.0 { along * kw } else { along })
+}
+
 pub fn dead_stick_path(along: f64) -> f64 {
     let outer = (along - DS_AIM) * DS_OUTER_DEG.to_radians().tan();
     let inner = (along + 600.0) * DS_INNER_DEG.to_radians().tan();
@@ -287,9 +292,13 @@ impl Aircraft {
                 // 3 NM à gauche, s'éloigner parallèlement à la piste en descendant fort (aérofreins),
                 // puis demi-tour vers la piste quand la hauteur, après le virage, rejoint le profil.
                 let a_eff = if cross.abs() > 300.0 { along + (cross.abs() - 300.0) * 0.7 } else { along };
-                let excess = agl - dead_stick_path(a_eff.max(0.0));
+                // Vent : profil défini en distance « air » — vent de face, la distance sol à parcourir
+                // coûte plus de hauteur (finesse sol réduite) ; vent arrière, l'inverse
+                let hw = -(self.wind.0 * hdg.to_radians().sin() + self.wind.1 * hdg.to_radians().cos());
+                let kw = (self.tas.max(60.0) / (self.tas.max(60.0) - hw).max(30.0)).clamp(0.8, 1.6);
+                let excess = agl - dsp(kw, a_eff.max(0.0));
                 let done = self.autoland.as_ref().unwrap().gs_captured;
-                let exit_h0 = dead_stick_path(5.0 * NM);
+                let exit_h0 = dsp(kw, 5.0 * NM);
                 let holding = self.autoland.as_ref().unwrap().holding;
                 let enter = !holding && ((excess > 2_000.0 * FT && along > 1.0 * NM && !done) || (along < 0.0 && agl > exit_h0));
                 if enter {
@@ -325,7 +334,8 @@ impl Aircraft {
                     let rad_now = wrap360(bc + 180.0);
                     let rad_exit = wrap360(hdg - side);
                     let theta = if turn > 0.0 { (rad_now - rad_exit).rem_euclid(360.0) } else { (rad_exit - rad_now).rem_euclid(360.0) }.to_radians();
-                    let exit_h = dead_stick_path(hac_along);
+                    // Marge au-dessus du profil (la finale sait plonger, pas remonter) ; plus grande par vent de face
+                    let exit_h = dsp(kw, hac_along) + (hw * 25.0).max(0.0);
                     let dh = agl - exit_h;
                     let on_circle = dc < r * 1.5;
                     let lap = std::f64::consts::TAU * r;
@@ -333,7 +343,7 @@ impl Aircraft {
                     // Sortie au point de tangence seulement près de la hauteur du profil (sinon un tour de plus)
                     // Sortie : au point de tangence, ou dès que l'avion se trouve aligné dans l'axe à bonne distance
                     let aligned = wrap180(self.hdg_deg() - hdg).abs() < 25.0 && cross.abs() < 0.5 * NM && along > 3.0 * NM;
-                    let at_exit = ((on_circle && theta.to_degrees() < 10.0) || aligned) && dh < 3_200.0 * FT;
+                    let at_exit = (on_circle && theta.to_degrees() < 10.0 && dh < 1_500.0 * FT) || (aligned && dh < 3_200.0 * FT);
                     // Pas assez de hauteur pour finir l'arc : on coupe tout droit vers le point de tangence
                     // Cible du raccourci : point de l'axe un peu devant l'avion (jamais derrière)
                     let a_t = (along - 1.5 * NM).clamp(2.0 * NM, hac_along);
@@ -342,7 +352,7 @@ impl Aircraft {
                     // Raccourci seulement si sa pente est plus proche de la pente nominale (~8°) que
                     // celle de l'arc restant, et que l'arc serait trop plat
                     let g_arc = (dh.max(0.0) / dist0.max(300.0)).atan().to_degrees();
-                    let g_short = ((agl - dead_stick_path(a_t)).max(0.0) / dt_t.max(300.0)).atan().to_degrees();
+                    let g_short = ((agl - dsp(kw, a_t)).max(0.0) / dt_t.max(300.0)).atan().to_degrees();
                     // Jamais de raccourci qui imposerait une finale trop raide (> 14°)
                     let short = on_circle && g_short <= 14.0 && (g_arc < 2.5 || (g_arc < 4.0 && (g_short - 8.0).abs() < (g_arc - 8.0).abs()));
                     if short || self.autoland.as_ref().unwrap().pat == 5 {
@@ -397,19 +407,22 @@ impl Aircraft {
                     self.ap.hdg_tgt = dist_brg(self.lat, self.lon, pla, plo).1;
                 }
                 // Vertical : suivi du profil plané par la pente (assiette = pente + incidence)
-                let h_path = dead_stick_path(a_eff);
+                let h_path = dsp(kw, a_eff);
                 // Pente du profil anticipée ~5 s devant : le pré-arrondi commence avant la cassure
                 let look = (self.tas * 5.0).max(300.0);
-                let h_ahead = dead_stick_path((a_eff - look).max(-600.0));
+                let h_ahead = dsp(kw, (a_eff - look).max(-600.0));
                 let path_gamma = ((h_ahead - h_path) / look).atan().to_degrees();
                 let slope = -path_gamma;
                 let err = h_path - agl;
                 // Correction d'écart douce sous 1500 ft (pas de plongée après le pré-arrondi)
                 // Au-dessus du profil, la finale peut plonger jusqu'à ~19° (aérofreins par l'énergie)
-                let corr = if agl < 1_500.0 * FT { (err / 100.0).clamp(-5.0, 2.5) } else { (err / 60.0).clamp(-10.0, 5.0) };
+                // Sous le profil avec de la vitesse en réserve : on remonte franchement sur la pente
+                // (vitesse échangée contre hauteur), sinon l'avion se pose court (vent de face)
+                let va = vapp(self) + (hw / KT * 0.5).clamp(0.0, 20.0);
+                let up = (2.5 + (self.d.keas - va - 20.0).max(0.0) * 0.08).min(6.0);
+                let corr = if agl < 1_500.0 * FT { (if err > 0.0 { err / 25.0 } else { err / 100.0 }).clamp(-5.0, up) } else { (err / 60.0).clamp(-10.0, 5.0) };
                 let mut gamma_cmd = path_gamma + corr;
                 // Protection de vitesse : sous VAPP - 10, on plonge pour garder l'énergie
-                let va = vapp(self);
                 // Protection de vitesse au-dessus de 1500 ft seulement : en courte finale la
                 // décélération sur la pente intérieure est voulue (arrondi à vitesse réduite)
                 if self.d.keas < va - 10.0 && agl > 1_500.0 * FT {
@@ -417,7 +430,8 @@ impl Aircraft {
                 }
                 // Courte finale : sous VAPP, échanger un peu de hauteur contre de la vitesse
                 // (arrondi d'autant plus tôt que la chute est forte)
-                if self.d.keas < va + 5.0 && agl <= 1_500.0 * FT && agl > 60.0 * FT {
+                // seulement au-dessus du profil : sous la pente, on garde la hauteur (sinon atterrissage court)
+                if self.d.keas < va + 5.0 && agl <= 1_500.0 * FT && agl > 60.0 * FT && err < 0.0 {
                     gamma_cmd = gamma_cmd.min(-(4.5 + (va + 5.0 - self.d.keas) * 0.2).min(8.0));
                 }
                 gamma_cmd = gamma_cmd.clamp(-14.0, 2.0);

@@ -367,18 +367,22 @@ mod tests {
     #[test]
     fn override_from_too_high_lands() {
         // Vol de l'utilisateur, puis autres départs : loin au nord, bas et proche, travers du terrain
-        for (lat, lon, alt_ft, hdg, tas) in [
-            (35.0618, -117.6427, 45_882.0, 174.6, 270.0),
-            (35.45, -117.88, 30_000.0, 180.0, 230.0),
-            (34.80, -117.95, 25_000.0, 45.0, 220.0),
-            (34.95, -117.70, 15_000.0, 300.0, 180.0),
+        // (vent : direction d'où il vient, kt) — dernier vol de l'utilisateur : ~20 kt de face en finale
+        for (lat, lon, alt_ft, hdg, tas, wd, wk) in [
+            (35.0618, -117.6427, 45_882.0, 174.6, 270.0, 0.0, 0.0),
+            (35.45, -117.88, 30_000.0, 180.0, 230.0, 0.0, 0.0),
+            (34.80, -117.95, 25_000.0, 45.0, 220.0, 0.0, 0.0),
+            (34.95, -117.70, 15_000.0, 300.0, 180.0, 0.0, 0.0),
+            (35.1109, -117.7189, 21_323.0, 153.0, 190.0, 230.0, 20.0),
+            (34.80, -117.95, 25_000.0, 45.0, 220.0, 260.0, 25.0),
+            (35.0618, -117.6427, 45_882.0, 174.6, 270.0, 50.0, 25.0),
         ] {
-            println!("=== depart {lat} {lon} FL{:.0} cap {hdg}", alt_ft / 100.0);
-            override_case(lat, lon, alt_ft, hdg, tas);
+            println!("=== depart {lat} {lon} FL{:.0} cap {hdg} vent {wd:.0}/{wk:.0}", alt_ft / 100.0);
+            override_case(lat, lon, alt_ft, hdg, tas, wd, wk);
         }
     }
 
-    fn override_case(lat: f64, lon: f64, alt_ft: f64, hdg: f64, tas: f64) {
+    fn override_case(lat: f64, lon: f64, alt_ft: f64, hdg: f64, tas: f64, wd: f64, wk: f64) {
         let rf = Refuel::new();
         let mut em = Emergency::new();
         let mut ac = flying(lat, lon, alt_ft, 32_000.0);
@@ -389,11 +393,14 @@ mod tests {
         ac.brakes = false;
         ac.set_turbines(TurbState::Failed, 0.0);
         em.start_override(&mut ac).unwrap();
+        let wv = wk * 0.514_444;
+        let wind = (-wv * wd.to_radians().sin(), -wv * wd.to_radians().cos());
         let dt = 1.0 / 120.0;
         let mut t: f64 = 0.0;
         let mut lp = -100.0;
         let mut max_thrust = 0.0f64;
         while t < 1_500.0 && ac.crashed.is_none() && !(ac.on_ground && ac.tas < 3.0) {
+            ac.wind = wind;
             em.update(dt, &mut ac, &rf);
             for c in std::mem::take(&mut em.cmds) {
                 if let Some(code) = c.strip_prefix("ATTERRIR PLANE ") {

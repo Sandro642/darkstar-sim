@@ -493,3 +493,8 @@ Le SR-72 est un avion de reconnaissance : sa charge utile est simulée.
   dans l'axe, S-turns en finale pour dissiper un excès d'énergie, correction plus forte en courte
   finale. Quatre départs d'essai (FL459 à 16 NM, FL300 nord, FL250 sud-ouest, FL150 à 7,5 NM par
   le travers) → posés et arrêtés sur la piste, poussée nulle.
+- v1.30.4 : EMERGENCY OVERRIDE — prise en compte du vent (dernier vol : posé 500 m court avec ~20 kt
+  de face en finale). Profil plané calculé en distance « air » (vent de face → plus de hauteur
+  requise), sortie de spirale avec marge de vent, VAPP majorée de la moitié du vent de face,
+  correction forte sous le profil en échangeant l'excès de vitesse contre de la hauteur. Essais :
+  7 départs, dont le vol rejoué avec 20 kt de face et deux cas vent arrière / travers.
