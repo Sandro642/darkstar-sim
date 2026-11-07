@@ -129,6 +129,11 @@ struct Game {
     link_msg: String,
     /// Minimums en approche : 0 rien, 1 « approaching minimums » annoncé, 2 décision attendue, 3 décidé.
     mins: u8,
+    /// Hauteur de décision (ft au-dessus du seuil) et annonces déjà faites (bits).
+    da_ft: f64,
+    calls: u32,
+    /// Liaison rétablie après un incident : mode dégradé (cause), manche indisponible, commandes filtrées.
+    degraded: Option<mishap::Kind>,
     /// Surveillance des chambres de combustion (courbes et état calculé).
     chambers: health::ChamberMon,
     /// Instructions générées à bord (procédure d'urgence) : pas besoin de liaison.
@@ -163,7 +168,7 @@ fn pfd_info<'a>(g: &Game, alerts: &'a [(Level, String)], ln: &'a str, lat: f64, 
         }
     }
     let mishap = g.mishap.as_ref().map(|m| (m.decay(), m.elapsed() - m.t_los));
-    pfd::PfdInfo { mishap, alerts, link_name: ln, latency_ms: lat, dest: g.dest, warp, time, cue, wx: g.wx.info.clone(), threats, fuel: g.fuel_plan.clone(), fuel_since: get_time() - g.fuel_change_t }
+    pfd::PfdInfo { da_ft: g.da_ft, mishap, alerts, link_name: ln, latency_ms: lat, dest: g.dest, warp, time, cue, wx: g.wx.info.clone(), threats, fuel: g.fuel_plan.clone(), fuel_since: get_time() - g.fuel_change_t }
 }
 
 /// Actions demandées sur l'écran Darkstar (vidange, zoom caméra, boutons de lunette).
@@ -294,6 +299,9 @@ impl Game {
             connect: None,
             link_msg: String::new(),
             mins: 0,
+            da_ft: 200.0,
+            calls: 0,
+            degraded: None,
             chambers: health::ChamberMon::new(),
             onboard: false,
             taxi: None,
@@ -547,13 +555,75 @@ impl Game {
         // déconnexion (attitude, vitesse, configuration, modes, pannes réelles), liaison rétablie
         let mut ac = self.last_ac.clone().unwrap_or_else(|| self.ac.clone());
         ac.crashed = None;
+        let kind = self.mishap.as_ref().map(|m| m.kind);
+        let lights = self.mishap.as_ref().map(|m| m.lights()).unwrap_or([0; 32]);
         self.ac = ac;
+        // Les dégâts de l'incident demeurent : chaque système touché (voyant allumé) est en panne
+        self.apply_damage(&lights);
+        self.degraded = kind;
         self.mishap = None;
         self.crash_report.clear();
         self.stale = None;
         self.tree = None;
         self.link.state = link::State::Connected;
-        self.push(Level::Info, format!("RECONNEXION IMMEDIATE : LIAISON RETABLIE VIA {} — REPRISE DU VOL DANS LA CONFIGURATION PRECEDENTE", self.link.path.name()));
+        self.push(Level::Warning, format!("RECONNEXION IMMEDIATE : LIAISON RETABLIE VIA {} — MODE DEGRADE (TELEMESURE + TERMINAL, MANCHE INDISPONIBLE)", self.link.path.name()));
+        self.push(Level::Warning, "DEGATS DE L'INCIDENT CONSERVES : CERTAINES INSTRUCTIONS SONT REFUSEES — EMERGENCY OVERRIDE / EJECTION TOUJOURS POSSIBLES");
+    }
+
+    /// Pannes réelles des systèmes touchés par l'incident (voyants du panneau, ordre alarms::LIGHTS).
+    fn apply_damage(&mut self, l: &[u8; 32]) {
+        use systems::Fail;
+        let on = |i: usize| l[i] > 0;
+        let ac = &mut self.ac;
+        for (i, f) in [(0, Fail::GenL), (1, Fail::GenR), (10, Fail::ScramCool), (13, Fail::FuelPump), (15, Fail::H2Leak), (22, Fail::Adc), (23, Fail::FcsDirect), (26, Fail::Hyd), (28, Fail::GearJam), (29, Fail::InletJam)] {
+            if on(i) {
+                ac.set_failure(f, true);
+            }
+        }
+        for k in 0..2 {
+            if on(2 + k) {
+                ac.eng.fadec_fault[k] = true;
+            }
+            if on(4 + k) {
+                ac.eng.side[k] = TurbState::Failed;
+                ac.eng.n2s[k] = 0.0;
+            }
+        }
+        if on(4) && on(5) {
+            ac.eng.turb = TurbState::Failed;
+            ac.throttle = 0.0;
+        }
+        if on(11) {
+            ac.eng.combustor_failed = true;
+            ac.eng.ram = RamState::Off;
+            ac.eng.scram = ScramState::Off;
+        }
+        if on(31) {
+            for s in self.thermal.sensors.iter_mut().step_by(5) {
+                s.failed = true;
+            }
+        }
+    }
+
+    /// Instructions impossibles en mode dégradé, selon les dégâts.
+    fn degraded_refusal(&self, cmd: &str) -> Option<&'static str> {
+        let k = self.degraded?;
+        const FLIGHT: [&str; 20] = ["CAP", "HDG", "ALT", "FL", "MACH", "SPD", "VITESSE", "PITCH", "ASSIETTE", "AP", "DIRECT", "DCT", "DIR", "LAND", "ATTERRIR", "AUTOLAND", "ATTERRISSAGE", "DESCENTE", "TAKEOFF", "DECOLLAGE"];
+        const ENGINE: [&str; 10] = ["TURB", "TURBINE", "TURBINES", "STATO", "SCRAM", "THR", "MANETTE", "PC", "AB", "INLET"];
+        const SENSORS: [&str; 8] = ["CAMERA", "CAM", "ZOOM", "SAR", "PHOTO", "ELINT", "WXR", "RADAR-METEO"];
+        let fcs = self.ac.fails.has(systems::Fail::FcsDirect) && self.ac.fails.has(systems::Fail::Hyd);
+        let engines = self.ac.eng.side.iter().all(|s| *s == TurbState::Failed) || self.ac.eng.combustor_failed;
+        let elec = self.ac.fails.has(systems::Fail::GenL) && self.ac.fails.has(systems::Fail::GenR);
+        let _ = k;
+        if fcs && FLIGHT.contains(&cmd) {
+            Some("GOUVERNES / HYDRAULIQUE ENDOMMAGEES : PILOTAGE NON DISPONIBLE — EMERGENCY OVERRIDE OU EJECTION")
+        } else if engines && ENGINE.contains(&cmd) {
+            Some("MOTEURS DETRUITS : COMMANDE MOTEUR SANS EFFET")
+        } else if elec && SENSORS.contains(&cmd) {
+            Some("BUS ELECTRIQUE DEGRADE : CAPTEURS HORS TENSION")
+        } else {
+            None
+        }
     }
 
     /// Place l'appareil choisi sur son terrain : aligné sur la piste ou au point d'attente.
@@ -881,7 +951,7 @@ impl Game {
         let (_, lat_ms) = self.link();
         let now = get_time();
         // Sans liaison complète, les ordres de manche ne sont pas transmis
-        let st = if self.link.full() { self.stick } else { (0.0, 0.0) };
+        let st = if self.link.full() && self.degraded.is_none() { self.stick } else { (0.0, 0.0) };
         self.link_buf.push_back((now, st.0, st.1));
         while let Some(&(t, p, r)) = self.link_buf.front() {
             if now - t >= lat_ms / 1000.0 {
@@ -1022,18 +1092,38 @@ impl Game {
             Some((_, _, _, _, tel)) => {
                 let h = (self.ac.alt - tel) / FT;
                 let dead = self.ac.autoland.as_ref().is_some_and(|a| a.dead_stick);
+                let da = self.da_ft;
+                // Annonces de hauteur (une fois chacune en descente)
+                if h > 1_500.0 {
+                    self.calls = 0;
+                } else if self.ac.d.vs < 0.0 {
+                    let radio = self.ac.d.agl / FT;
+                    for (k, (lim, txt)) in [(1_000.0, "1000"), (500.0, "500"), (da + 100.0, "100 ABOVE")].iter().enumerate() {
+                        if h < *lim && h > lim - 150.0 && self.calls & (1 << k) == 0 && *lim > da {
+                            self.calls |= 1 << k;
+                            self.flash(*txt, WHITE);
+                        }
+                    }
+                    for (k, (lim, txt)) in [(50.0, "50"), (40.0, "40"), (30.0, "30"), (20.0, "20"), (10.0, "10"), (5.0, "RETARD")].iter().enumerate() {
+                        let bit = 1 << (8 + k);
+                        if radio < *lim && self.calls & bit == 0 {
+                            self.calls |= bit;
+                            self.flash(*txt, if *txt == "RETARD" { ui::AMBER } else { WHITE });
+                        }
+                    }
+                }
                 if h > 1_500.0 {
                     self.mins = 0;
-                } else if !dead && self.mins == 0 && h < 300.0 && self.ac.d.vs < 0.0 {
+                } else if !dead && self.mins == 0 && h < da + 100.0 && self.ac.d.vs < 0.0 {
                     self.mins = 1;
                     self.flash("APPROACHING MINIMUMS", ui::AMBER);
                     self.cues.push(audio::Cue::Ack);
-                } else if !dead && self.mins == 1 && h < 200.0 {
+                } else if !dead && self.mins == 1 && h < da {
                     self.mins = 2;
                     self.flash("MINIMUMS", ui::AMBER);
                     self.cues.push(audio::Cue::Ack);
                     self.push(Level::Caution, "MINIMUMS — DECISION : CONTINUE OU GO AROUND");
-                } else if self.mins == 2 && h < 60.0 {
+                } else if self.mins == 2 && h < (da * 0.3).min(60.0) {
                     // Sans décision avant 60 ft : l'approche continue
                     self.mins = 3;
                     self.push(Level::Info, "MINIMUMS : PAS DE DECISION — APPROCHE CONTINUEE");
@@ -1217,6 +1307,13 @@ impl Game {
         const LOCAL: [&str; 18] = ["AIDE", "HELP", "HUD", "INFOS", "METEO", "WX", "WEATHER", "RESSENTI", "FEEL", "PANNE", "PANNES", "FAIL", "MAJ", "RECONNEXION", "RECONNECT", "RELAIS", "LIAISON", "INCIDENT"];
         const EMERG: [&str; 5] = ["EMERGENCY", "URGENCE", "MAYDAY", "EJECTION", "EJECT"];
         let _ = EMERG;
+        if !self.onboard {
+            if let Some(why) = self.degraded_refusal(w[0]) {
+                self.cues.push(audio::Cue::Refused);
+                self.push(Level::Caution, format!("DARKSTAR : IMPOSSIBLE — {why}"));
+                return;
+            }
+        }
         if !self.link.emergency_ok() && !LOCAL.contains(&w[0]) && !self.onboard {
             self.cues.push(audio::Cue::Refused);
             self.push(Level::Caution, "LIAISON PERDUE — INSTRUCTION NON TRANSMISE (RECONNEXION / RELAIS)");
@@ -1432,6 +1529,13 @@ impl Game {
                     reply = Ok(format!("ROULAGE VERS LA PISTE {:02} — ALIGNEMENT", airports::Airport::runway_number(fin)));
                 }
                 _ => reply = Err("PAS AU POINT D'ATTENTE".into()),
+            },
+            "DA" | "DH" | "MINIMUMS" | "MINIMA" => match num(1) {
+                Some(v) if (50.0..=1_000.0).contains(&v) => {
+                    self.da_ft = v;
+                    reply = Ok(format!("DA : SEUIL + {v:.0} FT"));
+                }
+                _ => reply = Err(format!("DA ACTUELLE : SEUIL + {:.0} FT (DA 50 a 1000)", self.da_ft)),
             },
             "CONTINUE" | "CONTINUER" | "LAND" if w.len() == 1 && self.mins == 2 => {
                 self.mins = 3;
@@ -1695,6 +1799,7 @@ impl Game {
                 }
                 self.link.tx_fail = false;
                 self.link.sat_fail = false;
+                self.degraded = None;
                 reply = Ok("TOUTES LES PANNES RÉPARÉES".into());
             }
             "FIN" | "END" | "TERMINER" => {
@@ -2167,6 +2272,12 @@ async fn main() {
                 combat::draw_hud(&g.combat, svs_r);
             }
             emergency::draw_hud(&g.emerg, &g.ac, svs_r, time);
+            // Mode dégradé après reconnexion
+            if g.degraded.is_some() && g.mishap.is_none() {
+                let b = Rect::new(svs_r.x + svs_r.w / 2.0 - 230.0, svs_r.y + 4.0, 460.0, 20.0);
+                ui::rrect(b, 5.0, Color::new(0.35, 0.18, 0.0, 0.85));
+                ui::txt_c("LIAISON DEGRADEE — TELEMESURE + TERMINAL, MANCHE INDISPONIBLE", b.x + b.w / 2.0, b.y + 14.0, 12.0, ui::AMBER);
+            }
             // Décision aux minimums : CONTINUE ou GO AROUND
             if g.mins == 2 {
                 let (cx, y) = (svs_r.x + svs_r.w / 2.0, svs_r.y + svs_r.h * 0.62);

@@ -474,3 +474,12 @@ Le SR-72 est un avion de reconnaissance : sa charge utile est simulée.
   **Reconnexion immédiate** (remplace la « 2e chance ») : l'avion reprend exactement l'état de la
   dernière trame avant la déconnexion (attitude, vitesse, configuration, modes, pannes réelles),
   liaison rétablie sur le chemin précédent ; le panneau d'alarmes reprend l'état réel.
+- v1.30.1 : **reconnexion = l'avion endommagé reprend**, pas réparé — l'avion reprend l'état de vol
+  précédant la perte avec les dégâts de l'incident (chaque système touché du panneau devient une
+  panne réelle) ; liaison en **mode dégradé** (télémesure + terminal, manche indisponible, bandeau
+  sur l'horizon) avec instructions refusées selon les dégâts (gouvernes / hydraulique → pas de
+  pilotage AP ; moteurs détruits → pas de commande moteur ; électricité → capteurs hors tension) ;
+  EMERGENCY OVERRIDE et éjection toujours possibles ; TOUT RÉPARER lève le mode dégradé.
+  **DA** réglable (`DA 250`, seuil + hauteur), affichée sur l'altimètre (cyan, ambre en dessous),
+  repère MIN calé dessus ; annonces 1000, 500, 100 ABOVE, APPROACHING MINIMUMS, MINIMUMS,
+  50-40-30-20-10, RETARD.

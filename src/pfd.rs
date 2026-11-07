@@ -23,6 +23,8 @@ pub struct PfdInfo<'a> {
     pub threats: Vec<crate::pfd_plus::ThreatCue>,
     /// Perte du véhicule : (dégradation 0..1, secondes depuis la perte du signal, < 0 avant).
     pub mishap: Option<(f32, f64)>,
+    /// Hauteur de décision au-dessus du seuil (ft).
+    pub da_ft: f64,
 }
 
 const LINE: Color = Color::new(0.92, 0.94, 0.95, 1.0);
@@ -108,7 +110,7 @@ pub fn draw_pfd(ac: &Aircraft, v: &View, r: Rect, info: &PfdInfo) {
     draw_svs_overlay(ac, v, g.inner, info);
     draw_fma_bar(ac, r, &g, info);
     draw_speed(ac, &g, info.time);
-    draw_altitude(ac, &g);
+    draw_altitude(ac, &g, info.da_ft);
     draw_vsi(ac.d.vs, g.vsi);
     draw_heading(ac, &g, info);
     rrect_lines(r, 6.0, 1.5, Color::new(0.78, 0.80, 0.82, 0.85));
@@ -558,7 +560,7 @@ fn draw_speed(ac: &Aircraft, g: &Geo, time: f64) {
     txt(&format!("MAX {:+.1}  MIN {:+.1}", ac.g_max, ac.g_min), t.x + 2.0, y + 64.0, 11.0, mc);
 }
 
-fn draw_altitude(ac: &Aircraft, g: &Geo) {
+fn draw_altitude(ac: &Aircraft, g: &Geo, da_ft: f64) {
     let d = &ac.d;
     let t = g.alt;
     tape_bg(t);
@@ -604,7 +606,7 @@ fn draw_altitude(ac: &Aircraft, g: &Geo) {
     }
     // Minimums (200 ft au-dessus du seuil) en approche
     if let Some((_, _, _, _, el)) = ac.approach {
-        let mda = (el / FT) as f32 + 200.0;
+        let mda = (el / FT) as f32 + da_ft as f32;
         let y = cy - (mda - alt) * ppf;
         let c = if alt < mda { AMBER } else { CYAN_S };
         draw_line(lx, y, lx + 40.0, y, 2.0, c);
@@ -629,6 +631,12 @@ fn draw_altitude(ac: &Aircraft, g: &Geo) {
         txt(&format!("{:.0}", ac.ap.alt_tgt_ft), t.x + 4.0, t.y - 6.0, 14.0, MAGENTA_S);
     } else {
         txt("STD", t.x + 4.0, t.y - 6.0, 12.0, LABEL);
+    }
+    // Altitude de décision (seuil + hauteur de décision) en approche
+    if let Some((_, _, _, _, el)) = ac.approach {
+        let da = el / FT + da_ft;
+        let below = ac.alt / FT < da;
+        txt_r(&format!("DA {da:.0}"), t.x + t.w - 4.0, t.y - 6.0, 12.0, if below { AMBER } else { CYAN_S });
     }
     // En dessous : niveau de vol, pression dynamique, peau
     let y = t.y + t.h + 24.0;
