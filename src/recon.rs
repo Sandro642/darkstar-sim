@@ -913,6 +913,51 @@ fn render_ground(tiles: &mut Tiles, lat: f64, lon: f64, width_m: f64, hdg: f64, 
 }
 
 /// Volet caméra de l'écran Darkstar : image réelle au point visé, cap en haut.
+/// Informations de prise de vue sur l'horizon (zone centrale `r`) : mode, zoom, résolution au sol,
+/// qualité NIIRS, raison d'une image dégradée, dépointage, accrochage de l'objectif.
+pub fn draw_cam_hud(ac: &Aircraft, rc: &Recon, r: Rect, time: f64) {
+    if !(rc.cam_on && Recon::sensors_ok(ac)) {
+        return;
+    }
+    let (_, _, off) = rc.los(ac);
+    let (q, why) = rc.niirs(ac);
+    let zoom = ZOOMS[rc.zoom];
+    let l1 = format!("CAM {} {} x{zoom:.0}   GSD {:.2} m   NIIRS {q:.1}", if rc.ir { "IR" } else { "EO" }, if off > 0.0 { "TRACK" } else { "NADIR" }, rc.gsd(ac));
+    let (l2, c2) = match why {
+        Some(w) => (w.to_string(), AMBER),
+        None if off > 0.0 => (format!("DEPOINTAGE {:.0} deg   OBLIQUE {:.0} km", off.to_degrees(), rc.slant(ac) / 1000.0), CYAN_S),
+        None => (String::new(), WHITE),
+    };
+    let w = txt_w(&l1, 12.0).max(txt_w(&l2, 11.0)) + 20.0;
+    let h = if l2.is_empty() { 22.0 } else { 36.0 };
+    let b = Rect::new(r.x + (r.w - w) / 2.0, r.y + r.h - 34.0 - h, w, h);
+    rrect(b, 5.0, Color::new(0.0, 0.0, 0.0, 0.78));
+    rrect_lines(b, 5.0, 1.0, Color::new(0.35, 1.0, 0.55, 0.5));
+    txt_c(&l1, b.x + b.w / 2.0, b.y + 15.0, 12.0, if why.is_some() { AMBER } else { GREEN_S });
+    if !l2.is_empty() {
+        txt_c(&l2, b.x + b.w / 2.0, b.y + 30.0, 11.0, c2);
+    }
+    // Accrochage de l'objectif : LOCK ou compte à rebours, au-dessus du bloc
+    let code = rc.targets[rc.selected].code;
+    match rc.lock_eta(ac) {
+        Some(t) if t <= 0.0 => {
+            let lb = Rect::new(b.x + b.w / 2.0 - 75.0, b.y - 26.0, 150.0, 22.0);
+            let pulse = 0.7 + 0.3 * ((time * 4.0).sin() as f32);
+            rrect(lb, 5.0, Color::new(0.0, 0.3, 0.1, 0.85));
+            rrect_lines(lb, 5.0, 2.0, Color::new(0.35, 1.0, 0.55, pulse));
+            txt_c(&format!("LOCK CIBLE {code}"), lb.x + lb.w / 2.0, lb.y + 16.0, 14.0, GREEN_S);
+        }
+        Some(t) => {
+            let s = format!("LOCK CIBLE {code} DANS {}", crate::mission::fmt_time(t));
+            let tw = txt_w(&s, 12.0) + 16.0;
+            let lb = Rect::new(b.x + b.w / 2.0 - tw / 2.0, b.y - 24.0, tw, 20.0);
+            rrect(lb, 5.0, Color::new(0.0, 0.0, 0.0, 0.6));
+            txt_c(&s, lb.x + lb.w / 2.0, lb.y + 14.0, 12.0, CYAN_S);
+        }
+        None => {}
+    }
+}
+
 pub fn draw_camera(ac: &Aircraft, rc: &Recon, tiles: &mut Tiles, r: Rect) -> Option<CamAction> {
     let mut out = None;
     let grey = Color::new(0.45, 0.47, 0.5, 1.0);
@@ -950,31 +995,12 @@ pub fn draw_camera(ac: &Aircraft, rc: &Recon, tiles: &mut Tiles, r: Rect) -> Opt
         round_line(vec2(bx, by), vec2(bx + bw, by), 2.0, WHITE);
         txt(&if bar_m >= 1000.0 { format!("{:.0} km", bar_m / 1000.0) } else { format!("{bar_m:.0} m") }, bx, by - 5.0, 11.0, WHITE);
         scissor(None);
-        let (q, why) = rc.niirs(ac);
-        txt(&format!("{} {} x{zoom:.0}  GSD {:.2} m  NIIRS {q:.1}", if rc.ir { "IR" } else { "EO" }, if off > 0.0 { "TRACK" } else { "NADIR" }, rc.gsd(ac)), r.x + 10.0, r.y + 17.0, 12.0, if why.is_some() { AMBER } else { GREEN_S });
-        if let Some(w) = why {
-            txt_r(w, img.x + img.w - 6.0, img.y + 16.0, 11.0, AMBER);
-        }
-        if off > 0.0 {
-            txt_r(&format!("DEP {:.0} deg  OBL {:.0} km", off.to_degrees(), rc.slant(ac) / 1000.0), img.x + img.w - 6.0, img.y + 30.0, 11.0, CYAN_S);
-        }
-        // Accrochage de l'objectif : LOCK ou compte à rebours
-        match rc.lock_eta(ac) {
-            Some(t) if t <= 0.0 => {
-                let b = Rect::new(img.x + 8.0, img.y + 8.0, 120.0, 18.0);
-                rrect(b, 4.0, Color::new(0.0, 0.3, 0.1, 0.8));
-                rrect_lines(b, 4.0, 1.5, GREEN_S);
-                txt_c(&format!("LOCK CIBLE {}", rc.targets[rc.selected].code), b.x + b.w / 2.0, b.y + 13.0, 12.0, GREEN_S);
-            }
-            Some(t) => {
-                txt(&format!("LOCK CIBLE {} DANS {}", rc.targets[rc.selected].code, crate::mission::fmt_time(t)), img.x + 8.0, img.y + 20.0, 12.0, CYAN_S);
-            }
-            None => {}
-        }
+        let _ = off;
+        // Les informations de prise de vue sont sur l'horizon (draw_cam_hud)
+        txt(if rc.ir { "IR" } else { "EO" }, r.x + 10.0, r.y + 17.0, 12.0, GREEN_S);
         draw_rectangle_lines(img.x, img.y, img.w, img.h, 1.0, Color::new(0.5, 0.52, 0.55, 1.0));
     } else {
-        txt_c("Camera Zoom Elevation :N/A", r.x + r.w / 2.0 - 10.0, r.y + 17.0, 13.0, WHITE);
-        txt_c("Camera unavailable", r.x + r.w / 2.0 - 8.0, r.y + r.h / 2.0 + 6.0, 18.0, WHITE);
+        txt_c("CAMERA OFF", r.x + r.w / 2.0 - 8.0, r.y + r.h / 2.0 + 6.0, 18.0, DIM);
         let why = if !ac.elec.bus_ok { "BUS ELEC PERDU" } else if ac.on_ground { "AU SOL" } else { "CAMERA ON pour l'activer" };
         txt_c(why, r.x + r.w / 2.0 - 8.0, r.y + r.h / 2.0 + 26.0, 11.0, DIM);
     }

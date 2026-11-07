@@ -398,3 +398,8 @@ Le SR-72 est un avion de reconnaissance : sa charge utile est simulée.
 - v1.25.1 : horizon — annonces d'événements aérofreins (sortis / rentrés, auto) et freins (frein de
   parc serré / desserré, freinage, freins armés / relâchés) ; mémos permanents AEROFREINS (ambre si
   poussée), FREIN PARC (ambre si poussée au frein), FREINAGE avec décélération.
+- v1.26.0 : informations caméra sur l'horizon (mode EO/IR, nadir/poursuite, zoom, GSD, NIIRS, raison
+  d'image dégradée, dépointage, LOCK CIBLE ou compte à rebours) ; position de l'avion sur l'horizon ;
+  l'image caméra reste dégagée. Volet carburant refait : silhouette du Darkstar de la page SYSTEMES
+  avec réservoirs JP-7 / H2 remplis selon le niveau, débit et quantités à gauche, pression et
+  pompes à droite.

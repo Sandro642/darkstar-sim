@@ -347,6 +347,12 @@ fn draw_svs_overlay(ac: &Aircraft, v: &View, s: Rect, info: &PfdInfo) {
         draw_circle(s.x + 12.0, s.y + 13.0, 4.0, RED);
     }
     txt("REC  FTV-01", s.x + 20.0, s.y + 18.0, 13.0, Color::new(0.9, 0.9, 0.9, 0.8));
+    // Position de l'avion (auparavant sous l'image caméra)
+    let pos = |v: f64, p: char, n: char| {
+        let a = v.abs();
+        format!("{}{:.0} {:05.2}'", if v >= 0.0 { p } else { n }, a.floor(), (a - a.floor()) * 60.0)
+    };
+    txt(&format!("{}  {}", pos(ac.lat, 'N', 'S'), pos(ac.lon, 'E', 'W')), s.x + 112.0, s.y + 18.0, 11.0, Color::new(0.85, 0.88, 0.9, 0.75));
     // Informations éphémères façon HUD : RWR (haut gauche), vent / météo (haut droite)
     if !ac.on_ground {
         crate::pfd_plus::rwr(ac, &info.threats, Rect::new(s.x + 8.0, s.y + 26.0, 92.0, 92.0), info.time, vis.rwr);

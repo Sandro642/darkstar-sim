@@ -112,11 +112,13 @@ pub fn draw_mfd(world: &World, tiles: &mut crate::tiles::Tiles, wx: &crate::weat
         }
     }
     crate::refuel::draw_hud(rf, ac, lay.inner, time);
+    if info.mishap.is_none() {
+        crate::recon::draw_cam_hud(ac, recon, lay.inner, time);
+    }
     act.fuel_dump = draw_fuel(ac, panes[0]);
     pane_frame(panes[1]);
     act.cam = crate::recon::draw_camera(ac, recon, tiles, panes[1]);
-    let p = panes[1];
-    txt_c(&format!("{} / {}", dms(ac.lat, 'N', 'S'), dms(ac.lon, 'E', 'W')), p.x + p.w / 2.0, p.y + p.h - 6.0, 12.0, WHITE);
+
     draw_hsi(ac, panes[2], st, info.dest);
     // Perte du signal : écrans sans source de données
     if info.mishap.is_some_and(|(_, since)| since >= 0.0) {
@@ -129,14 +131,6 @@ pub fn draw_mfd(world: &World, tiles: &mut crate::tiles::Tiles, wx: &crate::weat
         }
     }
     (view, act)
-}
-
-fn dms(v: f64, pos: char, neg: char) -> String {
-    let a = v.abs();
-    let d = a.floor();
-    let m = ((a - d) * 60.0).floor();
-    let s = ((a - d) * 60.0 - m) * 60.0;
-    format!("{d:.0}d{m:02.0}'{s:05.2}\" {}", if v >= 0.0 { pos } else { neg })
 }
 
 fn pane_frame(r: Rect) {
@@ -159,78 +153,47 @@ fn tank_fracs(ac: &Aircraft) -> [f32; 4] {
     out
 }
 
-/// Volet carburant : débit, pressions des pompes, réservoirs, centrage, vidange. Renvoie vrai si DUMP cliqué.
+/// Volet carburant : débit (gauche), synoptique des réservoirs sur la silhouette du Darkstar (centre),
+/// pressions des pompes (droite), quantités, centrage et vidange. Renvoie vrai si DUMP cliqué.
 fn draw_fuel(ac: &Aircraft, r: Rect) -> bool {
     pane_frame(r);
     let e = &ac.eng;
-    let s = (r.w / 270.0).min(r.h / 260.0).clamp(0.7, 1.3);
-    // Débit carburant
-    txt("FUEL FLOW", r.x + 10.0, r.y + 18.0, 13.0, WHITE);
-    let pph = e.fuel_flow * 3600.0 * 2.2046 / 1000.0;
-    let g = 20.0 * s;
-    arc_gauge(r.x + 18.0 + g, r.y + 30.0 + g, g, (pph / 300.0) as f32, 0.85);
-    txt("PPH", r.x + 12.0, r.y + 52.0 + 2.0 * g, 14.0, WHITE);
-    value_box(r.x + 46.0, r.y + 52.0 + 2.0 * g, 38.0, &format!("{pph:03.0}"), WHITE);
-    txt("(x1000)", r.x + 10.0, r.y + 66.0 + 2.0 * g, 10.0, DIM);
-    if e.h2_flow > 0.0 {
-        txt(&format!("H2 {:.1}kg/s", e.h2_flow), r.x + 10.0, r.y + 80.0 + 2.0 * g, 11.0, CYAN_S);
-    }
+    let faint = Color::new(0.55, 0.58, 0.62, 0.6);
+    let lw = r.w * 0.30;
+    let rw = r.w * 0.26;
+    let g = (lw * 0.24).clamp(14.0, 22.0);
 
-    // Pressions : jauge principale + pompes 1 à 4
-    let fp = ac.fuel_psi();
-    txt_r("FUEL PRES.", r.x + r.w - 10.0, r.y + 18.0, 13.0, WHITE);
-    let gx = r.x + r.w - 14.0 - g;
-    arc_gauge(gx, r.y + 30.0 + g, g, (fp / 120.0) as f32, 0.88);
-    txt_c("1", gx, r.y + 30.0 + g * 1.5, 11.0, WHITE);
-    txt("Psi", r.x + r.w - 104.0, r.y + 52.0 + 2.0 * g, 13.0, WHITE);
-    value_box(r.x + r.w - 72.0, r.y + 52.0 + 2.0 * g, 62.0, &format!("{fp:.2}"), if fp < 40.0 { AMBER } else { WHITE });
-    let tanks = tank_fracs(ac);
-    let pumps_on = fp > 20.0;
-    let sg = 13.0 * s;
-    for (i, t) in tanks.iter().enumerate() {
-        let cy = r.y + 92.0 + 2.0 * g + i as f32 * (2.0 * sg + 10.0);
-        if cy + sg > r.y + r.h - 4.0 {
+    // --- Gauche : débit et quantités ---
+    let x = r.x + 10.0;
+    txt("FUEL FLOW", x, r.y + 18.0, 12.0, WHITE);
+    let pph = e.fuel_flow * 3600.0 * 2.2046 / 1000.0;
+    arc_gauge(x + g + 2.0, r.y + 30.0 + g, g, (pph / 300.0) as f32, 0.85);
+    txt("PPH", x, r.y + 48.0 + 2.0 * g, 12.0, DIM);
+    value_box(x + 32.0, r.y + 48.0 + 2.0 * g, 40.0, &format!("{pph:03.0}"), WHITE);
+    txt("x1000", x + 76.0, r.y + 48.0 + 2.0 * g, 9.0, DIM);
+    let mut y = r.y + 70.0 + 2.0 * g;
+    draw_line(x, y - 8.0, r.x + lw - 6.0, y - 8.0, 1.0, faint);
+    let cg = ac.cg();
+    let rows = [
+        ("JP-7", format!("{:.1} t", ac.fuel / 1000.0), GREEN_S),
+        ("H2", format!("{:.1} t", ac.h2 / 1000.0), CYAN_S),
+        ("H2 DEB", format!("{:.1} kg/s", e.h2_flow), CYAN_S),
+        ("CG", format!("{cg:.1} %"), if (21.0..=29.0).contains(&cg) { GREEN_S } else { AMBER }),
+    ];
+    for (l, v, c) in rows {
+        if y > r.y + r.h - 34.0 {
             break;
         }
-        let p = if pumps_on && *t > 0.0 { fp / 120.0 } else { 0.0 };
-        arc_gauge(gx, cy, sg, p as f32, 0.88);
-        txt_c(&format!("{}", i + 1), gx, cy + sg * 0.75, 10.0, WHITE);
+        txt(l, x, y + 4.0, 11.0, DIM);
+        txt_r(&v, r.x + lw - 6.0, y + 4.0, 12.0, c);
+        y += 16.0;
     }
-
-    // Silhouette et réservoirs
-    let cx = r.x + r.w * 0.47;
-    let top = r.y + 26.0;
-    let bot = r.y + r.h - 12.0;
-    let h = bot - top;
-    let hw = r.w * 0.17;
-    let outline = [(0.0, 0.0), (0.22, 0.48), (1.0, 0.82), (1.0, 0.96), (0.35, 1.0), (-0.35, 1.0), (-1.0, 0.96), (-1.0, 0.82), (-0.22, 0.48)];
-    let shape = smooth(&outline.iter().map(|&(x, y)| vec2(cx + x * hw, top + y * h)).collect::<Vec<_>>(), true, 2);
-    stroke(&shape, true, 2.0, GREEN_S);
-    let h2f = (ac.h2 / H2_MAX) as f32;
-    let blocks = [(0.30, 0.42, tanks[0], GREEN_S), (0.46, 0.26, h2f, CYAN_S), (0.62, 0.30, tanks[1], GREEN_S), (0.76, 0.34, tanks[2], GREEN_S), (0.90, 0.60, tanks[3], GREEN_S)];
-    for (fy, fw, f, c) in blocks {
-        let bw = hw * fw * 2.0;
-        let bh = h * 0.075;
-        let (bx, by) = (cx - bw / 2.0, top + fy * h - bh / 2.0);
-        rrect_lines(Rect::new(bx, by, bw, bh), bh * 0.3, 1.2, Color::new(c.r, c.g, c.b, 0.6));
-        if f > 0.02 {
-            let fh = (bh - 2.0) * f;
-            rrect(Rect::new(bx + 1.0, by + 1.0 + (bh - 2.0) - fh, bw - 2.0, fh), (bh * 0.3).min(fh * 0.5), c);
-        }
-    }
-
-    // Centrage et vidange
-    let cg = ac.cg();
-    let cgc = if (21.0..=29.0).contains(&cg) { GREEN_S } else { AMBER };
-    txt(&format!("CG {cg:.0}%"), r.x + 10.0, r.y + r.h * 0.62, 15.0, cgc);
-    txt(&format!("JP7 {:.1}t", ac.fuel / 1000.0), r.x + 10.0, r.y + r.h * 0.62 + 16.0, 11.0, GREEN_S);
-    txt(&format!("H2 {:.1}t {:.0}psi", ac.h2 / 1000.0, ac.h2_psi()), r.x + 10.0, r.y + r.h * 0.62 + 30.0, 11.0, CYAN_S);
-    let b = Rect::new(r.x + 10.0, r.y + r.h * 0.62 + 40.0, 48.0, 20.0);
+    // Vidange (bouton à contour pointillé)
+    let b = Rect::new(x, r.y + r.h - 28.0, 52.0, 20.0);
     if ac.fuel_dump {
         draw_rectangle(b.x, b.y, b.w, b.h, AMBER);
     }
     for i in 0..8 {
-        // contour pointillé
         let t0 = i as f32 / 8.0;
         let t1 = t0 + 0.07;
         draw_line(b.x + b.w * t0, b.y, b.x + b.w * t1, b.y, 1.5, WHITE);
@@ -239,6 +202,37 @@ fn draw_fuel(ac: &Aircraft, r: Rect) -> bool {
     draw_line(b.x, b.y, b.x, b.y + b.h, 1.5, WHITE);
     draw_line(b.x + b.w, b.y, b.x + b.w, b.y + b.h, 1.5, WHITE);
     txt_c("DUMP", b.x + b.w / 2.0, b.y + 15.0, 13.0, if ac.fuel_dump { BLACK } else { WHITE });
+
+    // --- Centre : silhouette du Darkstar et réservoirs ---
+    let cr = Rect::new(r.x + lw, r.y + 8.0, r.w - lw - rw, r.h - 16.0);
+    crate::syspage::fuel_tanks(ac, cr);
+    let total = ((ac.fuel / FUEL_MAX + ac.h2 / H2_MAX) / 2.0 * 100.0) as f32;
+    txt_c(&format!("{total:.0}%"), cr.x + cr.w / 2.0, r.y + r.h - 6.0, 11.0, DIM);
+
+    // --- Droite : pression et pompes ---
+    let rx = r.x + r.w - rw;
+    let fp = ac.fuel_psi();
+    txt_r("FUEL PRES.", r.x + r.w - 10.0, r.y + 18.0, 12.0, WHITE);
+    let gx = r.x + r.w - 12.0 - g;
+    arc_gauge(gx, r.y + 30.0 + g, g, (fp / 120.0) as f32, 0.88);
+    txt("PSI", rx + 2.0, r.y + 48.0 + 2.0 * g, 12.0, DIM);
+    value_box(r.x + r.w - 56.0, r.y + 48.0 + 2.0 * g, 46.0, &format!("{fp:.0}"), if fp < 40.0 { AMBER } else { WHITE });
+    let tanks = tank_fracs(ac);
+    let pumps_on = fp > 20.0;
+    let sg = ((rw - 24.0) / 4.4).clamp(8.0, 14.0);
+    let py0 = r.y + 76.0 + 2.0 * g;
+    txt("POMPES", rx + 2.0, py0 - 4.0, 10.0, DIM);
+    for (i, t) in tanks.iter().enumerate() {
+        let (c, row) = (i % 2, i / 2);
+        let cx = rx + 8.0 + sg + c as f32 * (2.0 * sg + 14.0);
+        let cy = py0 + 10.0 + sg + row as f32 * (2.0 * sg + 12.0);
+        if cy + sg > r.y + r.h - 4.0 {
+            break;
+        }
+        let p = if pumps_on && *t > 0.0 { fp / 120.0 } else { 0.0 };
+        arc_gauge(cx, cy, sg, p as f32, 0.88);
+        txt_c(&format!("{}", i + 1), cx, cy + sg * 0.8, 10.0, WHITE);
+    }
     clicked(b)
 }
 

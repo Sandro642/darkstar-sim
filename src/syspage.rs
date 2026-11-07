@@ -35,7 +35,7 @@ fn state_color(s: u8) -> Color {
 }
 
 /// Repère de la vue en plan dans un rectangle.
-fn plan(r: Rect) -> impl Fn(f32, f32) -> Vec2 {
+pub fn plan(r: Rect) -> impl Fn(f32, f32) -> Vec2 {
     // Proportions de la cellule : envergure ~ 0,8 x longueur
     let pw = (r.w * 1.35).min((r.h - 12.0) * 1.15);
     let ph = pw * 0.87;
@@ -44,7 +44,7 @@ fn plan(r: Rect) -> impl Fn(f32, f32) -> Vec2 {
     move |x: f32, y: f32| vec2(cx + x * pw / 2.0, y0 + y * ph)
 }
 
-fn silhouette(r: Rect, edge: Color, fill: Color) -> Vec<Vec2> {
+pub fn silhouette(r: Rect, edge: Color, fill: Color) -> Vec<Vec2> {
     let to = plan(r);
     let shape = smooth(&OUTLINE.iter().map(|&(x, y)| to(x, y)).collect::<Vec<_>>(), true, 2);
     let c = to(0.0, 0.62);
@@ -58,6 +58,34 @@ fn silhouette(r: Rect, edge: Color, fill: Color) -> Vec<Vec2> {
         round_line(to(sx * 0.16, 0.74), to(sx * 0.27, 0.97), 2.5, edge);
     }
     shape
+}
+
+/// Synoptique carburant : silhouette remplie, réservoirs JP-7 (vert) et H2 (cyan) selon le niveau.
+pub fn fuel_tanks(ac: &Aircraft, pr: Rect) {
+    silhouette(pr, OKC, Color::new(0.05, 0.16, 0.08, 1.0));
+    let tp = plan(pr);
+    let cap = FUEL_MAX / 4.0;
+    let tank = |i: usize| ((ac.fuel - i as f64 * cap) / cap).clamp(0.0, 1.0) as f32;
+    let h2f = (ac.h2 / H2_MAX) as f32;
+    let blocks: [(f32, f32, f32, f32, f32, Color, &str); 6] = [
+        (-0.05, 0.28, 0.05, 0.40, tank(0), OKC, "1"),
+        (-0.09, 0.43, 0.09, 0.53, h2f, CYAN_S, "H2"),
+        (-0.15, 0.56, 0.15, 0.66, tank(1), OKC, "2"),
+        (-0.36, 0.70, -0.12, 0.82, tank(2), OKC, "3"),
+        (0.12, 0.70, 0.36, 0.82, tank(2), OKC, "3"),
+        (-0.14, 0.84, 0.14, 0.93, tank(3), OKC, "4"),
+    ];
+    for (x0, y0, x1, y1, f, c, l) in blocks {
+        let (a, b) = (tp(x0, y0), tp(x1, y1));
+        let rr = Rect::new(a.x, a.y, b.x - a.x, b.y - a.y);
+        draw_rectangle(rr.x, rr.y, rr.w, rr.h, Color::new(0.0, 0.0, 0.0, 0.6));
+        let fh = rr.h * f;
+        draw_rectangle(rr.x, rr.y + rr.h - fh, rr.w, fh, Color::new(c.r * 0.85, c.g * 0.85, c.b * 0.85, 0.95));
+        draw_rectangle_lines(rr.x, rr.y, rr.w, rr.h, 1.0, LINE);
+        if rr.h > 9.0 {
+            txt_c(l, rr.x + rr.w / 2.0, rr.y + rr.h / 2.0 + 4.0, 10.0, if f > 0.5 { BLACK } else { LINE });
+        }
+    }
 }
 
 /// Petite jauge horizontale libellée.
@@ -250,28 +278,7 @@ pub fn draw(ac: &Aircraft, th: &crate::thermal::ThermalSys, wxr: &crate::wxr::Wx
     // ---- Vue carburant (silhouette remplie) ----
     let right = Rect::new(mid.x + mid.w, body.y, body.x + body.w - (mid.x + mid.w), body.h - 16.0);
     let pr = Rect::new(right.x, right.y, right.w * 0.68, right.h);
-    silhouette(pr, OKC, Color::new(0.05, 0.16, 0.08, 1.0));
-    let tp = plan(pr);
-    let cap = FUEL_MAX / 4.0;
-    let tank = |i: usize| ((ac.fuel - i as f64 * cap) / cap).clamp(0.0, 1.0) as f32;
-    let h2f = (ac.h2 / H2_MAX) as f32;
-    let blocks: [(f32, f32, f32, f32, f32, Color, &str); 6] = [
-        (-0.05, 0.28, 0.05, 0.40, tank(0), OKC, "1"),
-        (-0.09, 0.43, 0.09, 0.53, h2f, CYAN_S, "H2"),
-        (-0.15, 0.56, 0.15, 0.66, tank(1), OKC, "2"),
-        (-0.36, 0.70, -0.12, 0.82, tank(2), OKC, "3G"),
-        (0.12, 0.70, 0.36, 0.82, tank(2), OKC, "3D"),
-        (-0.14, 0.84, 0.14, 0.93, tank(3), OKC, "4"),
-    ];
-    for (x0, y0, x1, y1, f, c, l) in blocks {
-        let (a, b) = (tp(x0, y0), tp(x1, y1));
-        let rr = Rect::new(a.x, a.y, b.x - a.x, b.y - a.y);
-        draw_rectangle(rr.x, rr.y, rr.w, rr.h, Color::new(0.0, 0.0, 0.0, 0.6));
-        let fh = rr.h * f;
-        draw_rectangle(rr.x, rr.y + rr.h - fh, rr.w, fh, Color::new(c.r * 0.85, c.g * 0.85, c.b * 0.85, 0.95));
-        draw_rectangle_lines(rr.x, rr.y, rr.w, rr.h, 1.0, LINE);
-        txt_c(l, rr.x + rr.w / 2.0, rr.y + rr.h / 2.0 + 4.0, 10.0, BLACK);
-    }
+    fuel_tanks(ac, pr);
     txt_c("CARBURANT", pr.x + pr.w / 2.0, pr.y + pr.h + 12.0, 11.0, OKC);
     // Colonne de quantités
     let qx = pr.x + pr.w + 4.0;
