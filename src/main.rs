@@ -34,6 +34,7 @@ mod ui;
 mod updater;
 mod weather;
 mod wx3d;
+mod wxr;
 mod wxreal;
 mod world;
 
@@ -1153,6 +1154,35 @@ impl Game {
                 self.wx.set_real();
                 reply = Ok(format!("METEO REELLE (Open-Meteo, grille 5x5 autour de l'avion) — {}", self.wx.real.status));
             }
+            "WXR" | "RADAR-METEO" | "WXRADAR" => {
+                let r = &mut self.mfd.wxr;
+                match arg(1) {
+                    "OFF" => r.on = false,
+                    "ON" | "" => r.on = true,
+                    "AUTO" => r.auto = true,
+                    "TILT" => match arg(2).replace(',', ".").parse::<f32>() {
+                        Ok(t) => {
+                            r.tilt = t.clamp(-15.0, 15.0);
+                            r.auto = false;
+                        }
+                        Err(_) => r.auto = true,
+                    },
+                    "TURB" => r.turb = arg(2) != "OFF",
+                    "HORIZON" | "3D" => r.horizon = arg(2) != "OFF",
+                    _ => {}
+                }
+                if matches!(arg(1), "RANGE" | "PORTEE") {
+                    if let Some(i) = arg(2).parse::<f64>().ok().and_then(|v| mfd::HSI_RANGES.iter().position(|x| *x >= v)) {
+                        self.mfd.hsi_range = i;
+                    }
+                }
+                let r = &mut self.mfd.wxr;
+                reply = Ok(if r.on {
+                    format!("RADAR METEO ON  TILT {}  TURB {}  HORIZON {}", r.tilt_label(), if r.turb { "ON" } else { "OFF" }, if r.horizon { "ON" } else { "OFF" })
+                } else {
+                    "RADAR METEO OFF".into()
+                });
+            }
             "METEO" | "WEATHER" | "WX" if arg(1) == "3D" => {
                 self.wx.show3d = arg(2) != "OFF";
                 reply = Ok(if self.wx.show3d { "METEO 3D ON (flux de vent, vecteurs, volumes de danger)".into() } else { "METEO 3D OFF".into() });
@@ -1537,6 +1567,7 @@ impl Game {
                     "CAMERA ON|OFF|EO|IR|TRACK|NADIR  ZOOM 8  PHOTO  SAR STRIP|SPOT|OFF  ELINT ON|OFF",
                     "CIBLE B  DIRECT CIBLE  PLAN RECON  ROUTE RECON|OFF  MENACES ON|OFF  RECON (page)",
                     "METEO REEL (defaut) | CALME|BEAU|NUAGEUX|COUVERT|ORAGEUX  METEO 3D ON/OFF  HUD (infos 10 s)",
+                    "WXR ON/OFF  WXR TILT -3 | WXR AUTO  WXR TURB ON/OFF  WXR HORIZON ON/OFF  WXR RANGE 160 (radar meteo)",
                     "TANKER [OACI|OFF]  RAVITAILLEMENT (autonome)  DECROCHER  BINGO [AUTO|t]",
                     "CHAFF  FLARE  ECM ON|OFF  CMDS AUTO|MAN  TIR [I|J|K] (HACM)  ARMEMENT (page)",
                     "EMERGENCY [OFF] (ravitaillement > terrain proche > ejection)  EJECTION CONFIRME",

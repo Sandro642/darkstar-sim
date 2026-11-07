@@ -14,11 +14,18 @@ pub const HSI_RANGES: [f64; 7] = [10.0, 20.0, 40.0, 80.0, 160.0, 320.0, 640.0];
 
 pub struct MfdState {
     pub hsi_range: usize,
+    /// Radar météo (peint sur l'écran de navigation et dans l'horizon).
+    pub wxr: crate::wxr::Wxr,
+}
+
+/// Portée du radar météo (limitée à 320 NM comme sur Airbus).
+fn wxr_range(st: &MfdState) -> f64 {
+    HSI_RANGES[st.hsi_range].min(320.0)
 }
 
 impl MfdState {
     pub fn new() -> Self {
-        MfdState { hsi_range: 2 }
+        MfdState { hsi_range: 2, wxr: crate::wxr::Wxr::new() }
     }
 }
 
@@ -92,6 +99,8 @@ pub fn draw_mfd(world: &World, tiles: &mut crate::tiles::Tiles, wx: &crate::weat
     let view = svs::draw_svs(world, tiles, wx, rf, ac, lay.svs, time, style, feel.cam());
     feel.draw_overlay(ac, lay.svs, time);
     crate::wx3d::draw(wx, ac, &view, time);
+    st.wxr.update(wx, ac, wxr_range(st), get_frame_time());
+    st.wxr.draw_horizon(ac, &view, time);
     crate::pfd_plus::set_inner(lay.inner);
     pfd::draw_pfd(ac, &view, lay.pfd, info);
     // Ravitailleur : repère tant qu'il est loin, directeur de ravitaillement en approche
@@ -249,6 +258,8 @@ fn draw_hsi(ac: &Aircraft, r: Rect, st: &mut MfdState, dest: usize) {
     let rad = (r.w * 0.40).min(r.h * 0.40);
     let cy = r.y + 40.0 + rad + 14.0;
     scissor(Some(Rect::new(r.x + 2.0, r.y + 26.0, r.w - 4.0, r.h - 28.0)));
+    // Image du radar météo, sous les symboles
+    st.wxr.draw_nd(vec2(cx, cy), rad * (wxr_range(st) / range) as f32, get_time());
     // Rose des caps
     let white = Color::new(0.92, 0.94, 0.95, 1.0);
     for k in 0..72 {
@@ -301,6 +312,7 @@ fn draw_hsi(ac: &Aircraft, r: Rect, st: &mut MfdState, dest: usize) {
     draw_triangle(vec2(cx, cy - 12.0), vec2(cx - 9.0, cy + 7.0), vec2(cx + 9.0, cy + 7.0), y);
     draw_rectangle(cx - 2.0, cy + 6.0, 4.0, 5.0, y);
     scissor(None);
+    st.wxr.annunciate(r.x + 8.0, r.y + r.h - 8.0);
     let gs = (ac.tas * ac.gamma.cos()).max(1.0);
     txt_r(&format!("{} {:.0}NM  ETE {}", apt.icao, dist / NM, crate::mission::fmt_time(dist / gs)), r.x + r.w - 8.0, r.y + r.h - 8.0, 12.0, MAGENTA_S);
 }

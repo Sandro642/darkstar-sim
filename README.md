@@ -372,3 +372,9 @@ Le SR-72 est un avion de reconnaissance : sa charge utile est simulée.
   l'humidité), vecteurs de vent devant l'avion, volumes filaires autour des cumulonimbus, nappes de
   turbulence en air clair ; bloc météo avec source, température extérieure, légende ; alerte du danger
   le plus fort sur la trajectoire.
+- v1.23.0 : **radar météo façon Airbus** (`WXR`) — antenne balayant ± 60° (image rafraîchie au passage
+  du faisceau), échos vert / jaune / rouge d'après les cumulonimbus, cumulus développés et
+  précipitations réelles, turbulence en magenta dans les 40 NM (WX+TURB), inclinaison AUTO
+  (balayage multiple) ou manuelle (`WXR TILT -3`, faisceau de 3,5°), portée de l'écran de navigation
+  (max 320 NM, `WXR RANGE 160`). Dans l'horizon (`WXR HORIZON ON/OFF`) : rideaux translucides aux
+  échos significatifs et bande de synthèse colorée sur la ligne d'horizon.
