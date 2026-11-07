@@ -339,3 +339,8 @@ Le SR-72 est un avion de reconnaissance : sa charge utile est simulée.
 - Les instruments (écran Darkstar, écran moteurs, radio, DSPLY, jauges CG/H2, interrupteurs gardés,
   levier et voyants de train) sont posés sur leurs emplacements 3D projetés et restent interactifs ;
   ils se masquent quand on regarde sur le côté. H : écran Darkstar en grand.
+- v1.16.0 : cockpit remodelé d'après l'intérieur du Darkstar — arceaux tubulaires rivetés (courbes),
+  ciel de cabine épousant les fenêtres, pyramide étroite à arêtes chanfreinées et ailes latérales,
+  lunettes d'instruments en relief, boutons éclairés et capots rouges en 3D, appuis rembourrés,
+  consoles inclinées denses, manette bi-levier, manche cylindrique à soufflet annelé ; palette
+  quasi noire, éclairage lissé par sommet depuis les fenêtres, atlas de textures unique, rendu par lots.
