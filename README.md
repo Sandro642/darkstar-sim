@@ -357,3 +357,9 @@ Le SR-72 est un avion de reconnaissance : sa charge utile est simulée.
   largeur de l'écran, échelles vitesse / altitude / variomètre translucides posées sur l'image,
   bandeau de modes unique (MENU, FMA, mode TBCC, liaison), arc d'inclinaison en haut avec pointeur
   de ciel, ruban de cap avec relèvement destination, blocs de données lisibles sur ciel clair.
+- v1.21.0 : **ressenti de vol** (commande `RESSENTI ON/OFF`, actif par défaut) — vibrations de la vue
+  (turbulence, buffeting près du décrochage, en transsonique, à forte pression dynamique ou fort
+  facteur de charge, vibration du scramjet), inertie de la tête (la vue s'enfonce sous g et retarde
+  sur le roulis), à-coups (toucher des roues, mur du son, allumage scram / PC), roulage sur la piste,
+  voile gris / rouge sous facteur de charge, lueur de plasma en hypersonique dense, grondement de
+  structure et bang supersonique.

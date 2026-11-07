@@ -86,10 +86,11 @@ pub fn layout(r: Rect) -> (Rect, Layout, [Rect; 3]) {
 
 #[allow(clippy::too_many_arguments)]
 #[allow(clippy::too_many_arguments)]
-pub fn draw_mfd(world: &World, tiles: &mut crate::tiles::Tiles, wx: &crate::weather::Weather, rf: &crate::refuel::Refuel, ac: &Aircraft, recon: &crate::recon::Recon, r: Rect, st: &mut MfdState, info: &PfdInfo, style: SvsStyle, time: f64, lit: [bool; 6]) -> (View, MfdActions) {
+pub fn draw_mfd(world: &World, tiles: &mut crate::tiles::Tiles, wx: &crate::weather::Weather, rf: &crate::refuel::Refuel, ac: &Aircraft, recon: &crate::recon::Recon, r: Rect, st: &mut MfdState, info: &PfdInfo, style: SvsStyle, time: f64, lit: [bool; 6], feel: &crate::feel::Feel) -> (View, MfdActions) {
     let mut act = MfdActions { bezel: bezel(r, lit, time), ..Default::default() };
     let (_, lay, panes) = layout(r);
-    let view = svs::draw_svs(world, tiles, wx, rf, ac, lay.svs, time, style, svs::Cam::default());
+    let view = svs::draw_svs(world, tiles, wx, rf, ac, lay.svs, time, style, feel.cam());
+    feel.draw_overlay(ac, lay.svs, time);
     crate::pfd_plus::set_inner(lay.inner);
     pfd::draw_pfd(ac, &view, lay.pfd, info);
     // Ravitailleur : repère tant qu'il est loin, directeur de ravitaillement en approche

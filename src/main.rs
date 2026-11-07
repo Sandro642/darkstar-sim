@@ -6,6 +6,7 @@ mod airports;
 mod atmosphere;
 mod elec;
 mod emergency;
+mod feel;
 mod audio;
 mod combat;
 mod autoflight;
@@ -100,6 +101,8 @@ struct Game {
     refuel: refuel::Refuel,
     combat: combat::Combat,
     emerg: emergency::Emergency,
+    /// Ressenti de vol (mouvements de vue, vibrations, voile).
+    feel: feel::Feel,
     bingo_manual: Option<f64>,
     fuel_plan: fuel::Plan,
     fuel_change_t: f64,
@@ -244,6 +247,7 @@ impl Game {
             refuel: refuel::Refuel::new(),
             combat: combat::Combat::new(),
             emerg: emergency::Emergency::new(),
+            feel: feel::Feel::new(),
             bingo_manual: None,
             fuel_plan: fuel::Plan::default(),
             fuel_change_t: -100.0,
@@ -1135,6 +1139,10 @@ impl Game {
                     reply = Err("CONFIRMER : EJECTION CONFIRME".into());
                 }
             }
+            "RESSENTI" | "FEEL" => {
+                self.feel.on = arg(1) != "OFF";
+                reply = Ok(if self.feel.on { "RESSENTI DE VOL ON (vibrations, inertie de la tete, voile)".into() } else { "RESSENTI DE VOL OFF".into() });
+            }
             "HUD" | "INFOS" => {
                 pfd_plus::hud_show_all(10.0);
                 reply = Ok("INFOS HUD AFFICHEES 10 s (survol de l'horizon : toutes les infos)".into());
@@ -1522,7 +1530,7 @@ impl Game {
                     "TANKER [OACI|OFF]  RAVITAILLEMENT (autonome)  DECROCHER  BINGO [AUTO|t]",
                     "CHAFF  FLARE  ECM ON|OFF  CMDS AUTO|MAN  TIR [I|J|K] (HACM)  ARMEMENT (page)",
                     "EMERGENCY [OFF] (ravitaillement > terrain proche > ejection)  EJECTION CONFIRME",
-                    "AP MAX (domaine complet de la loi FBW normale)  AP NORMAL (confort)",
+                    "AP MAX (domaine complet de la loi FBW normale)  AP NORMAL (confort)  RESSENTI ON/OFF",
                     "TRAIN UP/DOWN | FREINS ON/OFF | AP ON/OFF | MANUEL | WARP 8",
                 ] {
                     self.log.push((self.sim_time, Level::Info, l.into()));
@@ -1637,6 +1645,7 @@ async fn main() {
             g = Game::new(&scenario);
             g.muted = muted;
             sfx.reset();
+            g.feel.reset();
         } else if enter {
             match g.console.take() {
                 None => {
@@ -1687,6 +1696,8 @@ async fn main() {
         let master_caut = unacked(Level::Caution);
         sfx.muted = g.muted;
         sfx.update(&g.ac, &alerts, &g.acked);
+        g.feel.update(&g.ac, get_frame_time());
+        sfx.feel(g.feel.rumble, std::mem::take(&mut g.feel.boom));
         for c in g.cues.drain(..) {
             sfx.cue(c);
         }
@@ -1710,7 +1721,7 @@ async fn main() {
             let mfd_r = Rect::new(body.x, body.y, mfd_w, mfd_h);
             let lit: [bool; 6] = std::array::from_fn(|i| g.tab == BEZEL_PAGES[i]);
             let info = pfd_info(&g, &alerts, ln, lat, warp_eff, time);
-            let (_, act) = mfd::draw_mfd(&world, &mut tiles, &g.wx, &g.refuel, &g.ac, &g.recon, mfd_r, &mut g.mfd, &info, g.style, time, lit);
+            let (_, act) = mfd::draw_mfd(&world, &mut tiles, &g.wx, &g.refuel, &g.ac, &g.recon, mfd_r, &mut g.mfd, &info, g.style, time, lit, &g.feel);
             drop(info);
             handle_mfd(&mut g, act);
             let lay = mfd::layout(mfd_r).1;

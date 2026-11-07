@@ -244,11 +244,13 @@ pub struct Cam {
     pub fovy: f32,
     pub yaw: f32,
     pub pitch: f32,
+    /// Roulis de la vue (mouvements de tête, vibrations).
+    pub roll: f32,
 }
 
 impl Default for Cam {
     fn default() -> Self {
-        Cam { fovy: FOVY_DEG, yaw: 0.0, pitch: 0.0 }
+        Cam { fovy: FOVY_DEG, yaw: 0.0, pitch: 0.0, roll: 0.0 }
     }
 }
 
@@ -261,7 +263,9 @@ pub fn look_basis(ac: &Aircraft, cam: Cam) -> (Vec3, Vec3) {
     let right1 = fwd1.cross(up0).normalize();
     let (sp, cp) = cam.pitch.to_radians().sin_cos();
     let fwd = (fwd1 * cp + up0 * sp).normalize();
-    (fwd, right1.cross(fwd).normalize())
+    let up = right1.cross(fwd).normalize();
+    let (sr, cr) = cam.roll.to_radians().sin_cos();
+    (fwd, (up * cr + fwd.cross(up) * sr).normalize())
 }
 
 #[allow(clippy::too_many_arguments)]

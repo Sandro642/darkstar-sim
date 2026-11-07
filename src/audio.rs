@@ -91,6 +91,8 @@ pub struct Sfx {
     ram: Sound,
     scram: Sound,
     wind: Sound,
+    /// Grondement de structure (buffeting, roulage, turbulence).
+    rumble: Sound,
     // Boucles d'alarme
     warn: Sound,
     siren: Sound,
@@ -179,6 +181,14 @@ impl Sfx {
         }))
         .await;
 
+        let mut lp6 = Lp::new(110.0);
+        let mut lp6b = Lp::new(25.0);
+        let rumble = load(synth(2.0, true, move |t, r| {
+            let n = r.next();
+            (lp6.run(n) * 2.0 + lp6b.run(n) * 4.0) * (1.0 + 0.5 * sine(7.5, t)) + sine(32.0, t) * 0.2
+        }))
+        .await;
+
         // --- Alarmes en boucle ---
         // Carillon répétitif continu (MASTER WARNING)
         let warn = load(synth(1.0, true, |t, _| {
@@ -240,7 +250,7 @@ impl Sfx {
         let buzz = load(synth(0.3, false, |t, _| sine(180.0, t).signum() * 0.4)).await;
 
         let sfx = Sfx {
-            turb_lo, turb_hi, roar, ab, ram, scram, wind, warn, siren, shaker, clacker, horn,
+            turb_lo, turb_hi, roar, ab, ram, scram, wind, rumble, warn, siren, shaker, clacker, horn,
             caution, ap_disc, bang, thump, blip, buzz,
             muted: false,
             prev: Prev::default(),
@@ -251,8 +261,8 @@ impl Sfx {
         sfx
     }
 
-    fn loops(&self) -> [&Sound; 12] {
-        [&self.turb_lo, &self.turb_hi, &self.roar, &self.ab, &self.ram, &self.scram, &self.wind, &self.warn, &self.siren, &self.shaker, &self.clacker, &self.horn]
+    fn loops(&self) -> [&Sound; 13] {
+        [&self.turb_lo, &self.turb_hi, &self.roar, &self.ab, &self.ram, &self.scram, &self.wind, &self.rumble, &self.warn, &self.siren, &self.shaker, &self.clacker, &self.horn]
     }
 
     fn once(&self, s: &Sound, vol: f32) {
@@ -330,6 +340,15 @@ impl Sfx {
             crashed: !alive,
             started: true,
         };
+    }
+
+    /// Ressenti de vol : grondement de structure et bang supersonique.
+    pub fn feel(&self, rumble: f32, boom: bool) {
+        let m = if self.muted { 0.0 } else { 1.0 };
+        set_sound_volume(&self.rumble, m * rumble * 0.55);
+        if boom {
+            self.once(&self.bang, 0.45);
+        }
     }
 
     /// Réinitialise le suivi des transitions (nouvel essai).
