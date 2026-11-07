@@ -6,6 +6,7 @@ mod airports;
 mod atmosphere;
 mod elec;
 mod emergency;
+mod mishap;
 mod feel;
 mod audio;
 mod combat;
@@ -92,6 +93,10 @@ struct Game {
     ended: bool,
     debrief: Vec<String>,
     crash_report: Vec<String>,
+    /// Séquence de perte du véhicule (cascade de pannes, perte du signal).
+    mishap: Option<mishap::Mishap>,
+    /// Dernière trame de télémétrie valide.
+    last_ok: mishap::Snapshot,
     muted: bool,
     thermal: thermal::ThermalSys,
     style: svs::SvsStyle,
@@ -129,7 +134,8 @@ fn pfd_info<'a>(g: &Game, alerts: &'a [(Level, String)], ln: &'a str, lat: f64, 
             c.state = 4;
         }
     }
-    pfd::PfdInfo { alerts, link_name: ln, latency_ms: lat, dest: g.dest, warp, time, cue, wx: g.wx.info.clone(), threats, fuel: g.fuel_plan.clone(), fuel_since: get_time() - g.fuel_change_t }
+    let mishap = g.mishap.as_ref().map(|m| (m.decay(), m.elapsed() - m.t_los));
+    pfd::PfdInfo { mishap, alerts, link_name: ln, latency_ms: lat, dest: g.dest, warp, time, cue, wx: g.wx.info.clone(), threats, fuel: g.fuel_plan.clone(), fuel_since: get_time() - g.fuel_change_t }
 }
 
 /// Actions demandées sur l'écran Darkstar (vidange, zoom caméra, boutons de lunette).
@@ -238,6 +244,8 @@ impl Game {
             ended: false,
             debrief: Vec::new(),
             crash_report: Vec::new(),
+            mishap: None,
+            last_ok: mishap::Snapshot::default(),
             muted: false,
             thermal: thermal::ThermalSys::new(),
             style: svs::SvsStyle::Realiste,
@@ -296,7 +304,10 @@ impl Game {
 
     fn push(&mut self, l: Level, s: impl Into<String>) {
         let s = s.into();
-        self.flash_from_message(l, &s);
+        // Pendant la perte du véhicule, les messages vont au journal (pas d'infos sur l'horizon)
+        if self.mishap.is_none() && self.ac.crashed.is_none() {
+            self.flash_from_message(l, &s);
+        }
         self.fdr.event(self.sim_time, &s);
         self.log.push((self.sim_time, l, s));
         if self.log.len() > 300 {
@@ -948,6 +959,24 @@ impl Game {
 
         // Enregistreur de vol : trace continue, analyse et sauvegarde définitive au crash
         let alerts = self.alerts();
+        match &mut self.mishap {
+            None if self.ac.crashed.is_none() => self.last_ok = mishap::Snapshot::of(&self.ac, self.sim_time),
+            None => {
+                let cause = self.ac.crashed.clone().unwrap_or_default();
+                // Crash dès la première trame : la trame courante sert de dernière trame valide
+                let snap = if self.last_ok.lat == 0.0 && self.last_ok.lon == 0.0 { mishap::Snapshot::of(&self.ac, self.sim_time) } else { self.last_ok };
+                self.mishap = Some(mishap::Mishap::new(&cause, snap));
+                self.flashes.clear();
+                // Le panneau d'alarmes s'affiche : il s'allume en cascade
+                self.tab = gcs::Tab::Alarmes;
+            }
+            Some(_) => {}
+        }
+        if let Some(m) = &mut self.mishap {
+            for (l, s) in m.due() {
+                self.push(l, s);
+            }
+        }
         if self.ac.crashed.is_some() {
             if self.crash_report.is_empty() {
                 self.crash_report = self.fdr.finalize_crash(&self.ac, self.sim_time, &alerts);
@@ -1739,6 +1768,7 @@ async fn main() {
         sfx.update(&g.ac, &alerts, &g.acked);
         g.feel.update(&g.ac, get_frame_time());
         sfx.feel(g.feel.rumble, std::mem::take(&mut g.feel.boom));
+        sfx.mishap(g.mishap.as_ref().is_some_and(|m| m.cascading()));
         for c in g.cues.drain(..) {
             sfx.cue(c);
         }
@@ -1768,11 +1798,17 @@ async fn main() {
             let lay = mfd::layout(mfd_r).1;
             let svs_r = lay.inner;
             draw_console(&g, svs_r);
-            if g.ac.crashed.is_some() && !g.crash_report.is_empty() {
+            if let Some(m) = &g.mishap {
+                m.draw_los(svs_r);
+                // Analyse de l'enregistreur après quelques secondes de perte du signal
+                if m.elapsed() > m.t_los + 3.0 && !g.crash_report.is_empty() {
+                    draw_crash_report(&g.crash_report, svs_r);
+                }
+            } else if g.ac.crashed.is_some() && !g.crash_report.is_empty() {
                 draw_crash_report(&g.crash_report, svs_r);
             }
             draw_flashes(&mut g.flashes, svs_r);
-            if !g.ac.on_ground {
+            if !g.ac.on_ground && g.mishap.is_none() {
                 combat::draw_hud(&g.combat, svs_r);
             }
             emergency::draw_hud(&g.emerg, &g.ac, svs_r, time);
@@ -1815,7 +1851,7 @@ async fn main() {
             let cr = Rect::new(rx, tabs_r.y + tabs_r.h + 4.0, rw, body.y + body.h - (tabs_r.y + tabs_r.h + 4.0));
             match g.tab {
                 gcs::Tab::Moteurs => panels::draw_engines(&g.ac, cr, time),
-                gcs::Tab::Alarmes => match alarms::draw_alarms(&g.ac, &alerts, cr, time) {
+                gcs::Tab::Alarmes => match alarms::draw_alarms(&g.ac, &alerts, cr, time, g.mishap.as_ref().map(|m| m.lights())) {
                     Some(alarms::AlarmAction::Toggle(f)) => {
                         let on = !g.ac.fails.has(f);
                         g.ac.set_failure(f, on);

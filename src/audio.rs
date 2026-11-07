@@ -351,6 +351,15 @@ impl Sfx {
         }
     }
 
+    /// Perte du véhicule : alarme continue pendant la cascade de pannes (jusqu'à la perte du signal).
+    pub fn mishap(&self, cascade: bool) {
+        if cascade {
+            let m = if self.muted { 0.0 } else { 1.0 };
+            set_sound_volume(&self.warn, m * 0.5);
+            set_sound_volume(&self.siren, m * 0.25);
+        }
+    }
+
     /// Réinitialise le suivi des transitions (nouvel essai).
     pub fn reset(&mut self) {
         self.prev = Prev::default();

@@ -382,3 +382,10 @@ Le SR-72 est un avion de reconnaissance : sa charge utile est simulée.
   sur le radar météo et sur la carte ; flèches de vent retirées de l'horizon.
 - v1.23.2 : particules de flux de vent retirées de l'horizon (restent : zones orageuses, nappes de
   turbulence, radar météo, bloc vent).
+- v1.24.0 : **perte du véhicule réaliste** — cascade de pannes selon la cause (rupture en vol,
+  feu / explosion, missile, perte électrique, impact, terminaison FTS) avec messages type ECAM,
+  panneau d'alarmes qui s'allume en « sapin de Noël », alarme continue, bandeau « FLT CTL —
+  commandes de vol sans réponse », télémétrie corrompue (déchirures, trames perdues) et drapeaux
+  rouges ATT / FPV / SPD / ALT / V/S / HDG ; puis perte du signal : neige, écrans barrés d'une croix
+  rouge, dernière trame valide (position, niveau, vitesse, cap, vario, facteur de charge) et cause
+  probable ; analyse de l'enregistreur de vol ensuite.

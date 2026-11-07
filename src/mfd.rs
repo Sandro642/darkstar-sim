@@ -118,6 +118,16 @@ pub fn draw_mfd(world: &World, tiles: &mut crate::tiles::Tiles, wx: &crate::weat
     let p = panes[1];
     txt_c(&format!("{} / {}", dms(ac.lat, 'N', 'S'), dms(ac.lon, 'E', 'W')), p.x + p.w / 2.0, p.y + p.h - 6.0, 12.0, WHITE);
     draw_hsi(ac, panes[2], st, info.dest);
+    // Perte du signal : écrans sans source de données
+    if info.mishap.is_some_and(|(_, since)| since >= 0.0) {
+        for p in panes {
+            crate::mishap::red_x(p, true);
+        }
+    } else if let Some((k, _)) = info.mishap {
+        for p in panes {
+            crate::mishap::glitch(p, k * 0.8, time + p.x as f64);
+        }
+    }
     (view, act)
 }
 

@@ -21,6 +21,8 @@ pub struct PfdInfo<'a> {
     /// Secondes écoulées depuis le dernier changement de niveau carburant.
     pub fuel_since: f64,
     pub threats: Vec<crate::pfd_plus::ThreatCue>,
+    /// Perte du véhicule : (dégradation 0..1, secondes depuis la perte du signal, < 0 avant).
+    pub mishap: Option<(f32, f64)>,
 }
 
 const LINE: Color = Color::new(0.92, 0.94, 0.95, 1.0);
@@ -111,7 +113,35 @@ pub fn draw_pfd(ac: &Aircraft, v: &View, r: Rect, info: &PfdInfo) {
     draw_heading(ac, &g, info);
     rrect_lines(r, 6.0, 1.5, Color::new(0.78, 0.80, 0.82, 0.85));
 
-    if ac.crashed.is_some() {
+    if let Some((k, since)) = info.mishap {
+        if since < 0.0 {
+            // Télémétrie qui se dégrade : déchirures, drapeaux de panne, commandes sans réponse
+            crate::mishap::glitch(v.rect, k, info.time);
+            let (cx, cy) = (r.x + r.w / 2.0, r.y + r.h / 2.0);
+            for (th, lbl, x, y) in [
+                (0.25, "ATT", cx, cy - 70.0),
+                (0.35, "FPV", cx, cy + 40.0),
+                (0.45, "SPD", g.spd.x + g.spd.w / 2.0, g.spd.y + g.spd.h * 0.3),
+                (0.55, "ALT", g.alt.x + g.alt.w / 2.0, g.alt.y + g.alt.h * 0.3),
+                (0.62, "V/S", g.vsi.x + g.vsi.w / 2.0, g.vsi.y + g.vsi.h * 0.7),
+                (0.7, "HDG", g.hdg.x + g.hdg.w / 2.0, g.hdg.y + g.hdg.h / 2.0),
+            ] {
+                if k > th {
+                    crate::mishap::flag(lbl, x, y);
+                }
+            }
+            if k > 0.22 && (info.time * 3.0).fract() < 0.65 {
+                let b = g.fma;
+                draw_rectangle(b.x, b.y, b.w, b.h, Color::new(0.45, 0.02, 0.02, 0.92));
+                txt_c("FLT CTL — COMMANDES DE VOL SANS REPONSE", b.x + b.w / 2.0, b.y + 20.0, 15.0, WHITE);
+            }
+        } else {
+            // Perte du signal : neige qui s'éteint, écran barré
+            draw_rectangle(r.x, r.y, r.w, r.h, BLACK);
+            crate::mishap::static_noise(r, (0.55 * (1.0 - since / 2.5)).max(0.0) as f32, info.time);
+            crate::mishap::red_x(r, false);
+        }
+    } else if ac.crashed.is_some() {
         let (cx, cy) = (r.x + r.w / 2.0, r.y + r.h / 2.0);
         draw_rectangle(r.x, r.y, r.w, r.h, Color::new(0.0, 0.0, 0.0, 0.75));
         txt_c("LIAISON PERDUE - NO SIGNAL", cx, cy - 20.0, 30.0, RED);

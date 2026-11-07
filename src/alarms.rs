@@ -58,7 +58,7 @@ pub fn lit_count(ac: &Aircraft, alerts: &[(Level, String)]) -> usize {
     LIGHTS.iter().filter(|(_, f)| f(ac, alerts) > 0).count()
 }
 
-pub fn draw_alarms(ac: &Aircraft, alerts: &[(Level, String)], r: Rect, time: f64) -> Option<AlarmAction> {
+pub fn draw_alarms(ac: &Aircraft, alerts: &[(Level, String)], r: Rect, time: f64, force: Option<[u8; 32]>) -> Option<AlarmAction> {
     let mut out = None;
     panel(r, "ALARMES / PANNES");
     // Panneau d'annonciateurs (platine vissée, 4 colonnes x 8 lignes)
@@ -80,7 +80,10 @@ pub fn draw_alarms(ac: &Aircraft, alerts: &[(Level, String)], r: Rect, time: f64
     for (i, (label, f)) in LIGHTS.iter().enumerate() {
         let (c, row) = (i % 4, i / 4);
         let cell = Rect::new(gx + c as f32 * cw + 3.0, gy + row as f32 * rh + 3.0, cw - 6.0, rh - 6.0);
-        let st = f(ac, alerts);
+        let st = match force {
+            Some(fl) => fl[i].max(f(ac, alerts)),
+            None => f(ac, alerts),
+        };
         let (bg, fg) = match st {
             2 if blink => (Color::new(0.55, 0.05, 0.04, 1.0), Color::new(1.0, 0.75, 0.7, 1.0)),
             2 => (Color::new(0.35, 0.03, 0.03, 1.0), Color::new(1.0, 0.55, 0.5, 1.0)),
