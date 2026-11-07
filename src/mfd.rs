@@ -87,7 +87,7 @@ pub fn layout(r: Rect) -> (Rect, Layout, [Rect; 3]) {
 pub fn draw_mfd(world: &World, tiles: &mut crate::tiles::Tiles, wx: &crate::weather::Weather, rf: &crate::refuel::Refuel, ac: &Aircraft, recon: &crate::recon::Recon, r: Rect, st: &mut MfdState, info: &PfdInfo, style: SvsStyle, time: f64, lit: [bool; 6]) -> (View, MfdActions) {
     let mut act = MfdActions { bezel: bezel(r, lit, time), ..Default::default() };
     let (_, lay, panes) = layout(r);
-    let view = svs::draw_svs(world, tiles, wx, rf, ac, lay.svs, time, style);
+    let view = svs::draw_svs(world, tiles, wx, rf, ac, lay.svs, time, style, svs::Cam::default());
     pfd::draw_pfd(ac, &view, lay.pfd, info);
     // Ravitailleur : repère tant qu'il est loin, directeur de ravitaillement en approche
     if let Some(t) = &rf.tanker {

@@ -195,6 +195,23 @@ fn nacelle(r: Rect, side: &str, ac: &Aircraft, i: usize, egt_off: f64, time: f64
     deg_txt(&format!("{door_deg:02.0}"), p(82.0, 0.0).x, p(0.0, 196.0).y, fs * 1.05, dc, "");
 }
 
+/// Écran moteurs seul (cockpit) : les deux nacelles empilées, sans la colonne de données.
+pub fn draw_nacelles(ac: &Aircraft, r: Rect, time: f64) {
+    let e = &ac.eng;
+    let nh = (r.h - 6.0) / 2.0;
+    let nw = (nh * 4.8).min(r.w);
+    let x = r.x + (r.w - nw) / 2.0;
+    for (i, (side, off)) in [("ENG L", 8.0), ("ENG R", -6.0)].iter().enumerate() {
+        let st = match e.side[i] {
+            TurbState::Running => "RUN",
+            TurbState::Starting => "START",
+            TurbState::Failed => "FAIL",
+            TurbState::Off => "OFF",
+        };
+        nacelle(Rect::new(x, r.y + i as f32 * (nh + 6.0), nw, nh), &format!("{side}  {st}"), ac, i, *off, time + i as f64 * 0.37);
+    }
+}
+
 pub fn draw_engines(ac: &Aircraft, r: Rect, time: f64) {
     panel(r, "MOTEURS - TBCC DARKSTAR");
     let e = &ac.eng;
@@ -471,6 +488,7 @@ pub fn draw_help(r: Rect) {
         ("6 boutons de l'ecran Darkstar = 6 premieres pages ; CONSOLE : bouton MENU", WHITE),
         ("V carte plein ecran  C recentrer  E temps (ou clic TEMPS)", WHITE),
         ("Carte : bouton PLAN / SAT (tuiles reelles) ; SVS : satellite + relief reel", WHITE),
+        ("K : vue cockpit (clic droit glisse : regarder, H : ecran Darkstar en grand)", WHITE),
         ("ESPACE acquitter  J son  MAJ+ENTREE nouvel essai  TAB aide", WHITE),
         ("", WHITE),
         ("Ecran Darkstar : clic sur DUMP (vidange), fleches de portee HSI.", DIM),

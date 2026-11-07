@@ -238,11 +238,33 @@ pub struct Lights {
     pub pts: Vec<(Vec3, Color, f32)>,
 }
 
-pub fn draw_svs(world: &World, tiles: &mut Tiles, wx: &crate::weather::Weather, rf: &crate::refuel::Refuel, ac: &Aircraft, rect: Rect, time: f64, style: SvsStyle) -> View {
+/// Caméra de la vue : champ vertical et orientation de la tête (vue cockpit), en degrés.
+#[derive(Clone, Copy)]
+pub struct Cam {
+    pub fovy: f32,
+    pub yaw: f32,
+    pub pitch: f32,
+}
+
+impl Default for Cam {
+    fn default() -> Self {
+        Cam { fovy: FOVY_DEG, yaw: 0.0, pitch: 0.0 }
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn draw_svs(world: &World, tiles: &mut Tiles, wx: &crate::weather::Weather, rf: &crate::refuel::Refuel, ac: &Aircraft, rect: Rect, time: f64, style: SvsStyle, cam: Cam) -> View {
     let dark = style == SvsStyle::Darkstar;
     let dpi = screen_dpi_scale();
-    let (fwd, up, _) = basis(ac);
-    let fovy = FOVY_DEG;
+    let (fwd0, up0, _) = basis(ac);
+    // Regard du pilote : lacet autour de l'axe vertical avion, puis site
+    let (sy, cy) = (-cam.yaw.to_radians()).sin_cos();
+    let fwd1 = (fwd0 * cy + up0.cross(fwd0) * sy + up0 * up0.dot(fwd0) * (1.0 - cy)).normalize();
+    let right1 = fwd1.cross(up0).normalize();
+    let (sp, cp) = cam.pitch.to_radians().sin_cos();
+    let fwd = (fwd1 * cp + up0 * sp).normalize();
+    let up = right1.cross(fwd).normalize();
+    let fovy = cam.fovy;
     // Plan proche adapté à la hauteur : précision du tampon de profondeur pour le relief
     let mut near = ((ac.alt - ac.d.elev) * 0.02).clamp(1.5, 1_500.0) as f32;
     // Ravitailleur tout proche : plan proche réduit pour ne pas le découper

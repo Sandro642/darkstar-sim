@@ -316,3 +316,15 @@ Le SR-72 est un avion de reconnaissance : sa charge utile est simulée.
   Exemple : virage de 90° à Mach 3 / FL700 en 77 s au lieu de 207 s.
 - `AP NORMAL` : retour aux limites de confort. FMA : « AP1 MAX » en ambre. Approche ILS et autoland
   restent toujours en mode confort.
+
+## Vue cockpit (v1.14.0)
+- Touche **K** ou instruction `COCKPIT` : vue depuis le siège, d'après l'intérieur du Darkstar — vue
+  extérieure réelle (imagerie, relief, nuages, ravitailleur, pistes) par les grandes fenêtres
+  latérales, arceaux de verrière, **pyramide centrale** portant l'écran Darkstar (interactif, avec ses
+  6 boutons), cadran, DSPLY et boîtier radio (transpondeur 1200 / 7700 en urgence) au sommet, écran
+  moteurs à gauche, jauges CG et H2 à droite, interrupteurs gardés rouges **SCRAM ENABLE**,
+  **EMER FUEL DUMP**, **EMER H2 DUMP** (fonctionnels), levier de train et trois vertes, manche,
+  manette des gaz sur la console gauche (suit la manette réelle).
+- **Clic droit glissé** : tourner la tête (l'intérieur suit) ; double clic droit : recentrer.
+- **H** : se pencher vers l'écran Darkstar (affiché en grand) ; `COCKPIT HUD` : HUD vert facultatif
+  (le Darkstar n'en a pas). K de nouveau : retour à la station sol.
