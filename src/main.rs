@@ -7,6 +7,7 @@ mod atmosphere;
 mod elec;
 mod emergency;
 mod mishap;
+mod syspage;
 mod feel;
 mod audio;
 mod combat;
@@ -1850,6 +1851,11 @@ async fn main() {
             }
             let cr = Rect::new(rx, tabs_r.y + tabs_r.h + 4.0, rw, body.y + body.h - (tabs_r.y + tabs_r.h + 4.0));
             match g.tab {
+                gcs::Tab::Systemes => {
+                    if let Some(t) = syspage::draw(&g.ac, &g.thermal, &g.mfd.wxr, cr, time) {
+                        g.tab = t;
+                    }
+                }
                 gcs::Tab::Moteurs => panels::draw_engines(&g.ac, cr, time),
                 gcs::Tab::Alarmes => match alarms::draw_alarms(&g.ac, &alerts, cr, time, g.mishap.as_ref().map(|m| m.lights())) {
                     Some(alarms::AlarmAction::Toggle(f)) => {

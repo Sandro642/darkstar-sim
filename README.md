@@ -389,3 +389,9 @@ Le SR-72 est un avion de reconnaissance : sa charge utile est simulée.
   rouges ATT / FPV / SPD / ALT / V/S / HDG ; puis perte du signal : neige, écrans barrés d'une croix
   rouge, dernière trame valide (position, niveau, vitesse, cap, vario, facteur de charge) et cause
   probable ; analyse de l'enregistreur de vol ensuite.
+- v1.25.0 : **page SYSTEMES** (onglet SYSTEMES), d'après l'écran principal du Darkstar : servitudes
+  (hydraulique, électricité, pile H2, oxygène, baie avionique), vue en plan structure / thermique au
+  contour orange (organes colorés selon leur état, capteurs de température), tableau des moteurs
+  (turbines G / D, statoréacteur, scramjet), éventail du radar météo, échelles de centrage et
+  d'incidence, vue en plan carburant (réservoirs JP-7 et H2 remplis selon le niveau), rangée
+  d'icônes d'accès direct aux pages.
