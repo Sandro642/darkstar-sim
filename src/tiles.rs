@@ -54,10 +54,12 @@ pub const ELEV_Z: u8 = 12;
 /// Côté d'une tuile de relief après sous-échantillonnage.
 const ELEV_N: usize = 128;
 /// Nombre maximal de textures gardées en mémoire graphique.
-const TEX_CAP: usize = 360;
+const TEX_CAP: usize = 720;
 /// Nombre maximal de tuiles de relief gardées en mémoire.
 const ELEV_CAP: usize = 900;
-const UPLOADS_PER_FRAME: usize = 10;
+const UPLOADS_PER_FRAME: usize = 24;
+/// Tuiles décodées en attente d'envoi au GPU au-delà desquelles les fils de travail patientent.
+const DONE_MAX: usize = 48;
 const WORKERS: usize = 6;
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
@@ -183,6 +185,10 @@ fn decode_elev(bytes: &[u8]) -> Option<Vec<f32>> {
 
 fn worker(sh: Arc<Shared>) {
     loop {
+        // Contre-pression : ne pas décoder plus vite que le fil principal n'envoie au GPU
+        while sh.done.lock().unwrap().len() >= DONE_MAX {
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
         let k = {
             let mut q = sh.queue.lock().unwrap();
             while q.is_empty() {
@@ -221,7 +227,10 @@ fn worker(sh: Arc<Shared>) {
                     Decoded::Rgba(w as u16, h as u16, rgba.into_raw())
                 })
                 .unwrap_or(Decoded::Failed);
+            // Reste « en cours » jusqu'à son envoi au GPU : sinon elle serait redemandée et
+            // décodée en double à chaque image (fuite mémoire quand la cadence d'affichage chute)
             sh.done.lock().unwrap().push((k, dec));
+            continue;
         }
         sh.inflight.lock().unwrap().remove(&k);
     }
@@ -358,6 +367,12 @@ impl Tiles {
             d.drain(..n).collect()
         };
         let t = get_time();
+        if !ready.is_empty() {
+            let mut inf = self.sh.inflight.lock().unwrap();
+            for (k, _) in &ready {
+                inf.remove(k);
+            }
+        }
         for (k, dec) in ready {
             match dec {
                 Decoded::Rgba(w, h, px) => {
@@ -453,5 +468,12 @@ impl Tiles {
         let e = self.tex.get_mut(&cur)?;
         e.1 = frame;
         Some(TexRef { tex: &e.0, uv, exact: cur == k })
+    }
+}
+
+impl Tiles {
+    /// Statistiques pour le diagnostic de performance : (textures, décodées en attente, en cours, relief).
+    pub fn stats(&self) -> (usize, usize, usize, usize) {
+        (self.tex.len(), self.sh.done.lock().unwrap().len(), self.sh.inflight.lock().unwrap().len(), self.sh.elev.read().unwrap().len())
     }
 }

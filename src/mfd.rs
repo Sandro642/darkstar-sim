@@ -6,7 +6,6 @@ use crate::airports::AIRPORTS;
 use crate::geo::*;
 use crate::pfd::{self, PfdInfo};
 use crate::svs::{self, SvsStyle, View};
-use crate::traffic::{Tcas, TrafficSys};
 use crate::ui::*;
 use crate::world::World;
 use macroquad::prelude::*;
@@ -85,17 +84,17 @@ pub fn layout(r: Rect) -> (Rect, Layout, [Rect; 3]) {
 
 #[allow(clippy::too_many_arguments)]
 #[allow(clippy::too_many_arguments)]
-pub fn draw_mfd(world: &World, tiles: &mut crate::tiles::Tiles, ac: &Aircraft, traffic: &TrafficSys, recon: &crate::recon::Recon, r: Rect, st: &mut MfdState, info: &PfdInfo, style: SvsStyle, time: f64, lit: [bool; 6]) -> (View, MfdActions) {
+pub fn draw_mfd(world: &World, tiles: &mut crate::tiles::Tiles, ac: &Aircraft, recon: &crate::recon::Recon, r: Rect, st: &mut MfdState, info: &PfdInfo, style: SvsStyle, time: f64, lit: [bool; 6]) -> (View, MfdActions) {
     let mut act = MfdActions { bezel: bezel(r, lit, time), ..Default::default() };
     let (_, lay, panes) = layout(r);
-    let view = svs::draw_svs(world, tiles, ac, traffic, lay.svs, time, style);
+    let view = svs::draw_svs(world, tiles, ac, lay.svs, time, style);
     pfd::draw_pfd(ac, &view, lay.pfd, info);
     act.fuel_dump = draw_fuel(ac, panes[0]);
     pane_frame(panes[1]);
     act.cam = crate::recon::draw_camera(ac, recon, tiles, panes[1]);
     let p = panes[1];
     txt_c(&format!("{} / {}", dms(ac.lat, 'N', 'S'), dms(ac.lon, 'E', 'W')), p.x + p.w / 2.0, p.y + p.h - 6.0, 12.0, WHITE);
-    draw_hsi(ac, traffic, panes[2], st, info.dest);
+    draw_hsi(ac, panes[2], st, info.dest);
     (view, act)
 }
 
@@ -210,8 +209,8 @@ fn draw_fuel(ac: &Aircraft, r: Rect) -> bool {
     clicked(b)
 }
 
-/// Volet HSI : rose des caps tournante, route magenta, cercles de distance, aérodromes et trafic.
-fn draw_hsi(ac: &Aircraft, traffic: &TrafficSys, r: Rect, st: &mut MfdState, dest: usize) {
+/// Volet HSI : rose des caps tournante, route magenta, cercles de distance, aérodromes.
+fn draw_hsi(ac: &Aircraft, r: Rect, st: &mut MfdState, dest: usize) {
     pane_frame(r);
     let hdg = ac.hdg_deg();
     let range = HSI_RANGES[st.hsi_range];
@@ -283,29 +282,6 @@ fn draw_hsi(ac: &Aircraft, traffic: &TrafficSys, r: Rect, st: &mut MfdState, des
     let a = ((brg - hdg) as f32 - 90.0).to_radians();
     let len = ((dist * px_per_m as f64) as f32).min(rad * 1.2);
     draw_line(cx, cy, cx + len * a.cos(), cy + len * a.sin(), 3.0, MAGENTA_S);
-    // Trafic
-    for t in &traffic.list {
-        let (d, _) = dist_brg(ac.lat, ac.lon, t.lat, t.lon);
-        if d > range * NM * 1.2 {
-            continue;
-        }
-        let p = to_s(t.lat, t.lon);
-        let c = match t.tcas {
-            Tcas::Ra => RED,
-            Tcas::Ta => AMBER,
-            Tcas::Proximate => WHITE,
-            Tcas::None => Color::new(0.6, 0.9, 1.0, 0.8),
-        };
-        match t.tcas {
-            Tcas::Ra => draw_rectangle(p.x - 4.0, p.y - 4.0, 8.0, 8.0, c),
-            Tcas::Ta => draw_circle(p.x, p.y, 4.5, c),
-            _ => draw_poly_lines(p.x, p.y, 4, 5.0, 0.0, 1.2, c),
-        }
-        let dz = ((t.alt - ac.alt) / FT / 100.0).round() as i32;
-        if dz.abs() < 100 {
-            txt(&format!("{dz:+03}"), p.x + 6.0, p.y - 3.0, 10.0, c);
-        }
-    }
     // Avion
     let y = Color::new(1.0, 0.85, 0.1, 1.0);
     draw_triangle(vec2(cx, cy - 12.0), vec2(cx - 9.0, cy + 7.0), vec2(cx + 9.0, cy + 7.0), y);

@@ -194,3 +194,12 @@ Le SR-72 est un avion de reconnaissance : sa charge utile est simulée.
 - Page **RECON** (11e onglet) : capteurs, qualité prévue, mémoire, transmission, objectifs et guidage.
 - Instructions : `CAMERA ON|OFF|EO|IR`, `ZOOM 1..32`, `SAR ON|OFF`, `CIBLE B`, `DIRECT CIBLE`
   (l'autopilote rejoint la cible sélectionnée), `RECON`.
+
+## Correctifs v1.6.1
+- **Fuite mémoire corrigée** (jusqu'à 56 Go, fermeture du jeu par macOS) : quand la cadence d'affichage
+  chutait, des tuiles décodées mais pas encore envoyées au GPU étaient redemandées et décodées en double
+  sans fin. Elles restent maintenant « en cours » jusqu'à leur envoi, avec contre-pression des fils de
+  décodage. Cache GPU agrandi : plus de rechargements incessants (CPU ~70 % -> ~20 %).
+- **Trafic aérien supprimé** (avions IA, TCAS, alertes et sons associés).
+- Aide au décollage manuel : « ROTATION : FLECHE BAS (TIRER) » s'affiche à la vitesse de rotation.
+- Diagnostic : `DARKSTAR_PERF=1` affiche la cadence et l'état du cache de tuiles dans le terminal.

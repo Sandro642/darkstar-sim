@@ -1,5 +1,5 @@
 //! Sons synthétisés au démarrage (aucun fichier) : boucles moteur mixées en volume
-//! et alarmes avioniques (chime, GPWS, vibreur de manche, TCAS, déconnexion AP...).
+//! et alarmes avioniques (chime, GPWS, vibreur de manche, déconnexion AP...).
 
 use crate::aircraft::*;
 use macroquad::audio::*;
@@ -95,12 +95,10 @@ pub struct Sfx {
     warn: Sound,
     siren: Sound,
     shaker: Sound,
-    ra: Sound,
     clacker: Sound,
     horn: Sound,
     // Ponctuels
     caution: Sound,
-    traffic: Sound,
     ap_disc: Sound,
     bang: Sound,
     thump: Sound,
@@ -113,7 +111,6 @@ pub struct Sfx {
 #[derive(Default)]
 struct Prev {
     cautions: usize,
-    ta: bool,
     ap: bool,
     ground: bool,
     unstart: bool,
@@ -205,18 +202,6 @@ impl Sfx {
             s * 0.6 + r.next() * 0.25 * s.abs()
         }))
         .await;
-        // TCAS RA : alternance de deux tons
-        let ra = load(synth(1.2, true, |t, _| {
-            let ph = t % 0.6;
-            if ph < 0.25 {
-                sine(880.0, t) * 0.6
-            } else if ph < 0.5 {
-                sine(1320.0, t) * 0.6
-            } else {
-                0.0
-            }
-        }))
-        .await;
         // Claquoir de survitesse
         let clacker = load(synth(1.0, true, |t, r| {
             let ph = t % 0.125;
@@ -237,11 +222,6 @@ impl Sfx {
             sine(f, t) * (-ph * 6.0).exp() * 0.8
         }))
         .await;
-        let traffic = load(synth(0.9, false, |t, _| {
-            let gate = matches!((t / 0.11) as i32, 0 | 2 | 4 | 6);
-            if gate { sine(1250.0, t) * 0.6 } else { 0.0 }
-        }))
-        .await;
         // Déconnexion pilote automatique : arpèges descendants répétés
         let mut ph_a = 0.0f32;
         let ap_disc = load(synth(1.5, false, move |t, _| {
@@ -260,8 +240,8 @@ impl Sfx {
         let buzz = load(synth(0.3, false, |t, _| sine(180.0, t).signum() * 0.4)).await;
 
         let sfx = Sfx {
-            turb_lo, turb_hi, roar, ab, ram, scram, wind, warn, siren, shaker, ra, clacker, horn,
-            caution, traffic, ap_disc, bang, thump, blip, buzz,
+            turb_lo, turb_hi, roar, ab, ram, scram, wind, warn, siren, shaker, clacker, horn,
+            caution, ap_disc, bang, thump, blip, buzz,
             muted: false,
             prev: Prev::default(),
         };
@@ -271,8 +251,8 @@ impl Sfx {
         sfx
     }
 
-    fn loops(&self) -> [&Sound; 13] {
-        [&self.turb_lo, &self.turb_hi, &self.roar, &self.ab, &self.ram, &self.scram, &self.wind, &self.warn, &self.siren, &self.shaker, &self.ra, &self.clacker, &self.horn]
+    fn loops(&self) -> [&Sound; 12] {
+        [&self.turb_lo, &self.turb_hi, &self.roar, &self.ab, &self.ram, &self.scram, &self.wind, &self.warn, &self.siren, &self.shaker, &self.clacker, &self.horn]
     }
 
     fn once(&self, s: &Sound, vol: f32) {
@@ -289,7 +269,7 @@ impl Sfx {
     }
 
     /// Mise à jour à chaque image à partir de l'état de l'avion et des alarmes.
-    pub fn update(&mut self, ac: &Aircraft, alerts: &[(Level, String)], acked: &[String], ra: bool, ta: bool) {
+    pub fn update(&mut self, ac: &Aircraft, alerts: &[(Level, String)], acked: &[String]) {
         let m = if self.muted { 0.0 } else { 1.0 };
         let alive = ac.crashed.is_none();
         let e = &ac.eng;
@@ -314,7 +294,6 @@ impl Sfx {
         set_sound_volume(&self.warn, k * if warn_active { 0.45 } else { 0.0 });
         set_sound_volume(&self.siren, k * if has("PULL UP") { 0.45 } else { 0.0 });
         set_sound_volume(&self.shaker, k * if has("STALL") { 0.6 } else { 0.0 });
-        set_sound_volume(&self.ra, k * if ra { 0.5 } else { 0.0 });
         set_sound_volume(&self.clacker, k * if has("OVERSPEED — q LIMIT") { 0.4 } else { 0.0 });
         set_sound_volume(&self.horn, k * if has("TOO LOW — GEAR") { 0.4 } else { 0.0 });
 
@@ -325,9 +304,6 @@ impl Sfx {
         if p.started {
             if cautions > p.cautions {
                 play.push((&self.caution, 0.4));
-            }
-            if ta && !p.ta && !ra {
-                play.push((&self.traffic, 0.45));
             }
             if p.ap && !ac.ap.on && !ac.on_ground && alive {
                 play.push((&self.ap_disc, 0.4));
@@ -348,7 +324,6 @@ impl Sfx {
         }
         self.prev = Prev {
             cautions,
-            ta,
             ap: ac.ap.on,
             ground: ac.on_ground,
             unstart: e.scram == ScramState::Unstart,

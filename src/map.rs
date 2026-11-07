@@ -5,7 +5,6 @@ use crate::aircraft::*;
 use crate::airports::AIRPORTS;
 use crate::geo::*;
 use crate::tiles::{self, Key, Layer, Tiles};
-use crate::traffic::{Tcas, TrafficSys};
 use crate::ui::*;
 use crate::world::World;
 use macroquad::prelude::*;
@@ -65,7 +64,7 @@ impl MapView {
         }
     }
 
-    pub fn draw(&mut self, world: &World, tiles: &mut Tiles, recon: &crate::recon::Recon, ac: &Aircraft, traffic: &TrafficSys, r: Rect, dest: usize, time: f64) {
+    pub fn draw(&mut self, world: &World, tiles: &mut Tiles, recon: &crate::recon::Recon, ac: &Aircraft, r: Rect, dest: usize, time: f64) {
         if self.follow {
             self.center = (ac.lat, ac.lon);
         }
@@ -316,29 +315,6 @@ impl MapView {
             }
         }
 
-        // Trafic
-        for t in &traffic.list {
-            let p = to_s(t.lat, t.lon);
-            if !r.contains(p) {
-                continue;
-            }
-            let c = match t.tcas {
-                Tcas::Ra => RED,
-                Tcas::Ta => AMBER,
-                Tcas::Proximate => WHITE,
-                Tcas::None => Color::new(0.75, 0.8, 0.85, 0.85),
-            };
-            let hr = (t.hdg as f32).to_radians();
-            let f = vec2(hr.sin(), -hr.cos());
-            let s = vec2(-f.y, f.x);
-            draw_triangle(p + f * 6.0, p - f * 4.0 + s * 4.0, p - f * 4.0 - s * 4.0, c);
-            if z > 40.0 {
-                txt(&format!("FL{:03.0}", t.alt / FT / 100.0), p.x + 6.0, p.y + 12.0, 12.0, c);
-                if z > 120.0 {
-                    txt(&format!("{} {}", t.callsign, t.actype), p.x + 6.0, p.y - 4.0, 12.0, c);
-                }
-            }
-        }
 
         // Avion
         let p = to_s(ac.lat, ac.lon);

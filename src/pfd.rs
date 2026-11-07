@@ -9,7 +9,6 @@ use macroquad::prelude::*;
 
 pub struct PfdInfo<'a> {
     pub alerts: &'a [(Level, String)],
-    pub ra: Option<&'a str>,
     pub link_name: &'a str,
     pub latency_ms: f64,
     pub dest: usize,
@@ -253,12 +252,6 @@ fn draw_svs_overlay(ac: &Aircraft, v: &View, info: &PfdInfo) {
     }
 
     // Alertes
-    if let Some(ra) = info.ra {
-        if (info.time * 3.0).fract() < 0.6 {
-            draw_rectangle(cx - 150.0, cy - 110.0, 300.0, 34.0, Color::new(0.4, 0.0, 0.0, 0.85));
-            txt_c(&format!("TCAS RA : {ra}"), cx, cy - 86.0, 22.0, RED);
-        }
-    }
     let mut yy = cy + 120.0;
     for (_, msg) in info.alerts.iter().filter(|(l, _)| *l == Level::Warning).take(3) {
         if (info.time * 2.0).fract() < 0.7 {

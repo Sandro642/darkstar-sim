@@ -24,7 +24,6 @@ mod terrain;
 mod systems;
 mod thermal;
 mod tiles;
-mod traffic;
 mod ui;
 mod updater;
 mod world;
@@ -58,7 +57,6 @@ fn window_conf() -> macroquad::conf::Conf {
 
 struct Game {
     ac: Aircraft,
-    traffic: traffic::TrafficSys,
     mission: mission::Mission,
     map: map::MapView,
     log: Vec<(f64, Level, String)>,
@@ -164,7 +162,6 @@ impl Game {
         }
         Game {
             ac,
-            traffic: traffic::TrafficSys::new(),
             mission,
             map: map::MapView::new(),
             log: vec![(0.0, Level::Info, "GCS EN LIGNE — LIAISON LOS ÉTABLIE AVEC DARKSTAR FTV-01".into())],
@@ -767,17 +764,10 @@ impl Game {
         }
         self.sim_time += sim_dt;
 
-        self.traffic.update(sim_dt, &self.ac);
         self.thermal.update(sim_dt, &self.ac);
         let tev: Vec<_> = self.thermal.events.drain(..).collect();
         for (l, m) in tev {
             self.push(l, m);
-        }
-        if let Some(c) = self.traffic.tcas(&self.ac) {
-            if self.ac.crashed.is_none() {
-                self.ac.crashed = Some(c.clone());
-                self.push(Level::Warning, format!("PERTE DU VÉHICULE : {c}"));
-            }
         }
         self.map.record(&self.ac, sim_dt);
         self.hist_t -= sim_dt;
@@ -820,6 +810,10 @@ impl Game {
             self.flash("SUBSONIQUE", WHITE);
         }
         self.prev_mach_int = m_int;
+        // Aide à la rotation au décollage manuel : rappel du sens du manche (flèche BAS = tirer)
+        if self.ac.on_ground && !self.ac.ap.on && self.ac.autotakeoff.is_none() && self.ac.d.keas > 175.0 && self.ac.theta < 2f64.to_radians() && self.ac.crashed.is_none() {
+            self.flash("ROTATION : FLECHE BAS (TIRER)", ui::AMBER);
+        }
 
         // Enregistreur de vol : trace continue, analyse et sauvegarde définitive au crash
         let alerts = self.alerts();
@@ -1413,6 +1407,9 @@ async fn main() {
     next_frame().await;
     let world = world::World::load();
     let mut tiles = tiles::Tiles::new();
+    let perf = std::env::var("DARKSTAR_PERF").is_ok();
+    let mut perf_t0 = get_time();
+    let mut perf_frames = 0u32;
     let mut sfx = audio::Sfx::new().await;
     let upd = updater::Updater::new();
     upd.check();
@@ -1499,10 +1496,10 @@ async fn main() {
 
         let alerts = g.alerts();
         let unacked = |lv: Level| alerts.iter().any(|(l, s)| *l == lv && !g.acked.contains(s));
-        let master_warn = unacked(Level::Warning) || g.traffic.ra.is_some() || g.ac.crashed.is_some();
-        let master_caut = unacked(Level::Caution) || g.traffic.ta;
+        let master_warn = unacked(Level::Warning) || g.ac.crashed.is_some();
+        let master_caut = unacked(Level::Caution);
         sfx.muted = g.muted;
-        sfx.update(&g.ac, &alerts, &g.acked, g.traffic.ra.is_some(), g.traffic.ta);
+        sfx.update(&g.ac, &alerts, &g.acked);
         for c in g.cues.drain(..) {
             sfx.cue(c);
         }
@@ -1518,7 +1515,7 @@ async fn main() {
         let body = Rect::new(6.0, 40.0, sw - 12.0, sh - 46.0);
         if map_full {
             g.map.input(body);
-            g.map.draw(&world, &mut tiles, &g.recon, &g.ac, &g.traffic, body, g.dest, time);
+            g.map.draw(&world, &mut tiles, &g.recon, &g.ac, body, g.dest, time);
         } else {
             // Écran principal Darkstar, aux proportions de l'écran du cockpit
             let mfd_w = (body.w * 0.60).min((body.h - 150.0) * mfd::COCKPIT_ASPECT).floor();
@@ -1526,8 +1523,8 @@ async fn main() {
             let mfd_r = Rect::new(body.x, body.y, mfd_w, mfd_h);
             const BEZEL_PAGES: [gcs::Tab; 6] = [gcs::Tab::Moteurs, gcs::Tab::Alarmes, gcs::Tab::Fcs, gcs::Tab::Limites, gcs::Tab::Elec, gcs::Tab::Thermique];
             let lit: [bool; 6] = std::array::from_fn(|i| g.tab == BEZEL_PAGES[i]);
-            let info = pfd::PfdInfo { alerts: &alerts, ra: g.traffic.ra, link_name: ln, latency_ms: lat, dest: g.dest, warp: warp_eff, time };
-            let (_, act) = mfd::draw_mfd(&world, &mut tiles, &g.ac, &g.traffic, &g.recon, mfd_r, &mut g.mfd, &info, g.style, time, lit);
+            let info = pfd::PfdInfo { alerts: &alerts, link_name: ln, latency_ms: lat, dest: g.dest, warp: warp_eff, time };
+            let (_, act) = mfd::draw_mfd(&world, &mut tiles, &g.ac, &g.recon, mfd_r, &mut g.mfd, &info, g.style, time, lit);
             if act.fuel_dump {
                 g.apply_switch(gcs::Switch::FuelDump);
             }
@@ -1569,7 +1566,7 @@ async fn main() {
             let map_h = (body.h * 0.36).floor();
             let mr = Rect::new(rx, body.y, rw, map_h);
             g.map.input(mr);
-            g.map.draw(&world, &mut tiles, &g.recon, &g.ac, &g.traffic, mr, g.dest, time);
+            g.map.draw(&world, &mut tiles, &g.recon, &g.ac, mr, g.dest, time);
             let tabs_r = Rect::new(rx, mr.y + mr.h + 6.0, rw, 54.0);
             let mut alert_tabs = Vec::new();
             if g.ac.ovr_engine || g.ac.ovr_fbw || g.ac.h2_dump || g.ac.fuel_dump {
@@ -1727,6 +1724,20 @@ async fn main() {
             }
         }
         tiles.end_frame();
+        // Diagnostic de performance (DARKSTAR_PERF=1) : cadence et état du cache de tuiles
+        if perf {
+            // Ralentissement artificiel (DARKSTAR_PERF=<ms>) pour éprouver le cache à faible cadence
+            if let Ok(ms) = std::env::var("DARKSTAR_PERF").unwrap_or_default().parse::<u64>() {
+                std::thread::sleep(std::time::Duration::from_millis(ms));
+            }
+            perf_frames += 1;
+            if get_time() - perf_t0 > 2.0 {
+                let (t, d, i, e) = tiles.stats();
+                eprintln!("PERF {:.0} img/s | tuiles GPU {t} attente {d} en cours {i} relief {e}", perf_frames as f64 / (get_time() - perf_t0));
+                perf_t0 = get_time();
+                perf_frames = 0;
+            }
+        }
         next_frame().await;
     }
 }

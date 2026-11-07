@@ -5,7 +5,6 @@ use crate::aircraft::{Aircraft, EYE_H};
 use crate::airports::AIRPORTS;
 use crate::geo::*;
 use crate::tiles::Tiles;
-use crate::traffic::{Tcas, TrafficSys};
 use crate::ui::*;
 use crate::world::World;
 use macroquad::prelude::*;
@@ -239,7 +238,7 @@ pub struct Lights {
     pub pts: Vec<(Vec3, Color, f32)>,
 }
 
-pub fn draw_svs(world: &World, tiles: &mut Tiles, ac: &Aircraft, traffic: &TrafficSys, rect: Rect, time: f64, style: SvsStyle) -> View {
+pub fn draw_svs(world: &World, tiles: &mut Tiles, ac: &Aircraft, rect: Rect, time: f64, style: SvsStyle) -> View {
     let dark = style == SvsStyle::Darkstar;
     let dpi = screen_dpi_scale();
     let (fwd, up, _) = basis(ac);
@@ -548,7 +547,7 @@ pub fn draw_svs(world: &World, tiles: &mut Tiles, ac: &Aircraft, traffic: &Traff
     set_default_camera();
     let v = View { mat, rect };
 
-    // --- Superpositions 2D dans la vue : contours de piste, feux, trafic ---
+    // --- Superpositions 2D dans la vue : contours de piste, feux ---
     scissor(Some(rect));
     for o in &outlines {
         let p: Vec<Option<Vec2>> = o.iter().map(|&p| v.project(p)).collect();
@@ -566,54 +565,6 @@ pub fn draw_svs(world: &World, tiles: &mut Tiles, ac: &Aircraft, traffic: &Traff
             draw_circle(sp.x, sp.y, r * 1.8, Color::new(c.r, c.g, c.b, 0.18));
             draw_circle(sp.x, sp.y, r, *c);
         }
-    }
-    for t in &traffic.list {
-        if (t.lat - ac.lat).abs() > 1.0 {
-            continue;
-        }
-        let (e, n) = enu_offset(ac.lat, ac.lon, t.lat, t.lon);
-        let d = (e * e + n * n).sqrt();
-        if d > 60_000.0 {
-            continue;
-        }
-        let y = t.alt - ac.alt - EYE_H - curvature_drop(d);
-        let p = vec3(e as f32, y as f32, -n as f32);
-        let Some(sp) = v.project(p) else { continue };
-        if !rect.contains(sp) {
-            continue;
-        }
-        // Silhouette 3D à courte distance
-        if d < 8_000.0 {
-            let hr = t.hdg.to_radians();
-            let fw = vec3(hr.sin() as f32, 0.0, -hr.cos() as f32);
-            let rt = vec3(hr.cos() as f32, 0.0, hr.sin() as f32);
-            let seg = |a: Vec3, b: Vec3, w: f32| {
-                if let (Some(a), Some(b)) = (v.project(p + a), v.project(p + b)) {
-                    draw_line(a.x, a.y, b.x, b.y, w, Color::new(0.85, 0.87, 0.9, 1.0));
-                }
-            };
-            seg(fw * 32.0, -fw * 32.0, 3.0);
-            seg(rt * 30.0 + fw * 2.0, -rt * 30.0 + fw * 2.0, 2.0);
-            seg(rt * 9.0 - fw * 28.0, -rt * 9.0 - fw * 28.0, 1.5);
-        }
-        let col = match t.tcas {
-            Tcas::Ra => RED,
-            Tcas::Ta => AMBER,
-            Tcas::Proximate => WHITE,
-            Tcas::None => CYAN_S,
-        };
-        let s = 7.0;
-        let dz = ((t.alt - ac.alt) / FT / 100.0).round() as i32;
-        match t.tcas {
-            Tcas::Ra => draw_rectangle(sp.x - s, sp.y - s, 2.0 * s, 2.0 * s, col),
-            Tcas::Ta => draw_circle(sp.x, sp.y, s, col),
-            _ => {
-                draw_poly_lines(sp.x, sp.y, 4, s, 0.0, 1.5, col);
-            }
-        }
-        let arrow = if t.vs > 2.0 { "^" } else if t.vs < -2.0 { "v" } else { "" };
-        txt(&format!("{:+03}{arrow}", dz), sp.x + 10.0, sp.y - 2.0, 15.0, col);
-        txt(&format!("{} {:.1}NM", t.callsign, d / NM), sp.x + 10.0, sp.y + 12.0, 13.0, Color::new(col.r, col.g, col.b, 0.75));
     }
     scissor(None);
     v
