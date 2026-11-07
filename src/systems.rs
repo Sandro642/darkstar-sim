@@ -318,3 +318,46 @@ mod roll_tests {
         assert!(total > std::f64::consts::TAU, "360 deg effectués");
     }
 }
+
+#[cfg(test)]
+mod ap_perf_tests {
+    use crate::aircraft::*;
+    use crate::geo::FT;
+
+    /// Virage de 90° sous AP à Mach 3 / FL700 : AP MAX tourne nettement plus vite que l'AP confort,
+    /// sans dépasser le facteur de charge de la loi normale.
+    #[test]
+    fn ap_max_turns_faster_within_law() {
+        let mut times = Vec::new();
+        for perf in [false, true] {
+            let mut ac = Aircraft::new_on_runway(0);
+            ac.on_ground = false;
+            ac.gear_down = false;
+            ac.gear_pos = 0.0;
+            ac.brakes = false;
+            ac.alt = 70_000.0 * FT;
+            ac.tas = 3.0 * crate::atmosphere::isa(ac.alt).a;
+            ac.psi = 0.0;
+            ac.set_turbines(TurbState::Running, 0.8);
+            ac.ap.on = true;
+            ac.ap.vert = VertMode::Alt;
+            ac.ap.alt_tgt_ft = 70_000.0;
+            ac.ap.lat = LatMode::Hdg;
+            ac.ap.hdg_tgt = 90.0;
+            ac.ap.max_perf = perf;
+            let dt = 1.0 / 60.0;
+            let mut t = 0.0;
+            let mut nz_max: f64 = 0.0;
+            while t < 600.0 && (ac.hdg_deg() - 90.0).abs() > 2.0 {
+                ac.step(dt, 0.0, 0.0);
+                nz_max = nz_max.max(ac.d.nz);
+                t += dt;
+            }
+            println!("AP {} : virage 90 deg en {t:.0} s, nz max {nz_max:.2}, alt {:.0} ft", if perf { "MAX" } else { "CONFORT" }, ac.alt / FT);
+            assert!(ac.crashed.is_none());
+            assert!(nz_max <= 3.05, "facteur de charge {nz_max}");
+            times.push(t);
+        }
+        assert!(times[1] < times[0] * 0.7, "AP MAX {:.0} s vs confort {:.0} s", times[1], times[0]);
+    }
+}

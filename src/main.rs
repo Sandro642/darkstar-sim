@@ -1431,6 +1431,14 @@ impl Game {
                     ac.ap.on = false;
                     ac.autoland = None;
                     reply = Ok("AP OFF".into());
+                } else if matches!(arg(1), "MAX" | "PERF" | "COMBAT") && airborne {
+                    engage_ap(ac);
+                    ac.ap.max_perf = true;
+                    let nz = if ac.d.mach > 4.0 { 2.0 } else { 3.0 };
+                    reply = Ok(format!("AP MAX — DOMAINE COMPLET DE LA LOI NORMALE ({:.1} G, INCLINAISON {:.0} deg), PROTECTIONS ACTIVES", nz * 0.95, (1.0 / (nz * 0.95f64)).acos().to_degrees().min(67.0)));
+                } else if matches!(arg(1), "NORMAL" | "CONFORT" | "NORM") {
+                    ac.ap.max_perf = false;
+                    reply = Ok("AP CONFORT (0.4-1.7 G, INCLINAISON 30-35 deg)".into());
                 } else if airborne {
                     engage_ap(ac);
                     reply = Ok("AP1 ENGAGÉ".into());
@@ -1480,6 +1488,7 @@ impl Game {
                     "TANKER [OACI|OFF]  RAVITAILLEMENT (autonome)  DECROCHER  BINGO [AUTO|t]",
                     "CHAFF  FLARE  ECM ON|OFF  CMDS AUTO|MAN  TIR [I|J|K] (HACM)  ARMEMENT (page)",
                     "EMERGENCY [OFF] (ravitaillement > terrain proche > ejection)  EJECTION CONFIRME",
+                    "AP MAX (domaine complet de la loi FBW normale)  AP NORMAL (confort)",
                     "TRAIN UP/DOWN | FREINS ON/OFF | AP ON/OFF | MANUEL | WARP 8",
                 ] {
                     self.log.push((self.sim_time, Level::Info, l.into()));

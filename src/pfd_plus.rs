@@ -64,6 +64,8 @@ pub fn fma(ac: &Aircraft, x0: f32, y: f32, w: f32, dest: usize) {
             ("AUTOLAND".into(), MAGENTA_S, "AP1".into())
         } else if ac.autotakeoff.is_some() {
             ("AUTO T/O".into(), MAGENTA_S, "AP1".into())
+        } else if ac.ap.on && ac.ap.max_perf {
+            ("AP1 MAX".into(), AMBER, if ac.ap.at_on { "A/THR".into() } else { String::new() })
         } else if ac.ap.on {
             ("AP1".into(), GREEN_S, if ac.ap.at_on { "A/THR".into() } else { String::new() })
         } else {

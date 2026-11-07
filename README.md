@@ -306,3 +306,13 @@ Le SR-72 est un avion de reconnaissance : sa charge utile est simulée.
   autoland refusé, terrain hors de portée en plané).
 - `EMERGENCY OFF` pour annuler ; `EJECTION CONFIRME` pour s'éjecter immédiatement.
 - Bandeau EMERGENCY 7700 sur l'horizon avec l'option en cours ; compte à rebours d'autodestruction.
+
+## AP MAX (v1.13.1)
+- `AP MAX` : l'autopilote exploite tout le domaine de la **loi FBW normale** au lieu de ses limites de
+  confort — facteur de charge jusqu'à 95 % de la limite de la loi (2,85 g, 1,9 g au-delà de Mach 4),
+  inclinaison jusqu'à celle du virage en palier correspondant (≈ 67° / 58°), vitesses de tangage et de
+  roulis complètes, vario jusqu'à 35 % de la vitesse, incidence scram 9°. Les protections (incidence,
+  facteur de charge, q, entrée d'air) restent actives : seul FBW OVERRIDE permet d'aller au-delà.
+  Exemple : virage de 90° à Mach 3 / FL700 en 77 s au lieu de 207 s.
+- `AP NORMAL` : retour aux limites de confort. FMA : « AP1 MAX » en ambre. Approche ILS et autoland
+  restent toujours en mode confort.

@@ -90,6 +90,9 @@ pub struct Autopilot {
     /// ILS armé : capture LOC dans l'axe, capture G/S par en dessous (le mode courant est conservé d'ici là).
     pub loc_armed: bool,
     pub gs_armed: bool,
+    /// Mode performances maximales : l'AP utilise tout le domaine de la loi FBW normale
+    /// (facteur de charge, inclinaison, vitesses angulaires) — les protections restent actives.
+    pub max_perf: bool,
 }
 
 pub struct Engines {
@@ -386,6 +389,7 @@ impl Aircraft {
                 at_speedbrake: false,
                 loc_armed: false,
                 gs_armed: false,
+                max_perf: false,
             },
             d: Derived { elev: a.elev, oat: 15.0, ..Default::default() },
             crashed: None,
@@ -883,10 +887,14 @@ impl Aircraft {
         let pmax = (35.0f64).to_radians() / (1.0 + mach / 6.0) * hyd;
         // Protections inhibées : FBW OVERRIDE ou panne FCS (loi directe)
         let prot_off = self.ovr_fbw || self.fails.has(Fail::FcsDirect);
+        // Limites de la loi FBW normale (facteur de charge) et part utilisée par l'AP
+        let nz_law = if mach > 4.0 { 2.0 } else { 3.0 };
+        let perf = self.ap.max_perf && !matches!(self.ap.vert, VertMode::Gs | VertMode::Flare) && self.autoland.is_none();
+        let ap_rate = if perf { 1.0 } else { 0.6 };
         if self.ap.on && !self.on_ground {
             let gamma_cmd = match self.ap.vert {
                 VertMode::Alt => {
-                    let vs_max = (0.2 * v).clamp(5.0, 120.0);
+                    let vs_max = if perf { (0.35 * v).clamp(5.0, 300.0) } else { (0.2 * v).clamp(5.0, 120.0) };
                     let vs_cmd = ((self.ap.alt_tgt_ft * FT - self.alt) / 25.0).clamp(-vs_max, vs_max);
                     (vs_cmd / v).clamp(-0.5, 0.5).asin()
                 }
@@ -925,12 +933,13 @@ impl Aircraft {
             let kd = ((2.0 * zeta * wn) / c - 1.0).clamp(0.0, 20.0);
             let mut pr = if self.ap.vert == VertMode::Pitch {
                 // Tenue d'assiette : les protections d'incidence de la loi FBW restent actives
-                (0.8 * (self.ap.pitch_tgt.to_radians() - self.theta)).clamp(-qmax * 0.6, qmax * 0.6)
+                (0.8 * (self.ap.pitch_tgt.to_radians() - self.theta)).clamp(-qmax * ap_rate, qmax * ap_rate)
             } else {
-                (k * (gamma_cmd - self.gamma) - kd * self.d.gamma_dot).clamp(-qmax * 0.6, qmax * 0.6)
+                (k * (gamma_cmd - self.gamma) - kd * self.d.gamma_dot).clamp(-qmax * ap_rate, qmax * ap_rate)
             };
-            // Confort : facteur de charge limité à [0.4, 1.7] g sous AP
-            if (self.d.nz > 1.7 && pr > 0.0) || (self.d.nz < 0.4 && pr < 0.0) {
+            // Confort : facteur de charge limité à [0.4, 1.7] g sous AP ; en AP MAX, domaine de la loi normale
+            let (nz_lo, nz_hi) = if perf { (0.0, nz_law * 0.95) } else { (0.4, 1.7) };
+            if (self.d.nz > nz_hi && pr > 0.0) || (self.d.nz < nz_lo && pr < 0.0) {
                 pr = 0.0;
             }
             pitch_rate = pr;
@@ -951,9 +960,12 @@ impl Aircraft {
             // HDG tient le cap ; NAV et LOC tiennent la route sol (compensation du vent)
             let cur = if self.ap.lat == LatMode::Hdg { self.hdg_deg() } else { self.track_deg() };
             let err = wrap180(hdg_cmd - cur);
-            let bank_lim = if mach > 3.0 { 35.0 } else { 30.0 };
-            let phi_cmd = (err * 2.0).clamp(-bank_lim, bank_lim).to_radians();
-            roll_rate = (1.5 * wrap_pi(phi_cmd - self.phi)).clamp(-pmax * 0.5, pmax * 0.5);
+            // AP MAX : inclinaison du virage en palier au facteur de charge maximal de la loi
+            let bank_lim = if perf { (1.0 / (nz_law * 0.95)).acos().to_degrees().min(67.0) } else if mach > 3.0 { 35.0 } else { 30.0 };
+            let gain = if perf { 3.0 } else { 2.0 };
+            let phi_cmd = (err * gain).clamp(-bank_lim, bank_lim).to_radians();
+            let rr = if perf { 1.0 } else { 0.5 };
+            roll_rate = (1.5 * wrap_pi(phi_cmd - self.phi)).clamp(-pmax * rr, pmax * rr);
 
             if self.ap.vert == VertMode::QHold && mach < 0.95 && self.alt < 35_000.0 * FT {
                 self.ap.vert = VertMode::Alt;
@@ -1074,7 +1086,7 @@ impl Aircraft {
                 amax = 25f64.to_radians();
             } else if self.eng.scram == ScramState::Lit {
                 // Loi FBW : protection d'incidence de l'entrée d'air (plus stricte sous AP)
-                let lim: f64 = if self.ap.on { 6.5 } else { 9.0 };
+                let lim: f64 = if self.ap.on && !perf { 6.5 } else { 9.0 };
                 amax = amax.min(lim.to_radians());
             }
             let amin = if prot_off { -10f64.to_radians() } else { -5f64.to_radians() };
