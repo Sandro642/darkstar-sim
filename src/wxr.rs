@@ -203,36 +203,34 @@ impl Wxr {
 
     /// Bloc radar météo sur l'horizon (zone centrale `r`, côté droit sous le bloc vent).
     pub fn draw_hud(&self, r: Rect, time: f64) {
-        // À gauche de l'échelle de plan de descente ILS
-        let x = r.x + r.w - 212.0;
+        // Une ligne compacte sous le bloc vent (colonne droite)
+        let w = 196.0;
+        let x = r.x + r.w - w - 30.0;
         let y = r.y + 196.0;
-        let b = Rect::new(x, y, 160.0, 36.0);
-        rrect(b, 5.0, Color::new(0.0, 0.0, 0.0, 0.62));
+        let b = Rect::new(x, y, w, 18.0);
+        rrect(b, 4.0, Color::new(0.0, 0.0, 0.0, 0.55));
         if !self.on {
-            rrect_lines(b, 5.0, 1.0, AMBER);
-            txt("WXR OFF", x + 8.0, y + 15.0, 12.0, AMBER);
+            txt("WXR OFF", x + 6.0, y + 13.0, 11.0, AMBER);
             return;
         }
-        rrect_lines(b, 5.0, 1.0, Color::new(0.3, 1.0, 0.5, 0.45));
-        txt(&format!("WXR{}", if self.turb { "+TURB" } else { "" }), x + 8.0, y + 15.0, 12.0, GREEN_S);
-        txt_r(&format!("TILT {}  {:.0}NM", self.tilt_label(), self.range_m / NM), x + b.w - 8.0, y + 15.0, 11.0, GREEN_S);
+        txt(&format!("WXR {}", self.tilt_label()), x + 6.0, y + 13.0, 10.0, GREEN_S);
         match self.strongest() {
             Some((l, az, d)) => {
                 let clock = ((az / 30.0).round() as i32).rem_euclid(12);
                 let clock = if clock == 0 { 12 } else { clock };
                 let what = match l {
-                    4 => "TURBULENCE",
-                    3 => "ECHO FORT",
-                    2 => "ECHO MODERE",
-                    _ => "ECHO FAIBLE",
+                    4 => "TURB",
+                    3 => "FORT",
+                    2 => "MODERE",
+                    _ => "FAIBLE",
                 };
                 let blink = l < 3 || (time * 2.0).fract() < 0.7;
-                draw_rectangle(x + 8.0, y + 22.0, 8.0, 8.0, level_color(l, 1.0));
+                draw_rectangle(x + 64.0, y + 5.0, 7.0, 7.0, level_color(l, 1.0));
                 if blink {
-                    txt(&format!("{what} {clock}H {:.0}NM", d / NM), x + 22.0, y + 30.0, 11.0, level_color(l, 1.0));
+                    txt(&format!("{what} {clock}H {:.0}NM", d / NM), x + 76.0, y + 13.0, 10.0, level_color(l, 1.0));
                 }
             }
-            None => txt("AUCUN ECHO", x + 8.0, y + 30.0, 11.0, Color::new(0.6, 0.65, 0.7, 1.0)),
+            None => txt("AUCUN ECHO", x + 64.0, y + 13.0, 10.0, Color::new(0.6, 0.65, 0.7, 1.0)),
         }
     }
 

@@ -2117,7 +2117,7 @@ async fn main() {
             g.map.draw(&world, &mut tiles, &g.wx, &g.refuel, &g.combat, &g.recon, &g.ac, body, g.dest, time);
         } else {
             // Écran principal Darkstar, aux proportions de l'écran du cockpit
-            let mfd_w = (body.w * 0.63).min((body.h - 120.0) * mfd::COCKPIT_ASPECT).floor();
+            let mfd_w = (body.w * 0.67).min((body.h - 120.0) * mfd::COCKPIT_ASPECT).floor();
             let mfd_h = (mfd_w / mfd::COCKPIT_ASPECT).floor();
             let mfd_r = Rect::new(body.x, body.y, mfd_w, mfd_h);
             let lit: [bool; 6] = std::array::from_fn(|i| g.tab == BEZEL_PAGES[i]);
@@ -2401,14 +2401,16 @@ fn draw_console(g: &Game, r: Rect) {
         }
         None => {
             let s = match (&g.ac.autoland, &g.ac.autotakeoff) {
-                (Some(al), _) => format!("AUTOLAND {} {:02} — {:?}", AIRPORTS[al.apt].icao, al.runway_number(), al.phase).to_uppercase(),
+                // L'autoland est affiché par la bannière d'approche
+                (Some(_), _) => String::new(),
                 (_, Some(_)) => "DÉCOLLAGE AUTOMATIQUE EN COURS".to_string(),
-                _ => "ENTRÉE : saisir une instruction (CAP, ALT, MACH, DIRECT, ATTERRIR...)".to_string(),
+                // Rappel de la saisie seulement en début d'essai (dégage le bas de l'horizon)
+                _ if g.sim_time < 45.0 => "ENTRÉE : saisir une instruction (CAP, ALT, MACH, DIRECT, ATTERRIR...)".to_string(),
+                _ => String::new(),
             };
-            let active = g.ac.autoland.is_some() || g.ac.autotakeoff.is_some();
+            let active = g.ac.autotakeoff.is_some();
             let c = if active { ui::GREEN_S } else { Color::new(0.75, 0.8, 0.85, 0.55) };
-            // Rappel discret en bas de la vue (hors échelle de tangage), sauf pendant une approche ILS
-            if active || g.ac.approach.is_none() {
+            if !s.is_empty() && (active || g.ac.approach.is_none()) {
                 ui::txt_c(&s, r.x + r.w / 2.0, r.y + r.h - 10.0, if active { 15.0 } else { 12.0 }, c);
             }
         }

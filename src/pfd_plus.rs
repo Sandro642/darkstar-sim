@@ -243,7 +243,8 @@ pub fn cue(ac: &Aircraft, v: &View, c: &Cue, slot: usize) {
             let inner = INNER.with(|c| c.get()).unwrap_or(s);
             let x = if side > 0.0 { inner.x + inner.w - 18.0 } else { inner.x + 18.0 };
             let _ = ctr;
-            let p = vec2(x, s.y + s.h * 0.46 + slot as f32 * 30.0);
+            // Sous la ligne d'horizon : dégage les blocs météo et radar du haut
+            let p = vec2(x, s.y + s.h * 0.60 + slot as f32 * 26.0);
             let dirv = vec2(side, 0.0);
             let n = vec2(0.0, 1.0);
             draw_triangle(p + dirv * 12.0, p - dirv * 6.0 + n * 8.0, p - dirv * 6.0 - n * 8.0, c.color);
@@ -683,9 +684,11 @@ pub fn fuel_alert(ac: &Aircraft, p: &crate::fuel::Plan, s: Rect, time: f64, sinc
     let detail = since_change < 12.0 || reveal;
     let title = if p.level == F::Ok { "H2 BINGO" } else { p.level.name() };
     if detail {
-        let y = s.y + s.h * 0.20;
+        // Sous l'arc d'inclinaison, sur un fond sombre (lisible par-dessus l'échelle de tangage)
+        let y = s.y + s.h * 0.30;
         let a = if since_change < 12.0 { ((12.0 - since_change) / 1.5).clamp(0.0, 1.0) as f32 } else { 1.0 };
         let a = if reveal { 1.0 } else { a };
+        rrect(Rect::new(cx - 250.0, y - 26.0, 500.0, 92.0), 8.0, Color::new(0.0, 0.0, 0.0, 0.45 * a));
         let flashing = matches!(p.level, F::MinFuel | F::Emergency | F::Bingo) && since_change < 6.0;
         if !flashing || blink {
             htxt(title, cx - txt_w(title, 26.0) / 2.0, y, 26.0, col, a);
@@ -709,7 +712,7 @@ pub fn fuel_alert(ac: &Aircraft, p: &crate::fuel::Plan, s: Rect, time: f64, sinc
         // Annonciateur compact permanent sous l'échelle d'assiette supérieure
         let lbl = if p.level >= F::Bingo { format!("{}  {:.1} t", p.level.name(), ac.fuel / 1000.0) } else { "H2 BINGO".to_string() };
         let w = txt_w(&lbl, 14.0) + 16.0;
-        let b = Rect::new(cx - w / 2.0, s.y + 26.0, w, 20.0);
+        let b = Rect::new(cx - w / 2.0, s.y + 58.0, w, 20.0);
         if p.level < F::MinFuel || blink {
             draw_rectangle_lines(b.x, b.y, b.w, b.h, 1.5, col);
             htxt(&lbl, b.x + 8.0, b.y + 15.0, 14.0, col, 1.0);

@@ -442,3 +442,7 @@ Le SR-72 est un avion de reconnaissance : sa charge utile est simulée.
   place du « % santé » : cinq courbes sur 3 min (EGT, parois stato / scram, excès de carburant,
   usure cumulée) avec seuils et limites ; état calculé (NOMINAL, SURVEILLANCE, DÉGRADÉ, CRITIQUE,
   DÉTRUITES) d'après marges, temps au-delà des seuils et tendance de l'usure, avec la cause.
+- v1.29.1 : horizon agrandi (écran principal 67 % de la largeur, horizon 71 % de sa hauteur) et
+  données réagencées : alerte carburant sous l'arc d'inclinaison sur fond sombre, radar météo sur
+  une ligne compacte, repères hors champ sous la ligne d'horizon, rappel de saisie limité au début
+  de l'essai, statut autoland porté par la bannière d'approche ; pompes carburant ajustées.

@@ -83,7 +83,7 @@ pub const COCKPIT_ASPECT: f32 = 1.30;
 
 pub fn layout(r: Rect) -> (Rect, Layout, [Rect; 3]) {
     let d = display_rect(r);
-    let pfd_r = Rect::new(d.x + 5.0, d.y + 5.0, d.w - 10.0, (d.h * 0.66).floor());
+    let pfd_r = Rect::new(d.x + 5.0, d.y + 5.0, d.w - 10.0, (d.h * 0.71).floor());
     let y0 = pfd_r.y + pfd_r.h + 6.0;
     let h = d.y + d.h - 5.0 - y0;
     let w = (d.w - 10.0 - 12.0) / 3.0;
@@ -221,8 +221,10 @@ fn draw_fuel(ac: &Aircraft, r: Rect) -> bool {
     value_box(r.x + r.w - 56.0, r.y + 48.0 + 2.0 * g, 46.0, &format!("{fp:.0}"), if fp < 40.0 { AMBER } else { WHITE });
     let tanks = tank_fracs(ac);
     let pumps_on = fp > 20.0;
-    let sg = ((rw - 24.0) / 4.4).clamp(8.0, 14.0);
     let py0 = r.y + 76.0 + 2.0 * g;
+    // Deux rangées de pompes dans la hauteur disponible
+    let avail = r.y + r.h - 6.0 - (py0 + 10.0);
+    let sg = ((rw - 24.0) / 4.4).min((avail - 12.0) / 4.0).clamp(6.0, 14.0);
     txt("POMPES", rx + 2.0, py0 - 4.0, 10.0, DIM);
     for (i, t) in tanks.iter().enumerate() {
         let (c, row) = (i % 2, i / 2);
