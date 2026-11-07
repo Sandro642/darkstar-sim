@@ -316,7 +316,9 @@ fn draw_svs_overlay(ac: &Aircraft, v: &View, s: Rect, info: &PfdInfo) {
         if along > -a.len && along < 60_000.0 && !ac.on_ground {
             let loc_dev = (cross / (along + a.len)).atan().to_degrees();
             let gs_dev = ((ac.alt - tel) / (along + 300.0).max(50.0)).atan().to_degrees() - 3.0;
-            let ly = s.y + s.h - 50.0;
+            // Au-dessus de la bannière d'approche quand elle est affichée
+            let banner = crate::appr::visible(ac);
+            let ly = if banner { s.y + s.h - crate::appr::BANNER_H - 38.0 } else { s.y + s.h - 50.0 };
             for k in [-2.0f32, -1.0, 1.0, 2.0] {
                 draw_circle_lines(cx + k * 36.0, ly, 4.0, 1.5, LINE);
             }
@@ -327,10 +329,12 @@ fn draw_svs_overlay(ac: &Aircraft, v: &View, s: Rect, info: &PfdInfo) {
             }
             draw_poly(gx, cy + (gs_dev as f32 / 0.35 * 36.0).clamp(-80.0, 80.0), 4, 8.0, 0.0, MAGENTA_S);
             let num = crate::airports::Airport::runway_number(thdg);
-            let lbl = format!("ILS {:02} {}  {:.1} NM", num, a.icao, along / NM);
-            let w = txt_w(&lbl, 14.0) + 14.0;
-            rrect(Rect::new(cx - w / 2.0, ly + 10.0, w, 20.0), 5.0, BLOCK);
-            txt_c(&lbl, cx, ly + 25.0, 14.0, MAGENTA_S);
+            if !banner {
+                let lbl = format!("ILS {:02} {}  {:.1} NM", num, a.icao, along / NM);
+                let w = txt_w(&lbl, 14.0) + 14.0;
+                rrect(Rect::new(cx - w / 2.0, ly + 10.0, w, 20.0), 5.0, BLOCK);
+                txt_c(&lbl, cx, ly + 25.0, 14.0, MAGENTA_S);
+            }
         }
     }
 

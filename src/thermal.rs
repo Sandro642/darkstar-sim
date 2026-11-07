@@ -242,34 +242,11 @@ pub fn draw_thermal(th: &ThermalSys, r: Rect, time: f64) -> Option<usize> {
     let sel = th.selected;
     let pulse = (time * 4.0).sin() as f32 * 0.5 + 0.5;
 
-    // Vue en plan de la cellule
+    // Vue en plan de la cellule (silhouette de la page SYSTEMES)
     let pw = (r.w * 0.36).min(r.h * 0.62);
-    let ph = r.h - 40.0;
-    let cx = r.x + 10.0 + pw / 2.0;
-    let y0 = r.y + 30.0;
-    let to = |x: f32, y: f32| vec2(cx + x * pw / 2.0, y0 + y * ph);
-    // Silhouette Darkstar : nez effilé, chines, aile en delta à double flèche, dérives canted
-    let outline = [
-        (0.0, 0.0), (0.035, 0.10), (0.075, 0.24), (0.12, 0.40), (0.20, 0.55), (0.42, 0.70), (0.66, 0.84),
-        (0.68, 0.90), (0.42, 0.91), (0.26, 0.96), (0.10, 0.99), (-0.10, 0.99), (-0.26, 0.96), (-0.42, 0.91),
-        (-0.68, 0.90), (-0.66, 0.84), (-0.42, 0.70), (-0.20, 0.55), (-0.12, 0.40), (-0.075, 0.24), (-0.035, 0.10),
-    ];
-    let col = Color::new(0.25, 0.85, 0.35, 0.9);
-    let center = to(0.0, 0.62);
-    let shape = smooth(&outline.iter().map(|&(x, y)| to(x, y)).collect::<Vec<_>>(), true, 2);
-    for i in 0..shape.len() {
-        draw_triangle(center, shape[i], shape[(i + 1) % shape.len()], Color::new(0.05, 0.16, 0.08, 1.0));
-    }
-    stroke(&shape, true, 1.6, col);
-    // Dérives inclinées et tuyères jumelles
-    for sx in [-1.0f32, 1.0] {
-        round_line(to(sx * 0.16, 0.74), to(sx * 0.27, 0.97), 3.0, col);
-        let n = to(sx * 0.07, 0.985);
-        rrect_lines(Rect::new(n.x - 5.0, n.y - 3.0, 10.0, 8.0), 3.0, 1.5, col);
-    }
-    // Ligne de chine
-    let (a, b) = (to(0.0, 0.02), to(0.0, 0.95));
-    draw_line(a.x, a.y, b.x, b.y, 1.0, Color::new(0.25, 0.85, 0.35, 0.3));
+    let pr = Rect::new(r.x + 10.0, r.y + 30.0, pw, r.h - 40.0);
+    let to = crate::syspage::plan(pr);
+    crate::syspage::silhouette(pr, Color::new(0.25, 0.85, 0.35, 0.9), Color::new(0.05, 0.16, 0.08, 1.0));
     for (i, s) in th.sensors.iter().enumerate() {
         let p = to(s.pos.0, s.pos.1);
         if clicked(Rect::new(p.x - 9.0, p.y - 9.0, 18.0, 18.0)) {

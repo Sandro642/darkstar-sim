@@ -60,6 +60,24 @@ pub fn silhouette(r: Rect, edge: Color, fill: Color) -> Vec<Vec2> {
     shape
 }
 
+/// Symbole avion : silhouette du Darkstar pleine, centrée en `c`, longueur `len` px, cap `hdg` (rad,
+/// 0 = vers le haut de l'écran, sens horaire).
+pub fn mini(c: Vec2, len: f32, hdg: f32, fill: Color, edge: Color) {
+    let (sn, cs) = hdg.sin_cos();
+    let pts: Vec<Vec2> = OUTLINE
+        .iter()
+        .map(|&(x, y)| {
+            let (lx, ly) = (x * len * 0.5, (y - 0.55) * len);
+            c + vec2(lx * cs - ly * sn, lx * sn + ly * cs)
+        })
+        .collect();
+    let ctr = c + vec2(-(0.07 * len) * sn, 0.07 * len * cs);
+    for i in 0..pts.len() {
+        draw_triangle(ctr, pts[i], pts[(i + 1) % pts.len()], fill);
+    }
+    stroke(&pts, true, 1.2, edge);
+}
+
 /// Synoptique carburant : silhouette remplie, réservoirs JP-7 (vert) et H2 (cyan) selon le niveau.
 pub fn fuel_tanks(ac: &Aircraft, pr: Rect) {
     silhouette(pr, OKC, Color::new(0.05, 0.16, 0.08, 1.0));

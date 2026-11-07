@@ -287,8 +287,8 @@ impl MapView {
         let s = vec2(-f.y, f.x);
         draw_line(p.x, p.y, p.x + f.x * 2000.0, p.y + f.y * 2000.0, 1.0, Color::new(1.0, 1.0, 1.0, 0.25));
         let col = Color::new(1.0, 0.85, 0.1, 1.0);
-        draw_triangle(p + f * 14.0, p - f * 8.0 + s * 9.0, p - f * 4.0, col);
-        draw_triangle(p + f * 14.0, p - f * 8.0 - s * 9.0, p - f * 4.0, col);
+        let _ = s;
+        crate::syspage::mini(p, 28.0, hr, col, Color::new(0.3, 0.22, 0.0, 1.0));
         let _ = time;
 
         // Légende

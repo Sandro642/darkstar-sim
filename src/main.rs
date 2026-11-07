@@ -8,6 +8,7 @@ mod elec;
 mod emergency;
 mod link;
 mod connect;
+mod appr;
 mod mishap;
 mod syspage;
 mod feel;

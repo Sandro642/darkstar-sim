@@ -417,3 +417,8 @@ Le SR-72 est un avion de reconnaissance : sa charge utile est simulée.
   (panneau sur l'horizon ou `RECONNEXION`, `RELAIS SOL KNID`, `RELAIS BACN 1`, `RELAIS SECOURS`).
   `EMERGENCY OVERRIDE` : vol plané moteurs au ralenti puis autoland ; `EJECTION CONFIRME` : boîte
   noire éjectée avec la capsule, données sauvegardées.
+- v1.28.0 : **bannière d'approche** discrète en bas de l'horizon (ILS dans les 15 NM ou autoland) :
+  phases (IAF, LOC, G/S, FLARE, ROLLOUT, ARRÊT ; en manuel LOC, G/S, MINIMUMS, TOUCHER, ROULAGE),
+  profil vertical avec le fil du plan de descente à 3°, arrondi, piste, repères, traînée et avion
+  abstrait, écart au plan. Silhouette du Darkstar de la page SYSTEMES partout (thermique, FCS,
+  symbole avion de l'écran de navigation et de la carte, écran de connexion).
