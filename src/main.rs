@@ -515,6 +515,7 @@ impl Game {
             a.push((Level::Caution, "FUEL DUMP".to_string()));
         }
         a.extend(self.thermal.alerts());
+        a.extend(self.recon.alerts());
         a
     }
 
@@ -951,47 +952,14 @@ impl Game {
                 }
             }
             "DIRECT" | "DCT" | "DIR" if arg(1) == "CIBLE" => {
-                if !airborne {
-                    reply = Err("AU SOL".into());
-                } else {
-                    engage_ap(ac);
-                    ac.ap.lat = LatMode::Hdg;
-                    self.recon.steer = true;
-                    let t = &self.recon.targets[self.recon.selected];
-                    ac.ap.hdg_tgt = dist_brg(ac.lat, ac.lon, t.lat, t.lon).1.round();
-                    reply = Ok(format!("GUIDAGE VERS CIBLE {} {} — CAP {:03.0}", t.code, t.name, ac.ap.hdg_tgt));
-                }
+                reply = self.recon.command(&w, ac, self.mission.elapsed);
             }
-            "CAMERA" | "CAM" => {
-                match arg(1) {
-                    "ON" | "" => self.recon.cam_on = true,
-                    "OFF" => self.recon.cam_on = false,
-                    "IR" => self.recon.ir = true,
-                    "EO" | "VISIBLE" => self.recon.ir = false,
-                    _ => {}
-                }
-                reply = Ok(format!("CAMERA {} {}", if self.recon.cam_on { "ON" } else { "OFF" }, if self.recon.ir { "IR" } else { "EO" }));
+            "CAMERA" | "CAM" | "ZOOM" | "SAR" | "RADAR" | "ELINT" | "CIBLE" | "TARGET" | "PHOTO" | "MENACES" | "THREATS" => {
+                reply = self.recon.command(&w, ac, self.mission.elapsed);
             }
-            "ZOOM" => match num(1).and_then(|z| recon::ZOOMS.iter().position(|v| *v >= z)) {
-                Some(i) => {
-                    self.recon.zoom = i;
-                    reply = Ok(format!("ZOOM CAMERA x{:.0}", recon::ZOOMS[i]));
-                }
-                None => reply = Err("ZOOM 1, 2, 4, 8, 16 OU 32".into()),
-            },
-            "SAR" | "RADAR" => {
-                self.recon.sar_on = arg(1) != "OFF";
-                reply = Ok(format!("RADAR SAR {}", if self.recon.sar_on { "ON" } else { "OFF" }));
+            "PLAN" | "ROUTE" if arg(1) == "RECON" || arg(1) == "OFF" => {
+                reply = self.recon.command(&w, ac, self.mission.elapsed);
             }
-            "CIBLE" | "TARGET" => match self.recon.find(arg(1)) {
-                Some(i) => {
-                    self.recon.selected = i;
-                    let t = &self.recon.targets[i];
-                    let (d, b) = dist_brg(ac.lat, ac.lon, t.lat, t.lon);
-                    reply = Ok(format!("CIBLE {} {} — {b:03.0} deg {:.0} NM, NIIRS REQUIS {:.0}", t.code, t.name, d / NM, t.req));
-                }
-                None => reply = Err("CIBLE INCONNUE (A a H)".into()),
-            },
             "RECON" => {
                 self.tab = gcs::Tab::Recon;
                 reply = Ok("PAGE RECON".into());
@@ -1345,7 +1313,8 @@ impl Game {
                     "FDR (enregistrer la trace) | ANALYSE (analyse du vol / du crash)",
                     "FIN (terminer le vol + débriefing) | QUITTER (sauvegarder et fermer)",
                     "PANNE ENGL|ENGR|GENL|GENR|POMPE|ADC|FCS|HYD|REFROID|PORTES|TRAIN|FUITEH2 [OFF] | PANNES OFF | TRAIN SECOURS",
-                    "CAMERA ON|OFF|EO|IR  ZOOM 8  SAR ON|OFF  CIBLE B  DIRECT CIBLE  RECON",
+                    "CAMERA ON|OFF|EO|IR|TRACK|NADIR  ZOOM 8  PHOTO  SAR STRIP|SPOT|OFF  ELINT ON|OFF",
+                    "CIBLE B  DIRECT CIBLE  PLAN RECON  ROUTE RECON|OFF  MENACES ON|OFF  RECON (page)",
                     "TRAIN UP/DOWN | FREINS ON/OFF | AP ON/OFF | MANUEL | WARP 8",
                 ] {
                     self.log.push((self.sim_time, Level::Info, l.into()));
@@ -1519,7 +1488,7 @@ async fn main() {
             g.map.draw(&world, &mut tiles, &g.recon, &g.ac, body, g.dest, time);
         } else {
             // Écran principal Darkstar, aux proportions de l'écran du cockpit
-            let mfd_w = (body.w * 0.60).min((body.h - 150.0) * mfd::COCKPIT_ASPECT).floor();
+            let mfd_w = (body.w * 0.63).min((body.h - 120.0) * mfd::COCKPIT_ASPECT).floor();
             let mfd_h = (mfd_w / mfd::COCKPIT_ASPECT).floor();
             let mfd_r = Rect::new(body.x, body.y, mfd_w, mfd_h);
             const BEZEL_PAGES: [gcs::Tab; 6] = [gcs::Tab::Moteurs, gcs::Tab::Alarmes, gcs::Tab::Fcs, gcs::Tab::Limites, gcs::Tab::Elec, gcs::Tab::Thermique];
@@ -1624,22 +1593,9 @@ async fn main() {
                 gcs::Tab::Fcs => fcs::draw_fcs(&g.ac, cr),
                 gcs::Tab::Recon => {
                     let ln = g.link().0;
-                    if let Some(a) = recon::draw_recon(&g.ac, &g.recon, cr, ln) {
-                        match a {
-                            recon::ReconAction::Camera => g.recon.cam_on = !g.recon.cam_on,
-                            recon::ReconAction::Mode => g.recon.ir = !g.recon.ir,
-                            recon::ReconAction::Sar => g.recon.sar_on = !g.recon.sar_on,
-                            recon::ReconAction::Select(i) => g.recon.selected = i,
-                            recon::ReconAction::ZoomIn => g.recon.zoom = (g.recon.zoom + 1).min(recon::ZOOMS.len() - 1),
-                            recon::ReconAction::ZoomOut => g.recon.zoom = g.recon.zoom.saturating_sub(1),
-                            recon::ReconAction::Steer => {
-                                if g.recon.steer {
-                                    g.recon.steer = false;
-                                } else {
-                                    g.exec_command("DIRECT CIBLE");
-                                }
-                            }
-                        }
+                    if let Some(a) = recon::draw_recon(&g.ac, &g.recon, &mut tiles, cr, ln) {
+                        let t = g.mission.elapsed;
+                        g.recon.apply(a, &mut g.ac, t);
                         g.cues.push(audio::Cue::Ack);
                     }
                 }

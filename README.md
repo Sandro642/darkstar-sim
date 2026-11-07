@@ -216,3 +216,21 @@ Le SR-72 est un avion de reconnaissance : sa charge utile est simulée.
 - **Énergie** : autonomie JP-7 et H2, rayon d'action, JP-7 estimé à l'arrivée.
 - **Indexeur d'incidence** à côté du vecteur vitesse (limite de la loi en ambre).
 - Échelles : bande basse vitesse, repère VAPP, tendance d'altitude 6 s, minimums ; inclinaison chiffrée > 30°.
+
+## Système de reconnaissance complet (v1.8.0)
+- **Caméra EO/IR sur tourelle** : `CAMERA NADIR` (verticale) ou `CAMERA TRACK` (poursuite de l'objectif
+  jusqu'à 60° hors verticale : distance oblique et obliquité dégradent la qualité NIIRS).
+- **Radar SAR** : `SAR STRIP` (bandes latérales 15-70 km, NIIRS 3,5) ou `SAR SPOT` (objectif sélectionné
+  jusqu'à 150 km sur le côté, NIIRS 5).
+- **ELINT** : détection des émetteurs radar dans l'horizon radar, relèvements toutes les 2 s,
+  triangulation par moindres carrés avec cercle d'erreur ; varier le relèvement accélère la localisation.
+- **Menaces sol-air** (émetteurs d'exercice fictifs) : domaine portée / plafond / Mach maximal. Dans le
+  domaine : alerte MENACE, tir après 12 s, impact 25 s plus tard (abattu) sauf sortie du domaine
+  (monter ou accélérer : le SR-72 se protège par la vitesse et l'altitude). `MENACES OFF` pour les désactiver.
+- **11 objectifs** IMINT / SAR / ELINT avec priorités P1-P3 et score.
+- **Photothèque** : vignettes rendues depuis l'imagerie réelle (EO couleur, IR vert, SAR gris chatoyé),
+  agrandissement et métadonnées, transmission au sol par priorité (LOS rapide, SATCOM lente).
+- **Planification** : `PLAN RECON` (route au plus proche voisin), `ROUTE RECON` (l'autopilote enchaîne
+  les objectifs), `DIRECT CIBLE`, `PHOTO` ; route, émetteurs, domaines et relèvements sur la carte.
+- Page RECON en 4 sous-pages : CAPTEURS, OBJECTIFS, ELINT / MENACES, PHOTOTHEQUE.
+- Horizon agrandi (PFD sur 66 % de l'écran Darkstar) ; tuiles « Map data not yet available » ignorées.

@@ -243,47 +243,8 @@ impl MapView {
             }
         }
 
-        // Objectifs de reconnaissance et empreinte des capteurs
-        for (i, t) in recon.targets.iter().enumerate() {
-            let p = to_s(t.lat, t.lon);
-            if !r.contains(p) {
-                continue;
-            }
-            let c = if t.done() { GREEN_S } else if t.best.is_some() { AMBER } else { Color::new(1.0, 0.85, 0.2, 1.0) };
-            let d = 7.0;
-            stroke(&round_corners(&[p + vec2(0.0, -d), p + vec2(d, 0.0), p + vec2(0.0, d), p + vec2(-d, 0.0)], true, 2.0), true, 2.0, c);
-            if i == recon.selected {
-                draw_circle_lines(p.x, p.y, 12.0, 1.5, MAGENTA_S);
-            }
-            if z > 8.0 {
-                txt(&format!("{} {}", t.code, if z > 40.0 { t.name } else { "" }), p.x + 10.0, p.y + 4.0, 12.0, c);
-            }
-        }
-        if recon.cam_on && !ac.on_ground {
-            let half = recon.footprint(ac) / 2.0;
-            let corners: Vec<Vec2> = [(-1.0, -1.0), (1.0, -1.0), (1.0, 1.0), (-1.0, 1.0)]
-                .iter()
-                .map(|&(a, b): &(f64, f64)| {
-                    let (la, lo) = from_enu(ac.lat, ac.lon, half * (a * ac.psi.cos() + b * ac.psi.sin()), half * (-a * ac.psi.sin() + b * ac.psi.cos()));
-                    to_s(la, lo)
-                })
-                .collect();
-            stroke(&corners, true, 1.5, Color::new(0.4, 1.0, 0.6, 0.9));
-        }
-        if recon.sar_on && !ac.on_ground {
-            // Fauchées SAR latérales (bandes de 15 à 70 km)
-            for side in [-1.0f64, 1.0] {
-                let mut pts = Vec::new();
-                for (along, cross) in [(-20_000.0, 15_000.0), (20_000.0, 15_000.0), (20_000.0, 70_000.0), (-20_000.0, 70_000.0)] {
-                    let cr = cross * side;
-                    let (e, n) = (along * ac.psi.sin() + cr * ac.psi.cos(), along * ac.psi.cos() - cr * ac.psi.sin());
-                    let (la, lo) = from_enu(ac.lat, ac.lon, e, n);
-                    pts.push(to_s(la, lo));
-                }
-                fill_shape(&pts, Color::new(0.3, 0.8, 1.0, 0.10));
-                stroke(&pts, true, 1.0, Color::new(0.3, 0.8, 1.0, 0.5));
-            }
-        }
+        // Reconnaissance : objectifs, route, émetteurs et menaces, empreintes des capteurs
+        crate::recon::draw_map(recon, ac, &to_s, z, r);
 
         // Trace
         let mut prev: Option<Vec2> = None;

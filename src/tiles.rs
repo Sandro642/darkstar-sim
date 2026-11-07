@@ -79,6 +79,25 @@ impl Key {
 enum Decoded {
     Rgba(u16, u16, Vec<u8>),
     Failed,
+    /// Tuile de remplacement du serveur (« Map data not yet available ») : jamais redemandée.
+    Missing,
+}
+
+/// Tuile « Map data not yet available » d'Esri : fond gris uniforme ~(204, 204, 204) avec du texte.
+fn is_placeholder(px: &[u8], w: u32, h: u32) -> bool {
+    let mut grey = 0;
+    let mut n = 0;
+    for j in (0..h).step_by(8) {
+        for i in (0..w).step_by(8) {
+            let o = ((j * w + i) * 4) as usize;
+            let (r, g, b) = (px[o] as i32, px[o + 1] as i32, px[o + 2] as i32);
+            n += 1;
+            if (r - g).abs() < 4 && (g - b).abs() < 4 && (190..=215).contains(&r) {
+                grey += 1;
+            }
+        }
+    }
+    grey * 100 > n * 90
 }
 
 struct ElevTile {
@@ -224,6 +243,9 @@ fn worker(sh: Arc<Shared>) {
                 .map(|img| {
                     let rgba = img.to_rgba8();
                     let (w, h) = rgba.dimensions();
+                    if k.layer == Layer::Sat && is_placeholder(rgba.as_raw(), w, h) {
+                        return Decoded::Missing;
+                    }
                     Decoded::Rgba(w as u16, h as u16, rgba.into_raw())
                 })
                 .unwrap_or(Decoded::Failed);
@@ -383,6 +405,9 @@ impl Tiles {
                 Decoded::Failed => {
                     self.failed.insert(k, t);
                 }
+                Decoded::Missing => {
+                    self.failed.insert(k, f64::INFINITY);
+                }
             }
         }
         if self.tex.len() > TEX_CAP {
@@ -417,7 +442,7 @@ impl Tiles {
             return;
         }
         if let Some(t) = self.failed.get(&k) {
-            if get_time() - t < 60.0 {
+            if t.is_infinite() || get_time() - t < 60.0 {
                 return;
             }
         }

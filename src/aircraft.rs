@@ -516,7 +516,7 @@ impl Aircraft {
         self.events.push((l, s.into()));
     }
 
-    fn crash(&mut self, why: &str) {
+    pub fn crash(&mut self, why: &str) {
         if self.crashed.is_none() {
             self.crashed = Some(why.to_string());
             self.msg(Level::Warning, format!("PERTE DU VÉHICULE : {why}"));

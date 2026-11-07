@@ -74,7 +74,7 @@ pub const COCKPIT_ASPECT: f32 = 1.30;
 
 pub fn layout(r: Rect) -> (Rect, Layout, [Rect; 3]) {
     let d = display_rect(r);
-    let pfd_r = Rect::new(d.x + 5.0, d.y + 5.0, d.w - 10.0, (d.h * 0.575).floor());
+    let pfd_r = Rect::new(d.x + 5.0, d.y + 5.0, d.w - 10.0, (d.h * 0.66).floor());
     let y0 = pfd_r.y + pfd_r.h + 6.0;
     let h = d.y + d.h - 5.0 - y0;
     let w = (d.w - 10.0 - 12.0) / 3.0;
