@@ -337,6 +337,11 @@ mod tests {
 
     /// Lance un autoland depuis une position donnée (relative au centre de piste de KEDW).
     fn run_case(name: &str, brg_from_apt: f64, dist_nm: f64, alt_ft: f64, mach: f64, hdg: f64, fuel: f64) -> Result<String, String> {
+        run_case_wind(name, brg_from_apt, dist_nm, alt_ft, mach, hdg, fuel, (0.0, 0.0))
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn run_case_wind(name: &str, brg_from_apt: f64, dist_nm: f64, alt_ft: f64, mach: f64, hdg: f64, fuel: f64, wind: (f64, f64)) -> Result<String, String> {
         let edw = AIRPORTS.iter().position(|a| a.icao == "KEDW").unwrap();
         let apt = &AIRPORTS[edw];
         let mut ac = Aircraft::new_on_runway(0);
@@ -354,6 +359,7 @@ mod tests {
         ac.fuel = fuel;
         ac.set_turbines(TurbState::Running, 0.8);
         ac.throttle = 0.6;
+        ac.wind = wind;
         ac.engage_autoland(edw)?;
         let dt = 1.0 / 60.0;
         let mut t: f64 = 0.0;
@@ -405,6 +411,18 @@ mod tests {
             }
         }
         assert!(fails.is_empty(), "échecs : {fails:?}");
+    }
+
+    /// Autoland avec vent de travers de 16 kt : la route sol (LOC) compense la dérive.
+    #[test]
+    fn autoland_crosswind() {
+        let to = (51.0f64 + 90.0).to_radians();
+        let w = 8.0;
+        for (n, wind) in [("travers droite 16 kt", (w * to.sin(), w * to.cos())), ("travers gauche 16 kt", (-w * to.sin(), -w * to.cos()))] {
+            let r = run_case_wind(n, 231.0, 12.0, 3_800.0, 0.30, 51.0, 8_000.0, wind);
+            println!("{r:?}");
+            assert!(r.is_ok(), "{n}");
+        }
     }
 
     /// ILS (touche L) engagé avec une vitesse sélectionnée de 300 KEAS : la vitesse gérée doit

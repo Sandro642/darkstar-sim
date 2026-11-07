@@ -1,0 +1,454 @@
+//! Météo procédurale déterministe : vent fonction de l'altitude (courant-jet vers FL350, vent faible
+//! dans la stratosphère), champs de cumulus, couches de stratus et cellules orageuses (cumulonimbus
+//! à enclume). Effets : dérive de l'avion, turbulence, vol aux instruments dans les nuages. Rendu :
+//! nuages volumétriques en panneaux orientés vers la caméra dans la vision synthétique, éclairs,
+//! radar météo sur la carte.
+
+use crate::aircraft::Aircraft;
+use crate::geo::*;
+use crate::terrain::EyeFrame;
+use crate::ui::*;
+use macroquad::miniquad;
+use macroquad::prelude::*;
+use std::collections::HashMap;
+
+const CELL_DEG: f64 = 0.2;
+/// Rayon de génération / d'affichage des nuages (m).
+const VIEW_RANGE: f64 = 260_000.0;
+const MAX_PUFFS: usize = 2_000;
+
+pub const SEVERITIES: [&str; 5] = ["CALME", "BEAU", "NUAGEUX", "COUVERT", "ORAGEUX"];
+
+#[derive(Clone, Copy, PartialEq)]
+pub enum CloudKind {
+    Cu,
+    St,
+    Cb,
+}
+
+pub struct Puff {
+    pub lat: f64,
+    pub lon: f64,
+    pub alt: f64,
+    pub r: f64,
+}
+
+pub struct Cloud {
+    pub kind: CloudKind,
+    pub lat: f64,
+    pub lon: f64,
+    pub base: f64,
+    pub top: f64,
+    pub radius: f64,
+    pub puffs: Vec<Puff>,
+    seed: f64,
+}
+
+/// État météo au point de l'avion, pour l'horizon et le modèle de vol.
+#[derive(Clone, Default)]
+pub struct WxInfo {
+    /// Direction d'où vient le vent (degrés) et force (kt).
+    pub wind_dir: f64,
+    pub wind_kt: f64,
+    /// 0..1 : immersion dans un nuage (vol sans visibilité).
+    pub imc: f64,
+    /// 0..1 : intensité de turbulence.
+    pub turb: f64,
+    /// Orage le plus proche devant : (relèvement, distance m, sommet ft).
+    pub storm: Option<(f64, f64, f64)>,
+}
+
+pub struct Weather {
+    pub severity: usize,
+    cells: HashMap<(i32, i32), Vec<Cloud>>,
+    pub info: WxInfo,
+    gust_t: f64,
+}
+
+fn hash(a: i64, b: i64, c: i64) -> f64 {
+    let mut h = (a as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15) ^ (b as u64).wrapping_mul(0xC2B2_AE3D_27D4_EB4F) ^ (c as u64).wrapping_mul(0x1656_67B1_9E37_79F9);
+    h ^= h >> 31;
+    h = h.wrapping_mul(0x94D0_49BB_1331_11EB);
+    h ^= h >> 29;
+    ((h >> 11) as f64) / ((1u64 << 53) as f64)
+}
+
+fn vnoise(x: f64, y: f64, seed: i64) -> f64 {
+    let (ix, iy) = (x.floor() as i64, y.floor() as i64);
+    let (fx, fy) = (x - x.floor(), y - y.floor());
+    let (sx, sy) = (fx * fx * (3.0 - 2.0 * fx), fy * fy * (3.0 - 2.0 * fy));
+    let h = |i, j| hash(i, j, seed);
+    let a = h(ix, iy) + (h(ix + 1, iy) - h(ix, iy)) * sx;
+    let b = h(ix, iy + 1) + (h(ix + 1, iy + 1) - h(ix, iy + 1)) * sx;
+    a + (b - a) * sy
+}
+
+impl Weather {
+    pub fn new() -> Weather {
+        Weather { severity: 2, cells: HashMap::new(), info: WxInfo::default(), gust_t: 0.0 }
+    }
+
+    pub fn set_severity(&mut self, s: usize) {
+        self.severity = s.min(4);
+        self.cells.clear();
+    }
+
+    fn sev_k(&self) -> f64 {
+        [0.3, 0.7, 1.0, 1.15, 1.35][self.severity]
+    }
+
+    /// Vent (vers l'est, vers le nord) en m/s, et direction d'origine / force en kt.
+    pub fn wind_at(&self, lat: f64, lon: f64, alt: f64) -> (f64, f64, f64, f64) {
+        let h_ft = alt / FT;
+        // Profil vertical : couche limite, courant-jet ~FL350, stratosphère calme
+        let jet = 55.0 + 70.0 * vnoise(lat / 9.0, lon / 9.0, 7);
+        let spd = if h_ft < 10_000.0 {
+            8.0 + 14.0 * h_ft / 10_000.0
+        } else if h_ft < 35_000.0 {
+            22.0 + (jet - 22.0) * ((h_ft - 10_000.0) / 25_000.0)
+        } else if h_ft < 60_000.0 {
+            jet + (22.0 - jet) * ((h_ft - 35_000.0) / 25_000.0)
+        } else {
+            22.0 - 8.0 * ((h_ft - 60_000.0) / 40_000.0).min(1.0)
+        } * self.sev_k()
+            * (0.75 + 0.5 * vnoise(lat / 4.0, lon / 4.0, 3));
+        // Direction : dominante d'ouest, tourne avec l'altitude et le lieu
+        let veer = (h_ft / 35_000.0).min(1.0) * 25.0;
+        let dir = wrap360(240.0 + veer + 90.0 * (vnoise(lat / 6.0, lon / 6.0, 11) - 0.5));
+        let ms = spd * KT;
+        let to = (dir + 180.0).to_radians();
+        (ms * to.sin(), ms * to.cos(), dir, spd)
+    }
+
+    fn gen_cell(&self, i: i32, j: i32) -> Vec<Cloud> {
+        let mut out = Vec::new();
+        let (lat0, lon0) = (i as f64 * CELL_DEG, j as f64 * CELL_DEG);
+        let cov = vnoise(lat0 / 2.5, lon0 / 2.5, 21);
+        let sev = self.severity as f64;
+        let p = ((cov - (0.78 - 0.17 * sev)) * 3.0).clamp(0.0, 1.0);
+        let r = |k: i64| hash(i as i64, j as i64, 100 + k);
+        if sev == 0.0 || r(0) > p {
+            return out;
+        }
+        let n = 1 + (r(1) * (1.0 + sev)) as usize;
+        for c in 0..n {
+            let rr = |k: i64| hash(i as i64 * 31 + c as i64, j as i64, 200 + k);
+            let lat = lat0 + rr(0) * CELL_DEG;
+            let lon = lon0 + rr(1) * CELL_DEG;
+            let storm = sev >= 3.0 && cov > 0.62 && rr(2) < 0.12 * (sev - 2.0) && c == 0;
+            let kind = if storm {
+                CloudKind::Cb
+            } else if sev >= 2.0 && rr(3) < 0.18 + 0.1 * (sev - 2.0) {
+                CloudKind::St
+            } else {
+                CloudKind::Cu
+            };
+            let (base_ft, top_ft, radius) = match kind {
+                CloudKind::Cu => {
+                    let b = 7_000.0 + rr(4) * 3_000.0;
+                    (b, b + 3_000.0 + rr(5) * (3_000.0 + 2_500.0 * sev), 1_500.0 + rr(6) * 2_000.0)
+                }
+                CloudKind::St => {
+                    let b = 11_000.0 + rr(4) * 4_000.0;
+                    (b, b + 1_200.0 + rr(5) * 800.0, 5_000.0 + rr(6) * 5_000.0)
+                }
+                CloudKind::Cb => (5_500.0 + rr(4) * 1_500.0, 38_000.0 + rr(5) * 14_000.0, 6_000.0 + rr(6) * 3_500.0),
+            };
+            let (base, top) = (base_ft * FT, top_ft * FT);
+            let mut puffs = Vec::new();
+            let mut add = |de: f64, dn: f64, alt: f64, pr: f64| {
+                let (pla, plo) = from_enu(lat, lon, de, dn);
+                puffs.push(Puff { lat: pla, lon: plo, alt, r: pr });
+            };
+            match kind {
+                CloudKind::Cu => {
+                    let k = 6 + (rr(7) * 7.0) as usize;
+                    for m in 0..k {
+                        let q = |x: i64| hash(i as i64 * 97 + c as i64 * 13 + m as i64, j as i64, 300 + x);
+                        let a = q(0) * std::f64::consts::TAU;
+                        let d = q(1).sqrt() * radius * 0.75;
+                        let h = base + (top - base) * (0.25 + 0.6 * q(2) * (1.0 - d / radius));
+                        add(d * a.cos(), d * a.sin(), h, radius * (0.35 + 0.3 * q(3)));
+                    }
+                }
+                CloudKind::St => {
+                    for gx in -2..=2 {
+                        for gy in -2..=2 {
+                            let q = |x: i64| hash(i as i64 * 53 + gx + c as i64 * 7, j as i64 * 11 + gy, 400 + x);
+                            if q(0) < 0.25 {
+                                continue;
+                            }
+                            let s = radius / 2.5;
+                            add(gx as f64 * s + (q(1) - 0.5) * s, gy as f64 * s + (q(2) - 0.5) * s, (base + top) / 2.0, s * (0.8 + 0.3 * q(3)));
+                        }
+                    }
+                }
+                CloudKind::Cb => {
+                    // Tour convective puis enclume étalée sous la tropopause
+                    let mut h = base + radius * 0.4;
+                    let mut m = 0;
+                    while h < top - radius * 0.3 {
+                        let q = |x: i64| hash(i as i64 * 17 + m, j as i64 * 5, 500 + x);
+                        let rad = radius * (0.55 + 0.15 * q(0));
+                        add((q(1) - 0.5) * radius * 0.4, (q(2) - 0.5) * radius * 0.4, h, rad);
+                        add((q(3) - 0.5) * radius, (q(4) - 0.5) * radius, h + rad * 0.3, rad * 0.7);
+                        h += rad * 0.9;
+                        m += 1;
+                    }
+                    for a in 0..10 {
+                        let q = |x: i64| hash(i as i64 * 19 + a, j as i64 * 23, 600 + x);
+                        let ang = a as f64 / 10.0 * std::f64::consts::TAU + q(0);
+                        let d = radius * (0.6 + 1.2 * q(1));
+                        add(d * ang.cos() + radius * 0.8, d * ang.sin(), top - 600.0 * q(2), radius * 0.6);
+                    }
+                }
+            }
+            out.push(Cloud { kind, lat, lon, base, top, radius, puffs, seed: rr(9) });
+        }
+        out
+    }
+
+    /// Nuages des cellules dans le rayon donné (générées et mises en cache à la demande).
+    fn ensure(&mut self, lat: f64, lon: f64, range: f64) {
+        let dlat = range / 111_195.0;
+        let dlon = dlat / lat.to_radians().cos().max(0.2);
+        let (i0, i1) = (((lat - dlat) / CELL_DEG).floor() as i32, ((lat + dlat) / CELL_DEG).floor() as i32);
+        let (j0, j1) = (((lon - dlon) / CELL_DEG).floor() as i32, ((lon + dlon) / CELL_DEG).floor() as i32);
+        for i in i0..=i1 {
+            for j in j0..=j1 {
+                if !self.cells.contains_key(&(i, j)) {
+                    let c = self.gen_cell(i, j);
+                    self.cells.insert((i, j), c);
+                }
+            }
+        }
+        if self.cells.len() > 6_000 {
+            let (ci, cj) = ((lat / CELL_DEG) as i32, (lon / CELL_DEG) as i32);
+            self.cells.retain(|(i, j), _| (i - ci).abs() < 30 && (j - cj).abs() < 40);
+        }
+    }
+
+    pub fn clouds_near(&self, lat: f64, lon: f64, range: f64) -> impl Iterator<Item = &Cloud> {
+        self.cells.values().flatten().filter(move |c| (c.lat - lat).abs() < range / 111_000.0 + 0.2 && dist_brg(lat, lon, c.lat, c.lon).0 < range)
+    }
+
+    /// Mise à jour : vent et turbulence appliqués à l'avion, état météo pour l'horizon.
+    pub fn update(&mut self, ac: &mut Aircraft, dt: f64) {
+        self.ensure(ac.lat, ac.lon, VIEW_RANGE);
+        self.gust_t += dt;
+        let (we, wn, dir, spd) = self.wind_at(ac.lat, ac.lon, ac.alt);
+        let mut imc = 0.0f64;
+        let mut turb = 0.0f64;
+        let mut storm: Option<(f64, f64, f64)> = None;
+        for c in self.clouds_near(ac.lat, ac.lon, VIEW_RANGE) {
+            let (d, brg) = dist_brg(ac.lat, ac.lon, c.lat, c.lon);
+            if c.kind == CloudKind::Cb {
+                let rel = wrap180(brg - ac.hdg_deg()).abs();
+                if rel < 70.0 && d < 110_000.0 && storm.is_none_or(|s| d < s.1) {
+                    storm = Some((brg, d, c.top / FT));
+                }
+                // Turbulence au voisinage de l'orage
+                if d < c.radius * 2.0 && ac.alt < c.top + 2_000.0 {
+                    turb = turb.max(0.6 * (1.0 - d / (c.radius * 2.0)));
+                }
+            }
+            if d > c.radius * 2.5 {
+                continue;
+            }
+            for p in &c.puffs {
+                let (pd, _) = dist_brg(ac.lat, ac.lon, p.lat, p.lon);
+                let dz = ac.alt - p.alt;
+                let k = 1.0 - (pd * pd + dz * dz).sqrt() / p.r;
+                if k > 0.0 {
+                    imc = imc.max((k * 2.0).min(1.0));
+                    let t = match c.kind {
+                        CloudKind::Cu => 0.35,
+                        CloudKind::St => 0.1,
+                        CloudKind::Cb => 1.0,
+                    };
+                    turb = turb.max(t * k.sqrt());
+                }
+            }
+        }
+        // Turbulence mécanique près du sol par vent fort, turbulence en air clair près du jet
+        let h_ft = (ac.alt - ac.d.elev) / FT;
+        if h_ft < 3_000.0 && spd > 18.0 {
+            turb = turb.max(((spd - 18.0) / 30.0).min(0.4));
+        }
+        let alt_ft = ac.alt / FT;
+        if (28_000.0..42_000.0).contains(&alt_ft) && spd > 80.0 {
+            turb = turb.max(((spd - 80.0) / 80.0).min(0.35));
+        }
+        // Rafales : composante aléatoire lissée
+        let g = turb * 6.0 + spd * KT * 0.04;
+        let gx = g * ((self.gust_t * 0.7).sin() + 0.5 * (self.gust_t * 1.9 + 1.3).sin());
+        let gy = g * ((self.gust_t * 0.9 + 2.0).sin() + 0.5 * (self.gust_t * 2.3).sin());
+        ac.wind = (we + gx, wn + gy);
+        ac.turb = turb;
+        self.info = WxInfo { wind_dir: dir, wind_kt: spd, imc, turb, storm };
+    }
+}
+
+// ---------- Rendu 3D ----------
+
+thread_local! {
+    static PUFF_TEX: std::cell::RefCell<Option<Texture2D>> = const { std::cell::RefCell::new(None) };
+}
+
+/// Texture de « bouffée » : disque doux bruité (généré une fois).
+fn puff_texture() -> Texture2D {
+    PUFF_TEX.with(|t| {
+        if let Some(tx) = t.borrow().as_ref() {
+            return tx.clone();
+        }
+        let n = 64u16;
+        let mut img = Image::gen_image_color(n, n, Color::new(1.0, 1.0, 1.0, 0.0));
+        for y in 0..n {
+            for x in 0..n {
+                let (fx, fy) = ((x as f32 + 0.5) / n as f32 * 2.0 - 1.0, (y as f32 + 0.5) / n as f32 * 2.0 - 1.0);
+                let d = (fx * fx + fy * fy).sqrt();
+                let nz = vnoise(x as f64 / 9.0, y as f64 / 9.0, 41) as f32 * 0.35 + vnoise(x as f64 / 4.0, y as f64 / 4.0, 43) as f32 * 0.15;
+                let a = ((1.0 - d) * 1.6 - 0.1 + nz - 0.25).clamp(0.0, 1.0);
+                let shade = 0.88 + 0.12 * (1.0 - fy).min(1.0);
+                img.set_pixel(x as u32, y as u32, Color::new(shade, shade, shade, a * a * (3.0 - 2.0 * a)));
+            }
+        }
+        let tx = Texture2D::from_image(&img);
+        tx.set_filter(FilterMode::Linear);
+        *t.borrow_mut() = Some(tx.clone());
+        tx
+    })
+}
+
+thread_local! {
+    static CLOUD_MAT: std::cell::RefCell<Option<Option<Material>>> = const { std::cell::RefCell::new(None) };
+}
+
+/// Matériau des nuages : test de profondeur (le relief masque les nuages) sans écriture de
+/// profondeur (les panneaux translucides ne se découpent pas entre eux), mélange alpha.
+fn cloud_material() -> Option<Material> {
+    CLOUD_MAT.with(|m| {
+        if let Some(v) = m.borrow().as_ref() {
+            return v.clone();
+        }
+        const VS: &str = r#"#version 100
+attribute vec3 position;
+attribute vec2 texcoord;
+attribute vec4 color0;
+varying lowp vec2 uv;
+varying lowp vec4 color;
+uniform mat4 Model;
+uniform mat4 Projection;
+void main() {
+    gl_Position = Projection * Model * vec4(position, 1);
+    color = color0 / 255.0;
+    uv = texcoord;
+}"#;
+        const FS: &str = r#"#version 100
+varying lowp vec4 color;
+varying lowp vec2 uv;
+uniform sampler2D Texture;
+void main() {
+    gl_FragColor = color * texture2D(Texture, uv);
+}"#;
+        let params = MaterialParams {
+            pipeline_params: PipelineParams {
+                depth_write: false,
+                depth_test: Comparison::LessOrEqual,
+                color_blend: Some(miniquad::BlendState::new(
+                    miniquad::Equation::Add,
+                    miniquad::BlendFactor::Value(miniquad::BlendValue::SourceAlpha),
+                    miniquad::BlendFactor::OneMinusValue(miniquad::BlendValue::SourceAlpha),
+                )),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let mat = load_material(ShaderSource::Glsl { vertex: VS, fragment: FS }, params).ok();
+        *m.borrow_mut() = Some(mat.clone());
+        mat
+    })
+}
+
+/// Nuages dans la vision synthétique (caméra 3D avec profondeur active). Panneaux triés du plus
+/// lointain au plus proche, éclairés du dessus, éclairs dans les orages. Renvoie l'immersion IMC.
+pub fn draw_clouds(wx: &Weather, ac: &Aircraft, right: Vec3, up: Vec3, time: f64) -> f32 {
+    let eye = EyeFrame::new(ac);
+    // (priorité de sélection, distance, position, rayon, couleur)
+    let mut list: Vec<(f32, f32, Vec3, f32, [u8; 4])> = Vec::new();
+    for c in wx.clouds_near(ac.lat, ac.lon, VIEW_RANGE) {
+        let flash = c.kind == CloudKind::Cb && ((time * 0.43 + c.seed * 7.0).fract() < 0.018 || (time * 0.43 + c.seed * 7.0 + 0.03).fract() < 0.01);
+        for p in &c.puffs {
+            let pos = eye.local(p.lat, p.lon, p.alt);
+            let d = pos.length();
+            if d < p.r as f32 * 0.9 || d > VIEW_RANGE as f32 {
+                continue;
+            }
+            // Éclairage : base grise, sommet blanc ; orages plus sombres
+            let k = ((p.alt - c.base) / (c.top - c.base).max(1.0)).clamp(0.0, 1.0) as f32;
+            let mut sh = 0.66 + 0.34 * k;
+            if c.kind == CloudKind::Cb {
+                sh *= 0.78;
+            }
+            if flash {
+                sh = 1.0;
+            }
+            let fade = (1.0 - d / VIEW_RANGE as f32).clamp(0.0, 1.0).powf(0.6);
+            let a = (0.80 * fade).min(1.0);
+            let col = [(sh * 255.0) as u8, (sh * 255.0) as u8, ((sh * 1.03).min(1.0) * 255.0) as u8, (a * 255.0) as u8];
+            // Les orages restent visibles de loin : priorité sur les petits cumulus proches
+            let prio = if c.kind == CloudKind::Cb { d * 0.25 } else { d };
+            list.push((prio, d, pos, p.r as f32, col));
+        }
+    }
+    // Les plus proches dans la limite du budget, puis peints du plus lointain au plus proche
+    list.sort_by(|a, b| a.0.total_cmp(&b.0));
+    list.truncate(MAX_PUFFS);
+    list.sort_by(|a, b| b.1.total_cmp(&a.1));
+    let tex = puff_texture();
+    let mat = cloud_material();
+    if let Some(m) = &mat {
+        gl_use_material(m);
+    }
+    for chunk in list.chunks(900) {
+        let mut v = Vec::with_capacity(chunk.len() * 4);
+        let mut idx: Vec<u16> = Vec::with_capacity(chunk.len() * 6);
+        for (k, (_, _, p, r, col)) in chunk.iter().enumerate() {
+            let (rx, uy) = (right * *r, up * *r);
+            let b = (k * 4) as u16;
+            for (q, uv) in [(-rx - uy, vec2(0.0, 1.0)), (rx - uy, vec2(1.0, 1.0)), (rx + uy, vec2(1.0, 0.0)), (-rx + uy, vec2(0.0, 0.0))] {
+                v.push(Vertex { position: *p + q, uv, color: *col, normal: Vec4::ZERO });
+            }
+            idx.extend_from_slice(&[b, b + 1, b + 2, b, b + 2, b + 3]);
+        }
+        draw_mesh(&Mesh { vertices: v, indices: idx, texture: Some(tex.clone()) });
+    }
+    if mat.is_some() {
+        gl_use_default_material();
+    }
+    wx.info.imc as f32
+}
+
+/// Radar météo sur la carte : vert (cumulus), gris (stratus), jaune/rouge (orages).
+pub fn draw_map(wx: &Weather, ac: &Aircraft, to_s: &dyn Fn(f64, f64) -> Vec2, z: f32, r: Rect) {
+    let m_per_px = 111_195.0 / z as f64 * ac.lat.to_radians().cos().max(0.2);
+    for c in wx.clouds_near(ac.lat, ac.lon, VIEW_RANGE) {
+        let p = to_s(c.lat, c.lon);
+        let rad = (c.radius / m_per_px) as f32;
+        if rad < 1.5 || !r.contains(p) {
+            continue;
+        }
+        match c.kind {
+            CloudKind::Cu => draw_circle(p.x, p.y, rad, Color::new(0.2, 0.85, 0.3, 0.22)),
+            CloudKind::St => draw_circle(p.x, p.y, rad, Color::new(0.7, 0.75, 0.8, 0.14)),
+            CloudKind::Cb => {
+                draw_circle(p.x, p.y, rad * 1.5, Color::new(0.2, 0.85, 0.3, 0.2));
+                draw_circle(p.x, p.y, rad, Color::new(1.0, 0.85, 0.1, 0.35));
+                draw_circle(p.x, p.y, rad * 0.55, Color::new(1.0, 0.1, 0.1, 0.5));
+                if z > 20.0 {
+                    txt(&format!("CB FL{:.0}", c.top / FT / 100.0), p.x + rad + 3.0, p.y + 4.0, 11.0, Color::new(1.0, 0.4, 0.3, 1.0));
+                }
+            }
+        }
+    }
+}

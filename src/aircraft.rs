@@ -218,6 +218,11 @@ pub struct Aircraft {
     fcs_overload_t: f64,
     pub events: Vec<(Level, String)>,
     pub jolt: f64,
+    /// Vent (vers l'est, vers le nord) en m/s, fourni par la météo.
+    pub wind: (f64, f64),
+    /// Intensité de turbulence 0..1.
+    pub turb: f64,
+    turb_t: f64,
     pub approach: Option<(usize, f64, f64, f64, f64)>, // (aéroport, lat seuil, lon seuil, cap, élévation)
     pub autoland: Option<crate::autoflight::Autoland>,
     pub autotakeoff: Option<crate::autoflight::Takeoff>,
@@ -396,6 +401,9 @@ impl Aircraft {
             fcs_overload_t: 0.0,
             events: Vec::new(),
             jolt: 0.0,
+            wind: (0.0, 0.0),
+            turb: 0.0,
+            turb_t: 0.0,
             approach: None,
             autoland: None,
             autotakeoff: None,
@@ -526,6 +534,24 @@ impl Aircraft {
 
     pub fn hdg_deg(&self) -> f64 {
         wrap360(self.psi.to_degrees())
+    }
+
+    /// Vitesse sol (est, nord) en m/s, vent compris.
+    pub fn ground_vel(&self) -> (f64, f64) {
+        let gs = self.tas * self.gamma.cos();
+        let (we, wn) = if self.on_ground { (0.0, 0.0) } else { self.wind };
+        (gs * self.psi.sin() + we, gs * self.psi.cos() + wn)
+    }
+
+    pub fn ground_speed(&self) -> f64 {
+        let (e, n) = self.ground_vel();
+        e.hypot(n)
+    }
+
+    /// Route sol (degrés).
+    pub fn track_deg(&self) -> f64 {
+        let (e, n) = self.ground_vel();
+        if e.hypot(n) < 1.0 { self.hdg_deg() } else { wrap360(e.atan2(n).to_degrees()) }
     }
 
     // ---------- Commandes du pilote (procédures) ----------
@@ -922,7 +948,9 @@ impl Aircraft {
                     }
                 }
             };
-            let err = wrap180(hdg_cmd - self.hdg_deg());
+            // HDG tient le cap ; NAV et LOC tiennent la route sol (compensation du vent)
+            let cur = if self.ap.lat == LatMode::Hdg { self.hdg_deg() } else { self.track_deg() };
+            let err = wrap180(hdg_cmd - cur);
             let bank_lim = if mach > 3.0 { 35.0 } else { 30.0 };
             let phi_cmd = (err * 2.0).clamp(-bank_lim, bank_lim).to_radians();
             roll_rate = (1.5 * wrap_pi(phi_cmd - self.phi)).clamp(-pmax * 0.5, pmax * 0.5);
@@ -1137,8 +1165,18 @@ impl Aircraft {
         let v = self.tas;
         self.alt += v * self.gamma.sin() * dt;
         let gs = v * self.gamma.cos();
-        self.lat += (gs * self.psi.cos() / r * dt).to_degrees();
-        self.lon += (gs * self.psi.sin() / (r * self.lat.to_radians().cos().max(0.01)) * dt).to_degrees();
+        // Dérive : l'avion se déplace avec la masse d'air (pas au sol)
+        let (we, wn) = if self.on_ground { (0.0, 0.0) } else { self.wind };
+        self.lat += ((gs * self.psi.cos() + wn) / r * dt).to_degrees();
+        self.lon += ((gs * self.psi.sin() + we) / (r * self.lat.to_radians().cos().max(0.01)) * dt).to_degrees();
+        // Turbulence : perturbations de pente et d'inclinaison
+        if self.turb > 0.01 && !self.on_ground {
+            self.turb_t += dt;
+            let t = self.turb_t;
+            let k = self.turb * (1.0 / (1.0 + self.d.mach)).max(0.15);
+            self.gamma += k * 0.012 * ((t * 5.3).sin() + 0.6 * (t * 13.1 + 1.0).sin()) * dt * (v / 250.0).clamp(0.3, 1.0);
+            self.phi += k * 0.03 * ((t * 3.7 + 2.0).sin() + 0.5 * (t * 11.3).sin()) * dt;
+        }
         if self.lat.abs() > 89.5 {
             self.lat = self.lat.signum() * (179.0 - self.lat.abs());
             self.lon += 180.0;

@@ -84,10 +84,10 @@ pub fn layout(r: Rect) -> (Rect, Layout, [Rect; 3]) {
 
 #[allow(clippy::too_many_arguments)]
 #[allow(clippy::too_many_arguments)]
-pub fn draw_mfd(world: &World, tiles: &mut crate::tiles::Tiles, ac: &Aircraft, recon: &crate::recon::Recon, r: Rect, st: &mut MfdState, info: &PfdInfo, style: SvsStyle, time: f64, lit: [bool; 6]) -> (View, MfdActions) {
+pub fn draw_mfd(world: &World, tiles: &mut crate::tiles::Tiles, wx: &crate::weather::Weather, ac: &Aircraft, recon: &crate::recon::Recon, r: Rect, st: &mut MfdState, info: &PfdInfo, style: SvsStyle, time: f64, lit: [bool; 6]) -> (View, MfdActions) {
     let mut act = MfdActions { bezel: bezel(r, lit, time), ..Default::default() };
     let (_, lay, panes) = layout(r);
-    let view = svs::draw_svs(world, tiles, ac, lay.svs, time, style);
+    let view = svs::draw_svs(world, tiles, wx, ac, lay.svs, time, style);
     pfd::draw_pfd(ac, &view, lay.pfd, info);
     act.fuel_dump = draw_fuel(ac, panes[0]);
     pane_frame(panes[1]);

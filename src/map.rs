@@ -64,7 +64,7 @@ impl MapView {
         }
     }
 
-    pub fn draw(&mut self, world: &World, tiles: &mut Tiles, recon: &crate::recon::Recon, ac: &Aircraft, r: Rect, dest: usize, time: f64) {
+    pub fn draw(&mut self, world: &World, tiles: &mut Tiles, wx: &crate::weather::Weather, recon: &crate::recon::Recon, ac: &Aircraft, r: Rect, dest: usize, time: f64) {
         if self.follow {
             self.center = (ac.lat, ac.lon);
         }
@@ -244,6 +244,7 @@ impl MapView {
         }
 
         // Reconnaissance : objectifs, route, émetteurs et menaces, empreintes des capteurs
+        crate::weather::draw_map(wx, ac, &to_s, z, r);
         crate::recon::draw_map(recon, ac, &to_s, z, r);
 
         // Trace

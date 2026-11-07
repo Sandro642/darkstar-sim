@@ -16,6 +16,8 @@ pub struct PfdInfo<'a> {
     pub time: f64,
     /// Objectif de reconnaissance sélectionné (repère 3D).
     pub cue: Option<crate::pfd_plus::Cue>,
+    pub wx: crate::weather::WxInfo,
+    pub threats: Vec<crate::pfd_plus::ThreatCue>,
 }
 
 const LINE: Color = Color::new(0.92, 0.94, 0.95, 1.0);
@@ -83,6 +85,8 @@ pub fn draw_pfd(ac: &Aircraft, v: &View, r: Rect, info: &PfdInfo) {
 
 fn draw_svs_overlay(ac: &Aircraft, v: &View, info: &PfdInfo) {
     let s = v.rect;
+    // Visibilité des informations éphémères (façon HUD)
+    let vis = crate::pfd_plus::hud_vis(ac, &info.wx, &info.threats, info.dest, s);
     let d = &ac.d;
     scissor(Some(s));
     let hr = Vec3::new(ac.psi.cos() as f32, 0.0, ac.psi.sin() as f32);
@@ -103,6 +107,7 @@ fn draw_svs_overlay(ac: &Aircraft, v: &View, info: &PfdInfo) {
         if let Some(c) = &info.cue {
             crate::pfd_plus::cue(ac, v, c, 1);
         }
+        crate::pfd_plus::threats(ac, v, &info.threats, info.time);
     }
 
     // Échelle de tangage « 10 •  • 10 »
@@ -155,7 +160,8 @@ fn draw_svs_overlay(ac: &Aircraft, v: &View, info: &PfdInfo) {
     }
 
     // Marqueur de trajectoire : cercle, ailes et dérive
-    let fpv = if !ac.on_ground && ac.tas > 20.0 { v.project_dir(dir(ac.psi, ac.gamma)) } else { v.project_dir(dir(ac.psi, ac.theta)) };
+    // Vecteur vitesse sur la route sol : la dérive due au vent le décale latéralement
+    let fpv = if !ac.on_ground && ac.tas > 20.0 { v.project_dir(dir(ac.track_deg().to_radians(), ac.gamma)) } else { v.project_dir(dir(ac.psi, ac.theta)) };
     if let Some(f) = fpv {
         let (sn, co) = (ac.phi.sin() as f32, ac.phi.cos() as f32);
         let rot = |x: f32, y: f32| vec2(f.x + x * co - y * sn, f.y + x * sn + y * co);
@@ -210,8 +216,12 @@ fn draw_svs_overlay(ac: &Aircraft, v: &View, info: &PfdInfo) {
     if !ac.on_ground && !on_ils {
         let pw = (s.w * 0.27).clamp(170.0, 230.0);
         // Au-dessus de la ligne de saisie des instructions
-        crate::pfd_plus::corridor(ac, Rect::new(s.x + 8.0, s.y + s.h - 122.0, pw, 92.0));
-        crate::pfd_plus::energy(ac, Rect::new(s.x + s.w - pw - 8.0, s.y + s.h - 88.0, pw, 62.0), info.dest);
+        if vis.corridor > 0.01 {
+            crate::pfd_plus::corridor(ac, Rect::new(s.x + 8.0, s.y + s.h - 122.0, pw, 92.0), vis.corridor);
+        }
+        if vis.energy > 0.01 {
+            crate::pfd_plus::energy(ac, Rect::new(s.x + s.w - pw - 8.0, s.y + s.h - 88.0, pw, 62.0), info.dest, vis.energy);
+        }
     }
     // Inclinaison chiffrée au-delà de 30°
     if ac.phi.abs() > 30f64.to_radians() {
@@ -264,8 +274,13 @@ fn draw_svs_overlay(ac: &Aircraft, v: &View, info: &PfdInfo) {
         draw_circle(s.x + 12.0, s.y + 13.0, 4.0, RED);
     }
     txt("REC  FTV-01", s.x + 20.0, s.y + 18.0, 13.0, Color::new(0.9, 0.9, 0.9, 0.8));
+    // Informations éphémères façon HUD : RWR (haut gauche), vent / météo (haut droite)
+    if !ac.on_ground {
+        crate::pfd_plus::rwr(ac, &info.threats, Rect::new(s.x + 8.0, s.y + 26.0, 92.0, 92.0), info.time, vis.rwr);
+        crate::pfd_plus::wind_block(ac, &info.wx, Rect::new(s.x + s.w - 150.0, s.y + 44.0, 142.0, 52.0), info.time, vis.wind);
+    }
     // Annonces d'override et de limitation FADEC
-    let mut oy = s.y + 36.0;
+    let mut oy = if ac.on_ground || vis.rwr < 0.01 { s.y + 36.0 } else { s.y + 138.0 };
     let blink = (info.time * 2.0).fract() < 0.65;
     for (on, label) in [(ac.ovr_engine, "ENG OVRD"), (ac.ovr_fbw, "FBW OVRD"), (!ac.ovr_engine && ac.fadec_limit < 0.995, "FADEC LIMIT")] {
         if on {
@@ -293,7 +308,7 @@ fn draw_svs_overlay(ac: &Aircraft, v: &View, info: &PfdInfo) {
 
 fn draw_header(ac: &Aircraft, r: Rect, s: Rect, info: &PfdInfo) {
     let y = r.y + 8.0;
-    let gs = ac.tas * ac.gamma.cos() / KT;
+    let gs = ac.ground_speed() / KT;
     let x0 = r.x + r.w * 0.06;
     txt_r("GS", x0, y + 13.0, 14.0, LABEL);
     txt(&format!("{gs:.0}"), x0 + 8.0, y + 13.0, 16.0, WHITE);
@@ -580,6 +595,11 @@ fn draw_heading(ac: &Aircraft, s: Rect, info: &PfdInfo) {
     if ac.ap.on {
         let bx = cx + wrap180(ac.ap.hdg_tgt - hdg as f64) as f32 * ppd;
         draw_rectangle(bx - 4.0, y, 8.0, 6.0, MAGENTA_S);
+    }
+    // Route sol (losange vert)
+    if !ac.on_ground {
+        let tx = cx + wrap180(ac.track_deg() - hdg as f64) as f32 * ppd;
+        stroke(&[vec2(tx, y + 1.0), vec2(tx + 5.0, y + 7.0), vec2(tx, y + 13.0), vec2(tx - 5.0, y + 7.0)], true, 1.5, GREEN_S);
     }
     scissor(None);
     draw_rectangle(cx - 22.0, y + 9.0, 44.0, 18.0, BLACK);

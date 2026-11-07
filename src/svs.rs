@@ -238,7 +238,7 @@ pub struct Lights {
     pub pts: Vec<(Vec3, Color, f32)>,
 }
 
-pub fn draw_svs(world: &World, tiles: &mut Tiles, ac: &Aircraft, rect: Rect, time: f64, style: SvsStyle) -> View {
+pub fn draw_svs(world: &World, tiles: &mut Tiles, wx: &crate::weather::Weather, ac: &Aircraft, rect: Rect, time: f64, style: SvsStyle) -> View {
     let dark = style == SvsStyle::Darkstar;
     let dpi = screen_dpi_scale();
     let (fwd, up, _) = basis(ac);
@@ -516,6 +516,10 @@ pub fn draw_svs(world: &World, tiles: &mut Tiles, ac: &Aircraft, rect: Rect, tim
     }
     mb.flush();
 
+    // --- Nuages volumétriques (masqués par le relief) ---
+    let right = fwd.cross(up).normalize();
+    let imc = crate::weather::draw_clouds(wx, ac, right, up, time);
+
     // --- Perspective aérienne : voile de brume vers l'horizon, par-dessus le relief ---
     set_camera(&SvsCam { mat, vp, depth: false });
     {
@@ -546,6 +550,10 @@ pub fn draw_svs(world: &World, tiles: &mut Tiles, ac: &Aircraft, rect: Rect, tim
 
     set_default_camera();
     let v = View { mat, rect };
+    // Dans le nuage : voile léger (la vision synthétique montre le relief même sans visibilité)
+    if imc > 0.01 {
+        draw_rectangle(rect.x, rect.y, rect.w, rect.h, Color::new(0.88, 0.9, 0.92, (imc * 0.35).min(0.35)));
+    }
 
     // --- Superpositions 2D dans la vue : contours de piste, feux ---
     scissor(Some(rect));

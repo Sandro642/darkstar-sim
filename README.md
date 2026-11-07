@@ -1,7 +1,7 @@
 # DARKSTAR — station sol d'essais en vol hypersoniques
 
 Tu télépilotes un démonstrateur hypersonique (type SR-72 / Darkstar) depuis une station sol :
-vision synthétique 3D, PFD complet, EICAS propulsion TBCC, carte du monde avec trafic et TCAS,
+vision synthétique 3D, PFD complet, EICAS propulsion TBCC, carte du monde,
 carte d'essais en vol, domaine de vol Mach/altitude.
 
 ## Installer
@@ -65,7 +65,7 @@ Données carte : Natural Earth (domaine public).
 - Moteur : sifflement turbine (ralenti -> plein régime selon N2), grondement du jet, post-combustion
   crépitante, statoréacteur, scramjet, souffle aérodynamique (selon q). Chaque boucle suit l'état réel.
 - Alarmes : carillon répétitif MASTER WARNING, chime CAUTION, sirène GPWS « PULL UP », vibreur de
-  manche STALL, claquoir de survitesse (q), klaxon de train, tons TCAS (TA puis RA), arpège de
+  manche STALL, claquoir de survitesse (q), klaxon de train, arpège de
   déconnexion AP, détonation d'unstart scram, impact du toucher, bips d'instruction acceptée/refusée.
 - ESPACE acquitte (coupe le carillon), J ou `SON OFF` / `SON ON` coupe ou rétablit le son.
 
@@ -73,7 +73,7 @@ Données carte : Natural Earth (domaine public).
 - Barre de statut : temps simulé, chrono d'essai, **TEMPS x1..x32** (clic pour changer), liaison, WARNING/CAUTION (clic = acquitter), son, aide.
 - Écran Darkstar : PFD (tambours de vitesse/altitude, collines à l'horizon), volet carburant (débit PPH,
   pressions pompes 1-4, réservoirs, CG, bouton DUMP), volet HSI
-  (rose des caps, route magenta, portée 10-640 NM, trafic TCAS).
+  (rose des caps, route magenta, portée 10-640 NM).
 - À droite : carte monde, onglets 4 MOTEURS / 5 THERMIQUE / 6 ESSAIS / 7 DOMAINE / 8 OVERRIDE / 9 CONSOLE, messages.
 
 ## Overrides
@@ -234,3 +234,19 @@ Le SR-72 est un avion de reconnaissance : sa charge utile est simulée.
   les objectifs), `DIRECT CIBLE`, `PHOTO` ; route, émetteurs, domaines et relèvements sur la carte.
 - Page RECON en 4 sous-pages : CAPTEURS, OBJECTIFS, ELINT / MENACES, PHOTOTHEQUE.
 - Horizon agrandi (PFD sur 66 % de l'écran Darkstar) ; tuiles « Map data not yet available » ignorées.
+
+## Météo, vent, menaces et HUD éphémère (v1.9.0)
+- **Météo procédurale** (`METEO CALME|BEAU|NUAGEUX|COUVERT|ORAGEUX`) : cumulus, couches de stratus,
+  cumulonimbus à enclume (sommets FL380-FL520) ; radar météo sur la carte (vert / gris / jaune-rouge).
+- **Nuages 3D sur l'horizon** : nuages volumétriques éclairés par le dessus, masqués par le relief,
+  éclairs dans les orages ; voile léger en IMC (la vision synthétique garde le relief visible).
+- **Vent** fonction de l'altitude (couche limite, courant-jet vers FL350 jusqu'à ~150 kt, stratosphère
+  calme) : dérive de l'avion, vitesse sol, vecteur vitesse sur la route sol, losange de route sur
+  l'échelle de cap ; l'autopilote tient la route sol en NAV/LOC (autoland validé par vent de travers).
+- **Turbulence** dans les nuages (sévère dans les orages), mécanique près du sol, en air clair près du jet.
+- **Menaces sur l'horizon** : RWR (relèvement, distance, accrochage), symboles 3D des émetteurs
+  (VEILLE / POURSUITE / LOCK / LAUNCH), missile visible en vol, bandeau MISSILE LAUNCH avec temps
+  d'impact et consigne d'esquive.
+- **Infos éphémères façon HUD** : vent, RWR, couloir hypersonique et énergie apparaissent quand elles
+  changent ou deviennent critiques puis s'effacent ; survol de l'horizon à la souris ou `HUD` (10 s)
+  pour tout afficher.

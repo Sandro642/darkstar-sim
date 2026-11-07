@@ -27,6 +27,7 @@ mod thermal;
 mod tiles;
 mod ui;
 mod updater;
+mod weather;
 mod world;
 
 use aircraft::*;
@@ -91,6 +92,7 @@ struct Game {
     bit_fail: Option<bool>,
     mfd: mfd::MfdState,
     recon: recon::Recon,
+    wx: weather::Weather,
     cmd_hist: Vec<String>,
     hist_pos: usize,
 }
@@ -194,6 +196,7 @@ impl Game {
             bit_fail: None,
             mfd: mfd::MfdState::new(),
             recon: recon::Recon::new(),
+            wx: weather::Weather::new(),
             cmd_hist: Vec::new(),
             hist_pos: 0,
         }
@@ -751,6 +754,8 @@ impl Game {
         }
 
         let sim_dt = real_dt * warp;
+        // Météo : vent et turbulence au point de l'avion
+        self.wx.update(&mut self.ac, sim_dt);
         let n = (sim_dt / PHYS_DT).ceil().max(1.0) as usize;
         let h = sim_dt / n as f64;
         let was_ground = self.ac.on_ground;
@@ -956,6 +961,23 @@ impl Game {
             }
             "CAMERA" | "CAM" | "ZOOM" | "SAR" | "RADAR" | "ELINT" | "CIBLE" | "TARGET" | "PHOTO" | "MENACES" | "THREATS" => {
                 reply = self.recon.command(&w, ac, self.mission.elapsed);
+            }
+            "HUD" | "INFOS" => {
+                pfd_plus::hud_show_all(10.0);
+                reply = Ok("INFOS HUD AFFICHEES 10 s (survol de l'horizon : toutes les infos)".into());
+            }
+            "METEO" | "WEATHER" | "WX" => {
+                let i = weather::SEVERITIES.iter().position(|n| n.starts_with(arg(1))).or_else(|| arg(1).parse::<usize>().ok().filter(|v| *v <= 4));
+                match i {
+                    Some(i) if !arg(1).is_empty() => {
+                        self.wx.set_severity(i);
+                        reply = Ok(format!("METEO {}", weather::SEVERITIES[i]));
+                    }
+                    _ => {
+                        let w = &self.wx.info;
+                        reply = Ok(format!("METEO {} — VENT {:03.0}/{:.0} KT (CALME|BEAU|NUAGEUX|COUVERT|ORAGEUX)", weather::SEVERITIES[self.wx.severity], w.wind_dir, w.wind_kt));
+                    }
+                }
             }
             "PLAN" | "ROUTE" if arg(1) == "RECON" || arg(1) == "OFF" => {
                 reply = self.recon.command(&w, ac, self.mission.elapsed);
@@ -1315,6 +1337,7 @@ impl Game {
                     "PANNE ENGL|ENGR|GENL|GENR|POMPE|ADC|FCS|HYD|REFROID|PORTES|TRAIN|FUITEH2 [OFF] | PANNES OFF | TRAIN SECOURS",
                     "CAMERA ON|OFF|EO|IR|TRACK|NADIR  ZOOM 8  PHOTO  SAR STRIP|SPOT|OFF  ELINT ON|OFF",
                     "CIBLE B  DIRECT CIBLE  PLAN RECON  ROUTE RECON|OFF  MENACES ON|OFF  RECON (page)",
+                    "METEO CALME|BEAU|NUAGEUX|COUVERT|ORAGEUX  HUD (infos ephemeres 10 s, ou survol)",
                     "TRAIN UP/DOWN | FREINS ON/OFF | AP ON/OFF | MANUEL | WARP 8",
                 ] {
                     self.log.push((self.sim_time, Level::Info, l.into()));
@@ -1387,6 +1410,15 @@ async fn main() {
     let auto_update = std::env::var("DARKSTAR_AUTOUPDATE").is_ok();
     let mut last_upd_msg = String::new();
     let mut g = Game::new(&scenario);
+    // Position de départ forcée pour les essais : DARKSTAR_POS=lat,lon,altitude_ft
+    if let Ok(p) = std::env::var("DARKSTAR_POS") {
+        let v: Vec<f64> = p.split(',').filter_map(|x| x.trim().parse().ok()).collect();
+        if v.len() == 3 {
+            g.ac.lat = v[0];
+            g.ac.lon = v[1];
+            g.ac.alt = v[2] * geo::FT;
+        }
+    }
     if let Ok(t) = std::env::var("DARKSTAR_TAB") {
         if let Some((tab, _)) = gcs::TABS.iter().find(|(_, l)| l.starts_with(t.to_uppercase().as_str())) {
             g.tab = *tab;
@@ -1485,7 +1517,7 @@ async fn main() {
         let body = Rect::new(6.0, 40.0, sw - 12.0, sh - 46.0);
         if map_full {
             g.map.input(body);
-            g.map.draw(&world, &mut tiles, &g.recon, &g.ac, body, g.dest, time);
+            g.map.draw(&world, &mut tiles, &g.wx, &g.recon, &g.ac, body, g.dest, time);
         } else {
             // Écran principal Darkstar, aux proportions de l'écran du cockpit
             let mfd_w = (body.w * 0.63).min((body.h - 120.0) * mfd::COCKPIT_ASPECT).floor();
@@ -1497,8 +1529,8 @@ async fn main() {
                 let t = &g.recon.targets[g.recon.selected];
                 (!t.done()).then(|| pfd_plus::Cue { lat: t.lat, lon: t.lon, elev: 0.0, label: format!("CIBLE {}", t.code), color: Color::new(1.0, 0.85, 0.2, 1.0) })
             };
-            let info = pfd::PfdInfo { alerts: &alerts, link_name: ln, latency_ms: lat, dest: g.dest, warp: warp_eff, time, cue };
-            let (_, act) = mfd::draw_mfd(&world, &mut tiles, &g.ac, &g.recon, mfd_r, &mut g.mfd, &info, g.style, time, lit);
+            let info = pfd::PfdInfo { alerts: &alerts, link_name: ln, latency_ms: lat, dest: g.dest, warp: warp_eff, time, cue, wx: g.wx.info.clone(), threats: g.recon.threat_cues(&g.ac) };
+            let (_, act) = mfd::draw_mfd(&world, &mut tiles, &g.wx, &g.ac, &g.recon, mfd_r, &mut g.mfd, &info, g.style, time, lit);
             if act.fuel_dump {
                 g.apply_switch(gcs::Switch::FuelDump);
             }
@@ -1540,7 +1572,7 @@ async fn main() {
             let map_h = (body.h * 0.36).floor();
             let mr = Rect::new(rx, body.y, rw, map_h);
             g.map.input(mr);
-            g.map.draw(&world, &mut tiles, &g.recon, &g.ac, mr, g.dest, time);
+            g.map.draw(&world, &mut tiles, &g.wx, &g.recon, &g.ac, mr, g.dest, time);
             let tabs_r = Rect::new(rx, mr.y + mr.h + 6.0, rw, 54.0);
             let mut alert_tabs = Vec::new();
             if g.ac.ovr_engine || g.ac.ovr_fbw || g.ac.h2_dump || g.ac.fuel_dump {

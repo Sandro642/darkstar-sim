@@ -22,11 +22,6 @@ pub struct Cue {
     pub color: Color,
 }
 
-fn panel_box(r: Rect) {
-    rrect(r, 6.0, PANEL_BG);
-    rrect_lines(r, 6.0, 1.0, Color::new(0.55, 0.58, 0.62, 0.55));
-}
-
 // ---------- FMA ----------
 
 /// Annonciateur de modes : quatre colonnes (poussée, latéral, vertical, AP), actif en vert,
@@ -245,14 +240,134 @@ pub fn cue(ac: &Aircraft, v: &View, c: &Cue, slot: usize) {
     }
 }
 
+// ---------- Style HUD éphémère ----------
+
+/// Couleur avec opacité globale de l'élément HUD.
+fn ca(c: Color, a: f32) -> Color {
+    Color::new(c.r, c.g, c.b, c.a * a)
+}
+
+/// Texte HUD : liseré sombre pour rester lisible sur le ciel comme sur le relief.
+fn htxt(s: &str, x: f32, y: f32, size: f32, c: Color, a: f32) {
+    txt(s, x + 1.0, y + 1.0, size, Color::new(0.0, 0.0, 0.0, 0.7 * a));
+    txt(s, x, y, size, ca(c, a));
+}
+
+fn htxt_r(s: &str, x: f32, y: f32, size: f32, c: Color, a: f32) {
+    let w = txt_w(s, size);
+    htxt(s, x - w, y, size, c, a);
+}
+
+/// Cadre HUD : seulement des coins en équerre.
+fn hud_frame(r: Rect, a: f32) {
+    let c = Color::new(0.75, 1.0, 0.85, 0.55 * a);
+    let l = 10.0;
+    for (x, y, dx, dy) in [(r.x, r.y, 1.0, 1.0), (r.x + r.w, r.y, -1.0, 1.0), (r.x, r.y + r.h, 1.0, -1.0), (r.x + r.w, r.y + r.h, -1.0, -1.0)] {
+        draw_line(x, y, x + dx * l, y, 1.5, c);
+        draw_line(x, y, x, y + dy * l, 1.5, c);
+    }
+}
+
+/// Visibilité (0..1) des éléments éphémères : vent, RWR, couloir, énergie.
+pub struct HudVis {
+    pub wind: f32,
+    pub rwr: f32,
+    pub corridor: f32,
+    pub energy: f32,
+}
+
+#[derive(Default)]
+struct HudMem {
+    wind: (f64, f64),
+    turb_bucket: i32,
+    imc: bool,
+    heard: usize,
+    stage: i32,
+    ram_ok: bool,
+    scram_ok: bool,
+    dest: usize,
+    until: [f64; 4],
+    all_until: f64,
+    init: bool,
+}
+
+thread_local! {
+    static HUD: std::cell::RefCell<HudMem> = std::cell::RefCell::new(HudMem::default());
+}
+
+/// Affiche tous les éléments éphémères pendant `secs` secondes (instruction HUD).
+pub fn hud_show_all(secs: f64) {
+    HUD.with(|h| h.borrow_mut().all_until = get_time() + secs);
+}
+
+pub fn hud_vis(ac: &Aircraft, wx: &crate::weather::WxInfo, threats: &[ThreatCue], dest: usize, s: Rect) -> HudVis {
+    let now = get_time();
+    HUD.with(|h| {
+        let mut m = h.borrow_mut();
+        let e = &ac.eng;
+        let stage = if e.scram == ScramState::Lit { 2 } else if e.ram == RamState::Lit { 1 } else { 0 };
+        let (ram_ok, scram_ok) = (ac.d.mach >= 2.0, ac.d.mach >= 4.8);
+        let turb_bucket = if wx.turb > 0.6 { 3 } else if wx.turb > 0.3 { 2 } else if wx.turb > 0.15 { 1 } else { 0 };
+        let imc = wx.imc > 0.3;
+        if !m.init {
+            *m = HudMem { wind: (wx.wind_dir, wx.wind_kt), turb_bucket, imc, heard: threats.len(), stage, ram_ok, scram_ok, dest, until: [now + 8.0; 4], all_until: 0.0, init: true };
+        }
+        let trig = |u: &mut [f64; 4], i: usize, secs: f64| u[i] = u[i].max(now + secs);
+        // Vent : rotation > 15° ou variation > 8 kt, entrée dans un nuage, turbulence
+        let (wd, ws) = m.wind;
+        let wind_changed = wrap180(wx.wind_dir - wd).abs() > 15.0 || (wx.wind_kt - ws).abs() > 8.0;
+        let turb_up = turb_bucket > m.turb_bucket;
+        let imc_in = imc && !m.imc;
+        if wind_changed || turb_up || imc_in {
+            trig(&mut m.until, 0, 7.0);
+        }
+        if wind_changed {
+            m.wind = (wx.wind_dir, wx.wind_kt);
+        }
+        m.turb_bucket = turb_bucket;
+        m.imc = imc;
+        // RWR : nouvel émetteur
+        if threats.len() > m.heard {
+            trig(&mut m.until, 1, 7.0);
+        }
+        m.heard = threats.len();
+        // Couloir : changement de mode TBCC ou seuil de Mach franchi
+        if stage != m.stage || ram_ok != m.ram_ok || scram_ok != m.scram_ok {
+            trig(&mut m.until, 2, 8.0);
+        }
+        m.stage = stage;
+        m.ram_ok = ram_ok;
+        m.scram_ok = scram_ok;
+        // Énergie : nouvelle destination
+        if dest != m.dest {
+            trig(&mut m.until, 3, 8.0);
+        }
+        m.dest = dest;
+        // Conditions permanentes
+        let hover = s.contains(vec2(mouse_position().0, mouse_position().1));
+        let all = hover || now < m.all_until;
+        let threat_hot = threats.iter().any(|t| t.state >= 3);
+        let corridor_hot = ac.d.q > 90_000.0 || (stage > 0 && ac.d.q < 25_000.0) || ac.skin_temp - 273.15 > SKIN_LIMIT_C - 100.0;
+        let ff = ac.eng.fuel_flow;
+        let low_fuel = (ff > 0.05 && ac.fuel / ff < 600.0) || (ac.eng.h2_flow > 0.01 && ac.h2 / ac.eng.h2_flow < 300.0);
+        let fade = |i: usize| ((m.until[i] - now) / 1.2).clamp(0.0, 1.0) as f32;
+        let pick = |i: usize, hot: bool| if all || hot { 1.0 } else { fade(i) };
+        HudVis {
+            wind: pick(0, imc || turb_bucket >= 2),
+            rwr: pick(1, threat_hot),
+            corridor: pick(2, corridor_hot),
+            energy: pick(3, low_fuel),
+        }
+    })
+}
+
 // ---------- Couloir hypersonique ----------
 
-/// Bloc couloir hypersonique : chaîne TBCC, pression dynamique dans le couloir 25-90 kPa, peau.
-pub fn corridor(ac: &Aircraft, r: Rect) {
-    panel_box(r);
+/// Couloir hypersonique : chaîne TBCC, pression dynamique dans le couloir 25-90 kPa, peau.
+pub fn corridor(ac: &Aircraft, r: Rect, a: f32) {
+    hud_frame(r, a);
     let x = r.x + 8.0;
     let w = r.w - 16.0;
-    // Chaîne des modes de propulsion
     let e = &ac.eng;
     let stages = [
         ("TURB", e.side.iter().any(|s| *s == TurbState::Running) && e.doors < 0.5, 0.0, WHITE),
@@ -261,15 +376,17 @@ pub fn corridor(ac: &Aircraft, r: Rect) {
     ];
     let sw = w / 3.0;
     for (i, (n, on, m, c)) in stages.iter().enumerate() {
-        let b = Rect::new(x + i as f32 * sw + 1.0, r.y + 6.0, sw - 2.0, 18.0);
+        let cx = x + i as f32 * sw + sw / 2.0;
         let ready = ac.d.mach >= *m;
+        let col = if *on { *c } else if ready { Color::new(c.r, c.g, c.b, 0.6) } else { Color::new(0.6, 0.6, 0.62, 0.5) };
         if *on {
-            rrect(b, 4.0, Color::new(c.r * 0.35, c.g * 0.35, c.b * 0.35, 1.0));
+            draw_line(cx - sw * 0.38, r.y + 22.0, cx + sw * 0.38, r.y + 22.0, 2.0, ca(*c, a));
         }
-        rrect_lines(b, 4.0, 1.0, if *on { *c } else if ready { Color::new(c.r, c.g, c.b, 0.5) } else { Color::new(0.4, 0.4, 0.42, 0.6) });
-        txt_c(n, b.x + b.w / 2.0, b.y + 13.0, 11.0, if *on { WHITE } else if ready { *c } else { DIM });
+        htxt(n, cx - txt_w(n, 12.0) / 2.0, r.y + 17.0, 12.0, col, a);
+        if i < 2 {
+            htxt(">", x + (i + 1) as f32 * sw - 4.0, r.y + 17.0, 12.0, DIM, a);
+        }
     }
-    // Prochaine transition
     let next = if e.scram == ScramState::Lit {
         None
     } else if e.ram == RamState::Lit {
@@ -277,60 +394,55 @@ pub fn corridor(ac: &Aircraft, r: Rect) {
     } else {
         Some(("RAM", 2.0))
     };
-    let mut y = r.y + 40.0;
-    if let Some((n, m)) = next {
-        let c = if ac.d.mach >= m { GREEN_S } else { DIM };
-        txt(&if ac.d.mach >= m { format!("{n} DISPONIBLE") } else { format!("{n} a M{m:.1} (+{:.2})", m - ac.d.mach) }, x, y, 11.0, c);
-    } else {
-        txt(&format!("SCRAM ETABLI  M{:.2}", ac.d.mach), x, y, 11.0, MAGENTA_S);
+    let y = r.y + 40.0;
+    match next {
+        Some((n, m)) if ac.d.mach >= m => htxt(&format!("{n} DISPONIBLE"), x, y, 12.0, GREEN_S, a),
+        Some((n, m)) => htxt(&format!("{n} a M{m:.1} (+{:.2})", m - ac.d.mach), x, y, 12.0, WHITE, a),
+        None => htxt(&format!("SCRAM ETABLI  M{:.2}", ac.d.mach), x, y, 12.0, MAGENTA_S, a),
     }
-    y += 10.0;
-    // Barre q : couloir vert 25-90 kPa, limite rouge 100
     let bar = |y: f32, label: &str, v: f64, vmax: f64, zones: &[(f64, f64, Color)], unit: &str| {
-        txt(label, x, y + 9.0, 10.0, DIM);
-        let b = Rect::new(x + 34.0, y, w - 34.0, 10.0);
-        rrect(b, 3.0, Color::new(0.08, 0.08, 0.09, 1.0));
-        for (a, z, c) in zones {
-            let xa = b.x + (a / vmax) as f32 * b.w;
-            let xb = b.x + (z / vmax).min(1.0) as f32 * b.w;
-            draw_rectangle(xa, b.y + 3.0, xb - xa, 4.0, *c);
+        htxt(label, x, y + 9.0, 10.0, WHITE, a);
+        let b = Rect::new(x + 34.0, y + 3.0, w - 34.0, 4.0);
+        for (lo, hi, c) in zones {
+            let xa = b.x + (lo / vmax) as f32 * b.w;
+            let xb = b.x + (hi / vmax).min(1.0) as f32 * b.w;
+            draw_rectangle(xa, b.y, xb - xa, b.h, ca(*c, a));
         }
         let xv = b.x + (v / vmax).clamp(0.0, 1.0) as f32 * b.w;
-        draw_triangle(vec2(xv, b.y + 1.0), vec2(xv - 5.0, b.y - 6.0), vec2(xv + 5.0, b.y - 6.0), WHITE);
-        txt_r(&format!("{v:.0}{unit}"), b.x + b.w, b.y - 2.0, 10.0, WHITE);
+        draw_triangle(vec2(xv, b.y - 1.0), vec2(xv - 5.0, b.y - 8.0), vec2(xv + 5.0, b.y - 8.0), ca(WHITE, a));
+        htxt_r(&format!("{:.0}{unit}", v.round() + 0.0), b.x + b.w, b.y - 4.0, 10.0, WHITE, a);
     };
-    let ok = Color::new(0.2, 0.75, 0.35, 0.9);
-    bar(y + 6.0, "q", ac.d.q / 1000.0, 120.0, &[(25.0, 90.0, ok), (90.0, 100.0, AMBER), (100.0, 120.0, RED)], " kPa");
+    let ok = Color::new(0.2, 0.85, 0.35, 0.9);
+    bar(y + 8.0, "q", ac.d.q / 1000.0, 120.0, &[(25.0, 90.0, ok), (90.0, 100.0, AMBER), (100.0, 120.0, RED)], " kPa");
     let skin = ac.skin_temp - 273.15;
-    bar(y + 26.0, "PEAU", skin, SKIN_LIMIT_C * 1.15, &[(0.0, SKIN_LIMIT_C - 100.0, ok), (SKIN_LIMIT_C - 100.0, SKIN_LIMIT_C, AMBER), (SKIN_LIMIT_C, SKIN_LIMIT_C * 1.15, RED)], " C");
+    bar(y + 28.0, "PEAU", skin, SKIN_LIMIT_C * 1.15, &[(0.0, SKIN_LIMIT_C - 100.0, ok), (SKIN_LIMIT_C - 100.0, SKIN_LIMIT_C, AMBER), (SKIN_LIMIT_C, SKIN_LIMIT_C * 1.15, RED)], " C");
 }
 
 // ---------- Énergie / autonomie ----------
 
 /// Bilan : autonomie JP-7 et H2, distance franchissable, carburant estimé à destination.
-pub fn energy(ac: &Aircraft, r: Rect, dest: usize) {
-    panel_box(r);
+pub fn energy(ac: &Aircraft, r: Rect, dest: usize, a: f32) {
+    hud_frame(r, a);
     let x = r.x + 8.0;
     let xr = r.x + r.w - 8.0;
     let mut y = r.y + 15.0;
-    let gs = (ac.tas * ac.gamma.cos()).max(1.0);
-    let line = |y: &mut f32, l: &str, v: String, c: Color| {
-        txt(l, x, *y, 11.0, DIM);
-        txt_r(&v, xr, *y, 11.0, c);
-        *y += 14.0;
+    let gs = ac.ground_speed().max(1.0);
+    let mut line = |l: &str, v: String, c: Color| {
+        htxt(l, x, y, 11.0, WHITE, a * 0.85);
+        htxt_r(&v, xr, y, 11.0, c, a);
+        y += 14.0;
     };
     let ff = ac.eng.fuel_flow;
     let endu = if ff > 0.05 { ac.fuel / ff } else { f64::INFINITY };
-    line(&mut y, "AUTONOMIE JP7", if endu.is_finite() { crate::mission::fmt_time(endu) } else { "--".into() }, if endu < 600.0 { AMBER } else { WHITE });
+    line("AUTONOMIE JP7", if endu.is_finite() { crate::mission::fmt_time(endu) } else { "--".into() }, if endu < 600.0 { AMBER } else { WHITE });
     let h2e = if ac.eng.h2_flow > 0.01 { ac.h2 / ac.eng.h2_flow } else { f64::INFINITY };
-    line(&mut y, "AUTONOMIE H2", if h2e.is_finite() { crate::mission::fmt_time(h2e) } else { "--".into() }, if h2e < 300.0 { AMBER } else { CYAN_S });
-    // Rayon d'action sur la ressource qui s'épuise en premier (H2 seul en scram)
+    line("AUTONOMIE H2", if h2e.is_finite() { crate::mission::fmt_time(h2e) } else { "--".into() }, if h2e < 300.0 { AMBER } else { CYAN_S });
     let lim = endu.min(h2e);
-    line(&mut y, "RAYON D'ACTION", if lim.is_finite() { format!("{:.0} NM", lim * gs / NM) } else { "--".into() }, WHITE);
+    line("RAYON D'ACTION", if lim.is_finite() { format!("{:.0} NM", lim * gs / NM) } else { "--".into() }, WHITE);
     let apt = &AIRPORTS[dest];
     let (d, _) = dist_brg(ac.lat, ac.lon, apt.lat, apt.lon);
     let at_dest = ac.fuel - ff * d / gs;
-    line(&mut y, &format!("JP7 A {}", apt.icao), if ff > 0.05 { format!("{:.1} t", at_dest / 1000.0) } else { "--".into() }, if at_dest < FUEL_MAX * 0.08 { RED } else if at_dest < FUEL_MAX * 0.15 { AMBER } else { GREEN_S });
+    line(&format!("JP7 A {}", apt.icao), if ff > 0.05 { format!("{:.1} t", at_dest / 1000.0) } else { "--".into() }, if at_dest < FUEL_MAX * 0.08 { RED } else if at_dest < FUEL_MAX * 0.15 { AMBER } else { GREEN_S });
 }
 
 // ---------- Indexeur d'incidence ----------
@@ -349,4 +461,176 @@ pub fn aoa_index(ac: &Aircraft, fpv: Vec2) {
     let yv = fy(a);
     draw_triangle(vec2(x - 1.0, yv), vec2(x - 8.0, yv - 4.0), vec2(x - 8.0, yv + 4.0), c);
     txt(&format!("{a:.1}"), x + 6.0, yv + 4.0, 11.0, c);
+}
+
+// ---------- Vent, météo ----------
+
+/// Vent : flèche (sens vers lequel souffle le vent, relatif au nez), direction / force, dérive, vitesse
+/// sol ; annonces IMC, turbulence, orage devant (affichées tant qu'elles sont actives).
+pub fn wind_block(ac: &Aircraft, wx: &crate::weather::WxInfo, r: Rect, time: f64, a: f32) {
+    if a > 0.01 {
+        hud_frame(r, a);
+        let c = vec2(r.x + 26.0, r.y + r.h / 2.0);
+        let rel = (wrap180(wx.wind_dir + 180.0 - ac.hdg_deg()) as f32).to_radians();
+        let d = vec2(rel.sin(), -rel.cos());
+        let n = vec2(-d.y, d.x);
+        draw_circle_lines(c.x, c.y, 18.0, 1.0, Color::new(1.0, 1.0, 1.0, 0.35 * a));
+        round_line(c - d * 14.0, c + d * 12.0, 2.5, ca(CYAN_S, a));
+        draw_triangle(c + d * 16.0, c + d * 6.0 + n * 6.0, c + d * 6.0 - n * 6.0, ca(CYAN_S, a));
+        let x = r.x + 52.0;
+        htxt(&format!("{:03.0}/{:.0}", wx.wind_dir, wx.wind_kt), x, r.y + 16.0, 14.0, CYAN_S, a);
+        let drift = wrap180(ac.track_deg() - ac.hdg_deg());
+        htxt(&format!("DERIVE {}{:.0}", if drift >= 0.0 { "D" } else { "G" }, drift.abs()), x, r.y + 31.0, 11.0, WHITE, a);
+        htxt(&format!("GS {:.0} kt", ac.ground_speed() / KT), x, r.y + 45.0, 11.0, WHITE, a);
+    }
+    // Annonces météo actives
+    let mut y = r.y + r.h + 16.0;
+    let blink = (time * 2.0).fract() < 0.6;
+    let mut x = r.x;
+    if wx.imc > 0.3 {
+        htxt("IMC", x, y, 13.0, WHITE, 1.0);
+        x += 44.0;
+    }
+    if wx.turb > 0.15 {
+        let (lbl, c) = if wx.turb > 0.6 { ("TURB SEV", RED) } else if wx.turb > 0.3 { ("TURB MOD", AMBER) } else { ("TURB LGT", WHITE) };
+        if blink || wx.turb < 0.6 {
+            htxt(lbl, x, y, 13.0, c, 1.0);
+        }
+    }
+    y += 18.0;
+    if let Some((brg, dist, top)) = wx.storm {
+        if dist < 60.0 * NM || a > 0.01 {
+            let clock = ((wrap360(brg - ac.hdg_deg()) / 30.0).round() as i32 + 11) % 12 + 1;
+            let c = if dist < 30.0 * NM { RED } else { AMBER };
+            htxt(&format!("ORAGE {clock}H {:.0}NM FL{:.0}", dist / NM, top / 100.0), r.x, y, 12.0, c, 1.0);
+        }
+    }
+}
+
+// ---------- Menaces : RWR et repères 3D ----------
+
+pub struct ThreatCue {
+    pub lat: f64,
+    pub lon: f64,
+    pub name: &'static str,
+    pub sam: bool,
+    /// 1 veille, 2 poursuite, 3 accrochage (LOCK), 4 tir (LAUNCH).
+    pub state: u8,
+    pub dist: f64,
+    /// Missile en vol : (fraction du trajet, temps avant impact).
+    pub missile: Option<(f64, f64)>,
+    pub escape: String,
+}
+
+fn threat_color(state: u8) -> Color {
+    match state {
+        4 | 3 => RED,
+        2 => AMBER,
+        _ => Color::new(1.0, 0.85, 0.3, 0.9),
+    }
+}
+
+/// Écran d'alerte radar (RWR) : émetteurs au relèvement relatif, distance radiale.
+pub fn rwr(ac: &Aircraft, cues: &[ThreatCue], r: Rect, time: f64, a: f32) {
+    if a < 0.01 {
+        return;
+    }
+    hud_frame(r, a);
+    let c = vec2(r.x + r.w / 2.0, r.y + r.h / 2.0 + 4.0);
+    let rad = r.w.min(r.h - 10.0) / 2.0 - 6.0;
+    htxt("RWR", r.x + 5.0, r.y + 12.0, 10.0, WHITE, a);
+    for k in [0.5f32, 1.0] {
+        draw_circle_lines(c.x, c.y, rad * k, 1.0, Color::new(0.4, 0.9, 0.5, 0.35 * a));
+    }
+    draw_line(c.x, c.y - rad, c.x, c.y - rad + 5.0, 1.5, Color::new(0.4, 0.9, 0.5, 0.6 * a));
+    let blink = (time * 4.0).fract() < 0.55;
+    for t in cues {
+        let (_, brg) = dist_brg(ac.lat, ac.lon, t.lat, t.lon);
+        let rel = (wrap180(brg - ac.hdg_deg()) as f32).to_radians();
+        // Distance logarithmique : 20 km au centre, 400 km au bord
+        let k = (((t.dist / 20_000.0).max(1.0).ln() / (20.0f64).ln()) as f32).clamp(0.15, 1.0);
+        let p = c + vec2(rel.sin(), -rel.cos()) * rad * k;
+        let col = threat_color(t.state);
+        if t.state == 4 && !blink {
+            continue;
+        }
+        htxt(if t.sam { "S" } else { "R" }, p.x - 4.0, p.y + 4.0, 12.0, col, a);
+        if t.state >= 3 {
+            stroke(&[p + vec2(0.0, -9.0), p + vec2(9.0, 0.0), p + vec2(0.0, 9.0), p + vec2(-9.0, 0.0)], true, 1.5, ca(col, a));
+        }
+    }
+    draw_triangle(c + vec2(0.0, -5.0), c + vec2(-4.0, 4.0), c + vec2(4.0, 4.0), ca(WHITE, a));
+}
+
+/// Repères 3D des menaces dans l'horizon, missile en vol et bandeau d'esquive.
+pub fn threats(ac: &Aircraft, v: &View, cues: &[ThreatCue], time: f64) {
+    let eye = EyeFrame::new(ac);
+    let s = v.rect;
+    let blink = (time * 3.0).fract() < 0.6;
+    for t in cues {
+        let col = threat_color(t.state);
+        let h = (ac.alt).max(1.0);
+        let horizon = (2.0 * R_EARTH * h).sqrt();
+        let (_, brg) = dist_brg(ac.lat, ac.lon, t.lat, t.lon);
+        let p = if t.dist > horizon * 0.95 {
+            let dip = (R_EARTH / (R_EARTH + h)).acos();
+            v.project_dir(crate::svs::dir(brg.to_radians(), -dip))
+        } else {
+            v.project(eye.local(t.lat, t.lon, 0.0))
+        };
+        if let Some(p) = p.filter(|p| s.contains(*p)) {
+            // Symbole : losange (radar) ou cercle cranté (SAM), accrochage = double cadre
+            if t.sam {
+                draw_circle_lines(p.x, p.y, 9.0, 2.0, col);
+                for a in 0..4 {
+                    let an = a as f32 * std::f32::consts::FRAC_PI_2;
+                    let d = vec2(an.cos(), an.sin());
+                    draw_line(p.x + d.x * 9.0, p.y + d.y * 9.0, p.x + d.x * 14.0, p.y + d.y * 14.0, 2.0, col);
+                }
+            } else {
+                stroke(&[p + vec2(0.0, -8.0), p + vec2(8.0, 0.0), p + vec2(0.0, 8.0), p + vec2(-8.0, 0.0)], true, 1.5, col);
+            }
+            if t.state >= 3 && (blink || t.state == 3) {
+                draw_rectangle_lines(p.x - 17.0, p.y - 17.0, 34.0, 34.0, 2.0, col);
+            }
+            let st = ["", "VEILLE", "POURSUITE", "LOCK", "LAUNCH"][t.state.min(4) as usize];
+            let lbl = format!("{} {st} {:.0}NM", t.name, t.dist / NM);
+            let w = txt_w(&lbl, 11.0) + 8.0;
+            rrect(Rect::new(p.x - w / 2.0, p.y + 18.0, w, 15.0), 4.0, PANEL_BG);
+            txt_c(&lbl, p.x, p.y + 29.0, 11.0, col);
+        }
+        // Missile en vol : position interpolée site -> avion, traînée de fumée
+        if let Some((frac, _)) = t.missile {
+            let f = frac.clamp(0.0, 1.0);
+            let alt = ac.alt * (f * (2.0 - f)).min(1.0);
+            let (d, b) = dist_brg(t.lat, t.lon, ac.lat, ac.lon);
+            let (mla, mlo) = destination(t.lat, t.lon, b, d * f);
+            if let Some(mp) = v.project(eye.local(mla, mlo, alt)) {
+                let (tla, tlo) = destination(t.lat, t.lon, b, d * (f - 0.08).max(0.0));
+                if let Some(tp) = v.project(eye.local(tla, tlo, ac.alt * ((f - 0.08).max(0.0) * (2.0 - f + 0.08)).min(1.0))) {
+                    draw_line(tp.x, tp.y, mp.x, mp.y, 3.0, Color::new(0.85, 0.85, 0.85, 0.5));
+                }
+                draw_circle(mp.x, mp.y, 6.0, Color::new(1.0, 0.6, 0.1, 0.5));
+                draw_circle(mp.x, mp.y, 3.0, WHITE);
+            }
+        }
+    }
+    // Bandeau de la menace la plus grave
+    if let Some(t) = cues.iter().filter(|t| t.state >= 3).max_by_key(|t| t.state) {
+        let (cx, y) = (s.x + s.w / 2.0, s.y + s.h * 0.30);
+        let msg = match t.missile {
+            Some((_, tti)) => format!("MISSILE LAUNCH  {}  IMPACT {:.0}s", t.name, tti),
+            None => format!("SAM LOCK  {}", t.name),
+        };
+        let w = txt_w(&msg, 18.0) + 24.0;
+        if t.state == 3 || blink {
+            rrect(Rect::new(cx - w / 2.0, y - 20.0, w, 26.0), 5.0, Color::new(0.35, 0.0, 0.0, 0.85));
+            rrect_lines(Rect::new(cx - w / 2.0, y - 20.0, w, 26.0), 5.0, 1.5, RED);
+            txt_c(&msg, cx, y, 18.0, RED);
+        }
+        let esc = format!("ESQUIVE : {}", t.escape);
+        let w2 = txt_w(&esc, 13.0) + 16.0;
+        rrect(Rect::new(cx - w2 / 2.0, y + 10.0, w2, 18.0), 4.0, PANEL_BG);
+        txt_c(&esc, cx, y + 24.0, 13.0, AMBER);
+    }
 }

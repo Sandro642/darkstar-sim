@@ -589,6 +589,35 @@ impl Recon {
         self.targets.iter().position(|t| t.code == arg || t.name.starts_with(arg))
     }
 
+    /// Menaces pour l'horizon et le RWR : émetteurs entendus avec leur état.
+    pub fn threat_cues(&self, ac: &Aircraft) -> Vec<crate::pfd_plus::ThreatCue> {
+        let mut out = Vec::new();
+        for (k, em) in self.emitters.iter().enumerate() {
+            if !em.heard || !self.elint_on {
+                continue;
+            }
+            let (d, _) = dist_brg(ac.lat, ac.lon, em.lat, em.lon);
+            if d > radar_horizon(ac.alt.max(0.0), 15.0) || d > em.range * 1.6 {
+                continue;
+            }
+            let (state, missile) = match self.threat {
+                Some((tk, _, Some(m))) if tk == k => (4, Some((m / MISSILE_TOF, (MISSILE_TOF - m).max(0.0)))),
+                Some((tk, t_in, None)) if tk == k => (if t_in > 4.0 { 3 } else { 2 }, None),
+                _ if em.kind != EmKind::Search && d < em.range => (2, None),
+                _ => (1, None),
+            };
+            let escape = if em.kind == EmKind::Sam {
+                format!("MONTER > FL{:.0} OU ACCELERER > M{:.1}", em.ceiling_ft / 100.0 + 20.0, em.mach_max + 0.2)
+            } else {
+                String::new()
+            };
+            // Position : estimation ELINT si disponible, sinon émetteur entendu dans son relèvement
+            let (la, lo) = em.est.map(|e| (e.0, e.1)).unwrap_or((em.lat, em.lon));
+            out.push(crate::pfd_plus::ThreatCue { lat: la, lon: lo, name: em.name, sam: em.kind == EmKind::Sam, state, dist: d, missile, escape });
+        }
+        out
+    }
+
     /// Alarmes de menace pour l'horizon et le panneau d'alarmes.
     pub fn alerts(&self) -> Vec<(Level, String)> {
         match self.threat {
