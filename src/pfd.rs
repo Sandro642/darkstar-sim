@@ -14,6 +14,8 @@ pub struct PfdInfo<'a> {
     pub dest: usize,
     pub warp: f64,
     pub time: f64,
+    /// Objectif de reconnaissance sélectionné (repère 3D).
+    pub cue: Option<crate::pfd_plus::Cue>,
 }
 
 const LINE: Color = Color::new(0.92, 0.94, 0.95, 1.0);
@@ -94,6 +96,14 @@ fn draw_svs_overlay(ac: &Aircraft, v: &View, info: &PfdInfo) {
     }
     draw_horizon_compass(ac, v);
     draw_tunnel(ac, v, info.dest, info.time);
+    let clr = crate::pfd_plus::predicted_path(ac, v, info.time);
+    if !ac.on_ground {
+        let apt = &AIRPORTS[info.dest];
+        crate::pfd_plus::cue(ac, v, &crate::pfd_plus::Cue { lat: apt.lat, lon: apt.lon, elev: apt.elev, label: apt.icao.to_string(), color: MAGENTA_S }, 0);
+        if let Some(c) = &info.cue {
+            crate::pfd_plus::cue(ac, v, c, 1);
+        }
+    }
 
     // Échelle de tangage « 10 •  • 10 »
     for p in (-90i32..=90).step_by(5) {
@@ -158,6 +168,9 @@ fn draw_svs_overlay(ac: &Aircraft, v: &View, info: &PfdInfo) {
             let (a, b) = (rot(0.0, -10.0), rot(0.0, -22.0));
             draw_line(a.x, a.y, b.x, b.y, w, col);
         }
+        if !ac.on_ground {
+            crate::pfd_plus::aoa_index(ac, f);
+        }
         // Chevron d'énergie
         let acc = (d.accel / 9.81 * 60.0).clamp(-40.0, 40.0) as f32;
         let p = rot(-56.0, -acc);
@@ -191,6 +204,20 @@ fn draw_svs_overlay(ac: &Aircraft, v: &View, info: &PfdInfo) {
         draw_triangle(tip, tip - n * 13.0 + tg * 7.0, tip - n * 13.0 - tg * 7.0, bc);
     }
 
+    crate::pfd_plus::terrain_warning(clr, s, info.time);
+    // Panneaux couloir hypersonique et énergie (masqués en finale ILS)
+    let on_ils = ac.approach.is_some_and(|(_, tla, tlo, thdg, _)| along_before(tla, tlo, thdg, ac.lat, ac.lon) < 60_000.0);
+    if !ac.on_ground && !on_ils {
+        let pw = (s.w * 0.27).clamp(170.0, 230.0);
+        // Au-dessus de la ligne de saisie des instructions
+        crate::pfd_plus::corridor(ac, Rect::new(s.x + 8.0, s.y + s.h - 122.0, pw, 92.0));
+        crate::pfd_plus::energy(ac, Rect::new(s.x + s.w - pw - 8.0, s.y + s.h - 88.0, pw, 62.0), info.dest);
+    }
+    // Inclinaison chiffrée au-delà de 30°
+    if ac.phi.abs() > 30f64.to_radians() {
+        let bc = if ac.phi.abs() > 60f64.to_radians() { RED } else { AMBER };
+        txt_c(&format!("BANK {:.0}", ac.phi.to_degrees().abs()), cx, cy + s.h * 0.43 - 18.0, 13.0, bc);
+    }
     // ILS
     if let Some((ai, tla, tlo, thdg, tel)) = ac.approach {
         let a = &AIRPORTS[ai];
@@ -278,58 +305,9 @@ fn draw_header(ac: &Aircraft, r: Rect, s: Rect, info: &PfdInfo) {
     txt(&format!("{:.0}", ac.tas / KT), s.x + 128.0, y + 23.0, 22.0, WHITE);
     txt("Knots", s.x + 200.0, y + 22.0, 14.0, LABEL);
 
-    // Modes pilote automatique
-    let mut parts: Vec<(String, Color)> = Vec::new();
-    if ac.ap.at_on {
-        parts.push((
-            match ac.ap.spd_keas {
-                Some(k) if ac.ap.spd_managed => format!("A/THR {k:.0} AUTO"),
-                Some(k) => format!("A/THR {k:.0}KEAS"),
-                None => format!("A/THR M{:.2}", ac.ap.mach_tgt),
-            },
-            GREEN_S,
-        ));
-    }
-    if ac.ap.on {
-        parts.push((
-            match ac.ap.lat {
-                LatMode::Hdg if ac.ap.loc_armed => format!("HDG {:03.0} LOC*", ac.ap.hdg_tgt),
-                LatMode::Nav if ac.ap.loc_armed => format!("NAV {} LOC*", AIRPORTS[info.dest].icao),
-                LatMode::Hdg => format!("HDG {:03.0}", ac.ap.hdg_tgt),
-                LatMode::Nav => format!("NAV {}", AIRPORTS[info.dest].icao),
-                LatMode::Loc => "LOC".into(),
-            },
-            GREEN_S,
-        ));
-        parts.push((
-            match ac.ap.vert {
-                VertMode::Alt if ac.ap.gs_armed => "ALT G/S*".into(),
-                VertMode::Alt => "ALT".into(),
-                VertMode::Gs => "G/S".into(),
-                VertMode::Flare => "FLARE".into(),
-                VertMode::Pitch => format!("PITCH {:+.0}", ac.ap.pitch_tgt),
-                VertMode::QHold => format!("DESC q{:.0}", ac.ap.q_tgt / 1000.0),
-            },
-            GREEN_S,
-        ));
-        parts.push(("AP1".into(), GREEN_S));
-    } else {
-        parts.push(("AP OFF".into(), DIM));
-    }
-    if ac.autoland.is_some() {
-        parts.push(("AUTOLAND".into(), MAGENTA_S));
-    }
-    if ac.autotakeoff.is_some() {
-        parts.push(("AUTO T/O".into(), MAGENTA_S));
-    }
-    let mut x = s.x + 290.0;
-    for (t, c) in parts {
-        if x + txt_w(&t, 14.0) > s.x + s.w - 10.0 {
-            break;
-        }
-        txt(&t, x, y + 22.0, 14.0, c);
-        x += txt_w(&t, 14.0) + 14.0;
-    }
+    // Annonciateur de modes (FMA)
+    let fx = s.x + 290.0;
+    crate::pfd_plus::fma(ac, fx, y + 4.0, s.x + s.w - 10.0 - fx, info.dest);
     // Consigne d'altitude
     if ac.ap.on && ac.ap.vert == VertMode::Alt {
         txt(&format!("{:.0}", ac.ap.alt_tgt_ft), s.x + s.w + 8.0, y + 22.0, 18.0, MAGENTA_S);
@@ -373,6 +351,26 @@ fn draw_speed(ac: &Aircraft, r: Rect, s: Rect, time: f64) {
     if ac.gear_pos > 0.01 {
         let yg = cy - (GEAR_VLE as f32 - spd) * ppk;
         draw_rectangle(lx + 4.0, yg - 600.0, 3.0, 600.0, AMBER);
+    }
+    if !ac.on_ground {
+        // Bande basse vitesse (rouge / noir) sous la vitesse de décrochage estimée
+        let vs1g = (crate::autoflight::vapp(ac) / 1.23) as f32;
+        let yl = cy - (vs1g - spd) * ppk;
+        if yl < s.y + s.h {
+            scissor(Some(Rect::new(lx, yl.max(s.y), 8.0, s.y + s.h - yl.max(s.y))));
+            let mut yy = yl;
+            while yy < s.y + s.h {
+                draw_rectangle(lx, yy, 8.0, 6.0, RED);
+                yy += 12.0;
+            }
+            scissor(Some(Rect::new(r.x, s.y - 4.0, s.x - r.x, s.h + 8.0)));
+        }
+        if ac.approach.is_some() && ac.gear_pos > 0.5 {
+            let va = crate::autoflight::vapp(ac) as f32;
+            let y = cy - (va - spd) * ppk;
+            draw_line(lx, y, lx + 12.0, y, 2.0, CYAN_S);
+            txt("VAPP", lx + 14.0, y + 4.0, 11.0, CYAN_S);
+        }
     }
     if ac.on_ground {
         let y = cy - (170.0 - spd) * ppk;
@@ -477,6 +475,20 @@ fn draw_altitude(ac: &Aircraft, r: Rect, s: Rect) {
     if ac.ap.on && ac.ap.vert == VertMode::Alt {
         let y = (cy - (ac.ap.alt_tgt_ft as f32 - alt) * ppf).clamp(s.y, s.y + s.h);
         draw_rectangle(lx - 6.0, y - 5.0, 6.0, 10.0, MAGENTA_S);
+    }
+    // Tendance d'altitude à 6 s
+    let trend = (d.vs * 6.0 / FT) as f32 * ppf;
+    if trend.abs() > 3.0 {
+        let yt = (cy - trend).clamp(s.y, s.y + s.h);
+        draw_line(lx + 4.0, cy, lx + 4.0, yt, 2.5, GREEN_S);
+    }
+    // Minimums (200 ft au-dessus du seuil) en approche
+    if let Some((_, _, _, _, el)) = ac.approach {
+        let mda = (el / FT) as f32 + 200.0;
+        let y = cy - (mda - alt) * ppf;
+        let c = if alt < mda { AMBER } else { CYAN_S };
+        draw_line(lx - 10.0, y, lx + 30.0, y, 2.0, c);
+        txt("MIN", lx + 32.0, y + 4.0, 11.0, c);
     }
     scissor(None);
     // Sol : hachures jaunes et noires sous l'élévation du terrain

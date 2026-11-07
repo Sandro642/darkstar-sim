@@ -19,6 +19,7 @@ mod mission;
 mod panels;
 mod recorder;
 mod pfd;
+mod pfd_plus;
 mod svs;
 mod terrain;
 mod systems;
@@ -1523,7 +1524,11 @@ async fn main() {
             let mfd_r = Rect::new(body.x, body.y, mfd_w, mfd_h);
             const BEZEL_PAGES: [gcs::Tab; 6] = [gcs::Tab::Moteurs, gcs::Tab::Alarmes, gcs::Tab::Fcs, gcs::Tab::Limites, gcs::Tab::Elec, gcs::Tab::Thermique];
             let lit: [bool; 6] = std::array::from_fn(|i| g.tab == BEZEL_PAGES[i]);
-            let info = pfd::PfdInfo { alerts: &alerts, link_name: ln, latency_ms: lat, dest: g.dest, warp: warp_eff, time };
+            let cue = {
+                let t = &g.recon.targets[g.recon.selected];
+                (!t.done()).then(|| pfd_plus::Cue { lat: t.lat, lon: t.lon, elev: 0.0, label: format!("CIBLE {}", t.code), color: Color::new(1.0, 0.85, 0.2, 1.0) })
+            };
+            let info = pfd::PfdInfo { alerts: &alerts, link_name: ln, latency_ms: lat, dest: g.dest, warp: warp_eff, time, cue };
             let (_, act) = mfd::draw_mfd(&world, &mut tiles, &g.ac, &g.recon, mfd_r, &mut g.mfd, &info, g.style, time, lit);
             if act.fuel_dump {
                 g.apply_switch(gcs::Switch::FuelDump);

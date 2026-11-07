@@ -203,3 +203,16 @@ Le SR-72 est un avion de reconnaissance : sa charge utile est simulée.
 - **Trafic aérien supprimé** (avions IA, TCAS, alertes et sons associés).
 - Aide au décollage manuel : « ROTATION : FLECHE BAS (TIRER) » s'affiche à la vitesse de rotation.
 - Diagnostic : `DARKSTAR_PERF=1` affiche la cadence et l'état du cache de tuiles dans le terminal.
+
+## Horizon de nouvelle génération (v1.7.0)
+- **FMA** (annonciateur de modes) : poussée / latéral / vertical / AP, actif en vert, armé en cyan.
+- **Trajectoire prédite 3D** (30 s, 60 s au-delà de Mach 3) avec repères 10/20/30 s, calculée sur le
+  facteur de charge et l'inclinaison réels ; couleur selon la **marge au-dessus du relief réel** (vert,
+  ambre < 150 m, rouge = impact) ; croix au point d'impact et alerte **TERRAIN T-xx s** à chevrons.
+- **Repères 3D** de la destination (magenta) et de l'objectif de reconnaissance (jaune) avec distance et
+  ETA ; au-delà de l'horizon, posés sur la ligne d'horizon ; hors champ, flèche au bord avec l'écart de cap.
+- **Couloir hypersonique** : chaîne TURB > RAM > SCRAM (prochaine transition et Mach restant), barres q
+  (couloir 25-90 kPa, limite 100) et température de peau.
+- **Énergie** : autonomie JP-7 et H2, rayon d'action, JP-7 estimé à l'arrivée.
+- **Indexeur d'incidence** à côté du vecteur vitesse (limite de la loi en ambre).
+- Échelles : bande basse vitesse, repère VAPP, tendance d'altitude 6 s, minimums ; inclinaison chiffrée > 30°.
