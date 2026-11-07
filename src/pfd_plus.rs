@@ -194,6 +194,15 @@ pub fn terrain_warning(clr: Option<(f64, f64)>, s: Rect, time: f64) {
 
 // ---------- Repères 3D ----------
 
+thread_local! {
+    static INNER: std::cell::Cell<Option<Rect>> = const { std::cell::Cell::new(None) };
+}
+
+/// Zone libre du PFD (entre les échelles) : les flèches de repères hors champ s'y alignent.
+pub fn set_inner(r: Rect) {
+    INNER.with(|c| c.set(Some(r)));
+}
+
 /// Repère d'un point au sol : losange + distance / ETA ; flèche au bord si hors champ.
 pub fn cue(ac: &Aircraft, v: &View, c: &Cue, slot: usize) {
     let eye = EyeFrame::new(ac);
@@ -231,7 +240,10 @@ pub fn cue(ac: &Aircraft, v: &View, c: &Cue, slot: usize) {
             // Flèche au bord gauche ou droit (moitié haute, hors des blocs du bas)
             let rel = wrap180(brg - ac.hdg_deg()) as f32;
             let side = if rel >= 0.0 { 1.0 } else { -1.0 };
-            let p = vec2(ctr.x + side * (s.w / 2.0 - 18.0), s.y + s.h * 0.46 + slot as f32 * 30.0);
+            let inner = INNER.with(|c| c.get()).unwrap_or(s);
+            let x = if side > 0.0 { inner.x + inner.w - 18.0 } else { inner.x + 18.0 };
+            let _ = ctr;
+            let p = vec2(x, s.y + s.h * 0.46 + slot as f32 * 30.0);
             let dirv = vec2(side, 0.0);
             let n = vec2(0.0, 1.0);
             draw_triangle(p + dirv * 12.0, p - dirv * 6.0 + n * 8.0, p - dirv * 6.0 - n * 8.0, c.color);

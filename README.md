@@ -353,3 +353,7 @@ Le SR-72 est un avion de reconnaissance : sa charge utile est simulée.
   `assets/cockpit.obj` et rendu avec un vrai tampon de profondeur (occlusion exacte), leviers de
   manette animés.
 - v1.19.0 : vue cockpit retirée (touche K, commande COCKPIT, modèle 3D) ; retour à la station sol seule.
+- v1.20.0 : **horizon v2** (évolution type Hornet → Super Hornet) — vision synthétique sur toute la
+  largeur de l'écran, échelles vitesse / altitude / variomètre translucides posées sur l'image,
+  bandeau de modes unique (MENU, FMA, mode TBCC, liaison), arc d'inclinaison en haut avec pointeur
+  de ciel, ruban de cap avec relèvement destination, blocs de données lisibles sur ciel clair.

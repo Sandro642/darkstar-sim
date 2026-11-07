@@ -1713,7 +1713,8 @@ async fn main() {
             let (_, act) = mfd::draw_mfd(&world, &mut tiles, &g.wx, &g.refuel, &g.ac, &g.recon, mfd_r, &mut g.mfd, &info, g.style, time, lit);
             drop(info);
             handle_mfd(&mut g, act);
-            let svs_r = mfd::layout(mfd_r).1.svs;
+            let lay = mfd::layout(mfd_r).1;
+            let svs_r = lay.inner;
             draw_console(&g, svs_r);
             if g.ac.crashed.is_some() && !g.crash_report.is_empty() {
                 draw_crash_report(&g.crash_report, svs_r);
@@ -1724,7 +1725,7 @@ async fn main() {
             }
             emergency::draw_hud(&g.emerg, &g.ac, svs_r, time);
             // Bouton MENU du PFD : ouvre l'onglet CONSOLE
-            let menu_btn = Rect::new(svs_r.x + 6.0, svs_r.y + svs_r.h + 7.0, 70.0, 18.0);
+            let menu_btn = pfd::menu_rect(lay.pfd);
             if g.tab == gcs::Tab::Console {
                 draw_rectangle_lines(menu_btn.x - 1.0, menu_btn.y - 1.0, menu_btn.w + 2.0, menu_btn.h + 2.0, 2.0, ui::ACCENT);
             }

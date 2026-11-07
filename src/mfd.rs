@@ -38,6 +38,8 @@ const BEZEL_TOP: f32 = 58.0;
 pub struct Layout {
     pub pfd: Rect,
     pub svs: Rect,
+    /// Zone centrale libre du PFD v2 (entre les échelles).
+    pub inner: Rect,
 }
 
 /// Lunette : fond, 6 boutons carrés (allumés en turquoise) et voyant ; renvoie le bouton cliqué.
@@ -79,7 +81,7 @@ pub fn layout(r: Rect) -> (Rect, Layout, [Rect; 3]) {
     let h = d.y + d.h - 5.0 - y0;
     let w = (d.w - 10.0 - 12.0) / 3.0;
     let panes = [Rect::new(d.x + 5.0, y0, w, h), Rect::new(d.x + 11.0 + w, y0, w, h), Rect::new(d.x + 17.0 + 2.0 * w, y0, w, h)];
-    (d, Layout { pfd: pfd_r, svs: pfd::svs_rect(pfd_r) }, panes)
+    (d, Layout { pfd: pfd_r, svs: pfd::svs_rect(pfd_r), inner: pfd::geo(pfd_r).inner }, panes)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -88,6 +90,7 @@ pub fn draw_mfd(world: &World, tiles: &mut crate::tiles::Tiles, wx: &crate::weat
     let mut act = MfdActions { bezel: bezel(r, lit, time), ..Default::default() };
     let (_, lay, panes) = layout(r);
     let view = svs::draw_svs(world, tiles, wx, rf, ac, lay.svs, time, style, svs::Cam::default());
+    crate::pfd_plus::set_inner(lay.inner);
     pfd::draw_pfd(ac, &view, lay.pfd, info);
     // Ravitailleur : repère tant qu'il est loin, directeur de ravitaillement en approche
     if let Some(t) = &rf.tanker {
@@ -97,7 +100,7 @@ pub fn draw_mfd(world: &World, tiles: &mut crate::tiles::Tiles, wx: &crate::weat
             scissor(None);
         }
     }
-    crate::refuel::draw_hud(rf, ac, lay.svs, time);
+    crate::refuel::draw_hud(rf, ac, lay.inner, time);
     act.fuel_dump = draw_fuel(ac, panes[0]);
     pane_frame(panes[1]);
     act.cam = crate::recon::draw_camera(ac, recon, tiles, panes[1]);

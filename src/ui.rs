@@ -82,8 +82,14 @@ pub fn rrect(r: Rect, rad: f32, c: Color) {
     draw_rectangle(r.x + rad, r.y, r.w - 2.0 * rad, r.h, c);
     draw_rectangle(r.x, r.y + rad, rad, r.h - 2.0 * rad, c);
     draw_rectangle(r.x + r.w - rad, r.y + rad, rad, r.h - 2.0 * rad, c);
-    for (x, y) in [(r.x + rad, r.y + rad), (r.x + r.w - rad, r.y + rad), (r.x + rad, r.y + r.h - rad), (r.x + r.w - rad, r.y + r.h - rad)] {
-        draw_circle(x, y, rad, c);
+    // Quarts de disque sans recouvrement (correct avec une couleur translucide)
+    let pi = std::f32::consts::PI;
+    for (x, y, a0) in [(r.x + rad, r.y + rad, pi), (r.x + r.w - rad, r.y + rad, 1.5 * pi), (r.x + r.w - rad, r.y + r.h - rad, 0.0), (r.x + rad, r.y + r.h - rad, 0.5 * pi)] {
+        let n = 6;
+        for k in 0..n {
+            let (t0, t1) = (a0 + k as f32 / n as f32 * 0.5 * pi, a0 + (k + 1) as f32 / n as f32 * 0.5 * pi);
+            draw_triangle(vec2(x, y), vec2(x + rad * t0.cos(), y + rad * t0.sin()), vec2(x + rad * t1.cos(), y + rad * t1.sin()), c);
+        }
     }
 }
 
