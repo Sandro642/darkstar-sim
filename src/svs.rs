@@ -238,13 +238,21 @@ pub struct Lights {
     pub pts: Vec<(Vec3, Color, f32)>,
 }
 
-pub fn draw_svs(world: &World, tiles: &mut Tiles, wx: &crate::weather::Weather, ac: &Aircraft, rect: Rect, time: f64, style: SvsStyle) -> View {
+pub fn draw_svs(world: &World, tiles: &mut Tiles, wx: &crate::weather::Weather, rf: &crate::refuel::Refuel, ac: &Aircraft, rect: Rect, time: f64, style: SvsStyle) -> View {
     let dark = style == SvsStyle::Darkstar;
     let dpi = screen_dpi_scale();
     let (fwd, up, _) = basis(ac);
     let fovy = FOVY_DEG;
     // Plan proche adapté à la hauteur : précision du tampon de profondeur pour le relief
-    let near = ((ac.alt - ac.d.elev) * 0.02).clamp(1.5, 1_500.0) as f32;
+    let mut near = ((ac.alt - ac.d.elev) * 0.02).clamp(1.5, 1_500.0) as f32;
+    // Ravitailleur tout proche : plan proche réduit pour ne pas le découper
+    if let Some(t) = &rf.tanker {
+        let (d, _) = dist_brg(ac.lat, ac.lon, t.lat, t.lon);
+        let d3 = d.hypot(t.alt - ac.alt);
+        if d3 < 3_000.0 {
+            near = near.min((d3 * 0.3).max(1.0) as f32);
+        }
+    }
     let proj = Mat4::perspective_rh_gl(fovy.to_radians(), rect.w / rect.h, near, 6.0e6);
     let view = Mat4::look_at_rh(Vec3::ZERO, fwd, up);
     let mat = proj * view;
@@ -514,6 +522,8 @@ pub fn draw_svs(world: &World, tiles: &mut Tiles, wx: &crate::weather::Weather, 
             }
         }
     }
+    // Ravitailleur et perche
+    crate::refuel::draw_tanker(rf, ac, &mut mb);
     mb.flush();
 
     // --- Nuages volumétriques (masqués par le relief) ---

@@ -14,6 +14,7 @@ mod limits;
 mod map;
 mod menu;
 mod recon;
+mod refuel;
 mod mfd;
 mod mission;
 mod panels;
@@ -93,6 +94,7 @@ struct Game {
     mfd: mfd::MfdState,
     recon: recon::Recon,
     wx: weather::Weather,
+    refuel: refuel::Refuel,
     cmd_hist: Vec<String>,
     hist_pos: usize,
 }
@@ -197,6 +199,7 @@ impl Game {
             mfd: mfd::MfdState::new(),
             recon: recon::Recon::new(),
             wx: weather::Weather::new(),
+            refuel: refuel::Refuel::new(),
             cmd_hist: Vec::new(),
             hist_pos: 0,
         }
@@ -687,6 +690,9 @@ impl Game {
             }
         }
         if is_key_pressed(KeyCode::X) {
+            if self.refuel.active() {
+                self.refuel.stop(ac, "REPRISE EN MAIN");
+            }
             ac.ap.on = false;
             ac.ap.at_on = false;
             ac.autoland = None;
@@ -770,6 +776,12 @@ impl Game {
             self.ac.landed = true;
         }
         self.sim_time += sim_dt;
+        // Ravitaillement en vol : ravitailleur, rendez-vous, maintien de position sous la perche
+        self.refuel.update(sim_dt, &mut self.ac);
+        let rfe: Vec<_> = self.refuel.events.drain(..).collect();
+        for (l, m) in rfe {
+            self.push(l, m);
+        }
 
         self.thermal.update(sim_dt, &self.ac);
         let tev: Vec<_> = self.thermal.events.drain(..).collect();
@@ -961,6 +973,9 @@ impl Game {
             }
             "CAMERA" | "CAM" | "ZOOM" | "SAR" | "RADAR" | "ELINT" | "CIBLE" | "TARGET" | "PHOTO" | "MENACES" | "THREATS" => {
                 reply = self.recon.command(&w, ac, self.mission.elapsed);
+            }
+            "TANKER" | "RAVITAILLEUR" | "RAVITAILLEMENT" | "REFUEL" | "AAR" | "DECROCHER" | "DISCONNECT" => {
+                reply = self.refuel.command(&w, ac);
             }
             "HUD" | "INFOS" => {
                 pfd_plus::hud_show_all(10.0);
@@ -1338,6 +1353,7 @@ impl Game {
                     "CAMERA ON|OFF|EO|IR|TRACK|NADIR  ZOOM 8  PHOTO  SAR STRIP|SPOT|OFF  ELINT ON|OFF",
                     "CIBLE B  DIRECT CIBLE  PLAN RECON  ROUTE RECON|OFF  MENACES ON|OFF  RECON (page)",
                     "METEO CALME|BEAU|NUAGEUX|COUVERT|ORAGEUX  HUD (infos ephemeres 10 s, ou survol)",
+                    "TANKER [OACI|OFF]  RAVITAILLEMENT (autonome)  DECROCHER",
                     "TRAIN UP/DOWN | FREINS ON/OFF | AP ON/OFF | MANUEL | WARP 8",
                 ] {
                     self.log.push((self.sim_time, Level::Info, l.into()));
@@ -1517,7 +1533,7 @@ async fn main() {
         let body = Rect::new(6.0, 40.0, sw - 12.0, sh - 46.0);
         if map_full {
             g.map.input(body);
-            g.map.draw(&world, &mut tiles, &g.wx, &g.recon, &g.ac, body, g.dest, time);
+            g.map.draw(&world, &mut tiles, &g.wx, &g.refuel, &g.recon, &g.ac, body, g.dest, time);
         } else {
             // Écran principal Darkstar, aux proportions de l'écran du cockpit
             let mfd_w = (body.w * 0.63).min((body.h - 120.0) * mfd::COCKPIT_ASPECT).floor();
@@ -1530,7 +1546,7 @@ async fn main() {
                 (!t.done()).then(|| pfd_plus::Cue { lat: t.lat, lon: t.lon, elev: 0.0, label: format!("CIBLE {}", t.code), color: Color::new(1.0, 0.85, 0.2, 1.0) })
             };
             let info = pfd::PfdInfo { alerts: &alerts, link_name: ln, latency_ms: lat, dest: g.dest, warp: warp_eff, time, cue, wx: g.wx.info.clone(), threats: g.recon.threat_cues(&g.ac) };
-            let (_, act) = mfd::draw_mfd(&world, &mut tiles, &g.wx, &g.ac, &g.recon, mfd_r, &mut g.mfd, &info, g.style, time, lit);
+            let (_, act) = mfd::draw_mfd(&world, &mut tiles, &g.wx, &g.refuel, &g.ac, &g.recon, mfd_r, &mut g.mfd, &info, g.style, time, lit);
             if act.fuel_dump {
                 g.apply_switch(gcs::Switch::FuelDump);
             }
@@ -1572,7 +1588,7 @@ async fn main() {
             let map_h = (body.h * 0.36).floor();
             let mr = Rect::new(rx, body.y, rw, map_h);
             g.map.input(mr);
-            g.map.draw(&world, &mut tiles, &g.wx, &g.recon, &g.ac, mr, g.dest, time);
+            g.map.draw(&world, &mut tiles, &g.wx, &g.refuel, &g.recon, &g.ac, mr, g.dest, time);
             let tabs_r = Rect::new(rx, mr.y + mr.h + 6.0, rw, 54.0);
             let mut alert_tabs = Vec::new();
             if g.ac.ovr_engine || g.ac.ovr_fbw || g.ac.h2_dump || g.ac.fuel_dump {

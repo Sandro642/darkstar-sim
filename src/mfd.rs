@@ -84,11 +84,20 @@ pub fn layout(r: Rect) -> (Rect, Layout, [Rect; 3]) {
 
 #[allow(clippy::too_many_arguments)]
 #[allow(clippy::too_many_arguments)]
-pub fn draw_mfd(world: &World, tiles: &mut crate::tiles::Tiles, wx: &crate::weather::Weather, ac: &Aircraft, recon: &crate::recon::Recon, r: Rect, st: &mut MfdState, info: &PfdInfo, style: SvsStyle, time: f64, lit: [bool; 6]) -> (View, MfdActions) {
+pub fn draw_mfd(world: &World, tiles: &mut crate::tiles::Tiles, wx: &crate::weather::Weather, rf: &crate::refuel::Refuel, ac: &Aircraft, recon: &crate::recon::Recon, r: Rect, st: &mut MfdState, info: &PfdInfo, style: SvsStyle, time: f64, lit: [bool; 6]) -> (View, MfdActions) {
     let mut act = MfdActions { bezel: bezel(r, lit, time), ..Default::default() };
     let (_, lay, panes) = layout(r);
-    let view = svs::draw_svs(world, tiles, wx, ac, lay.svs, time, style);
+    let view = svs::draw_svs(world, tiles, wx, rf, ac, lay.svs, time, style);
     pfd::draw_pfd(ac, &view, lay.pfd, info);
+    // Ravitailleur : repère tant qu'il est loin, directeur de ravitaillement en approche
+    if let Some(t) = &rf.tanker {
+        if !ac.on_ground && !matches!(rf.phase, crate::refuel::Phase::Precontact | crate::refuel::Phase::Contact) {
+            scissor(Some(lay.svs));
+            crate::pfd_plus::cue(ac, &view, &crate::pfd_plus::Cue { lat: t.lat, lon: t.lon, elev: t.alt, label: format!("{} FL{:.0}", t.callsign, t.alt / FT / 100.0), color: Color::new(0.4, 0.85, 1.0, 1.0) }, 2);
+            scissor(None);
+        }
+    }
+    crate::refuel::draw_hud(rf, ac, lay.svs, time);
     act.fuel_dump = draw_fuel(ac, panes[0]);
     pane_frame(panes[1]);
     act.cam = crate::recon::draw_camera(ac, recon, tiles, panes[1]);

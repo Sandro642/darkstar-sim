@@ -252,3 +252,15 @@ Le SR-72 est un avion de reconnaissance : sa charge utile est simulée.
   pour tout afficher.
 - v1.9.1 : portée d'accrochage de la caméra portée à 80° hors verticale (≈ 155 km devant à 90 000 ft),
   indicateur « LOCK CIBLE » et compte à rebours « LOCK DANS ... » dans le volet caméra.
+
+## Ravitaillement en vol autonome (v1.10.0)
+- `TANKER` : ravitailleur SHELL 71 (type KC-46) en hippodrome à FL250 / 300 KEAS, 20 NM devant sur la
+  route (ou `TANKER KEDW` au-dessus d'un aérodrome, `TANKER OFF` pour le renvoyer), 40 t disponibles.
+- `RAVITAILLEMENT` (ou `REFUEL`, `AAR`) : séquence autonome comme sur un drone — rendez-vous (poursuite,
+  rattrapage avec profil de décélération, aérofreins), jonction sur la trace du ravitailleur, capture
+  en précontact (60 m derrière, 12 m sous), contact sous la perche (32 m / 9 m), transfert de JP-7 à
+  2,5 t/min jusqu'au plein, déconnexion et dégagement. Refusé au-dessus de Mach 1,5.
+- `DECROCHER` ou touche X : déconnexion immédiate.
+- Horizon : ravitailleur 3D avec perche (déployée jusqu'au réceptacle au contact), repère distance/ETA,
+  directeur de ravitaillement (phase, écarts avant/arrière, gauche/droite, haut/bas, feux UP/ALT/DOWN
+  et AFT/POS/FWD, jauge et quantité transférée). Carte : ravitailleur et hippodrome.
