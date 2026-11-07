@@ -311,7 +311,7 @@ impl Aircraft {
                     let va = vapp(self);
                     let tgt = va + 60.0;
                     let side = self.autoland.as_ref().unwrap().pat_side; // -90 gauche, +90 droite
-                    let r = (1.3 * self.tas * self.tas / (9.81 * 30f64.to_radians().tan())).max(2.0 * NM);
+                    let r = (1.3 * self.tas * self.tas / 9.81).clamp(1.3 * NM, 2.5 * NM);
                     let hac_along = 5.0 * NM;
                     let (tl, to) = destination(tla, tlo, wrap360(hdg + 180.0), hac_along);
                     let (cl, co) = destination(tl, to, wrap360(hdg + side), r);
@@ -330,19 +330,43 @@ impl Aircraft {
                     let on_circle = dc < r * 1.5;
                     let lap = std::f64::consts::TAU * r;
                     let dist0 = if on_circle { theta * r } else { dc + theta * r };
-                    let at_exit = on_circle && theta.to_degrees() < 10.0;
-                    let short = on_circle && dh < dist0 * 5f64.to_radians().tan() && dh < 3_000.0 * FT;
-                    if at_exit || short || agl < 1_200.0 * FT {
+                    // Sortie au point de tangence seulement près de la hauteur du profil (sinon un tour de plus)
+                    let at_exit = on_circle && theta.to_degrees() < 10.0 && dh < 1_200.0 * FT;
+                    // Pas assez de hauteur pour finir l'arc : on coupe tout droit vers le point de tangence
+                    // Cible du raccourci : point de l'axe un peu devant l'avion (jamais derrière)
+                    let a_t = (along - 1.5 * NM).clamp(2.0 * NM, hac_along);
+                    let (ptl, pto) = destination(tla, tlo, wrap360(hdg + 180.0), a_t);
+                    let (dt_t, bt_t) = dist_brg(self.lat, self.lon, ptl, pto);
+                    // Raccourci seulement si sa pente est plus proche de la pente nominale (~8°) que
+                    // celle de l'arc restant, et que l'arc serait trop plat
+                    let g_arc = (dh.max(0.0) / dist0.max(300.0)).atan().to_degrees();
+                    let g_short = ((agl - dead_stick_path(a_t)).max(0.0) / dt_t.max(300.0)).atan().to_degrees();
+                    let short = on_circle && (g_arc < 2.5 || (g_arc < 4.0 && (g_short - 8.0).abs() < (g_arc - 8.0).abs()));
+                    if short || self.autoland.as_ref().unwrap().pat == 5 {
+                        self.autoland.as_mut().unwrap().pat = 5;
+                    }
+                    let direct = self.autoland.as_ref().unwrap().pat == 5;
+                    let reached = direct && (dt_t < 0.6 * NM || cross.abs() < 0.3 * NM);
+                    if at_exit || reached || agl < 1_200.0 * FT {
                         let al = self.autoland.as_mut().unwrap();
                         al.holding = false;
                         al.gs_captured = true;
-                        say = Some("AUTOLAND PLANE : SORTIE DU CONE D'ALIGNEMENT — FINALE".into());
+                        al.pat = 0;
+                        say = Some(format!("AUTOLAND PLANE : SORTIE DU CONE D'ALIGNEMENT — FINALE ({})", if at_exit { "TANGENCE" } else if reached { "RACCOURCI" } else { "BAS" }));
                     } else {
                         let n = ((dh.max(0.0) / 10f64.to_radians().tan() - dist0) / lap).round().max(0.0);
                         let gamma_req = (dh.max(0.0) / (dist0 + n * lap).max(600.0)).atan().to_degrees();
-                        let mut gamma_cmd = -gamma_req.clamp(6.0, 15.0);
-                        if self.d.keas < tgt - 20.0 {
-                            gamma_cmd -= ((tgt - 20.0 - self.d.keas) * 0.3).min(8.0);
+                        if direct {
+                            self.ap.hdg_tgt = bt_t;
+                        }
+                        // En route vers le cercle : vitesse tenue ; sur le cercle : pente planifiée
+                        let mut gamma_cmd = if on_circle && !direct { -gamma_req.clamp(3.0, 15.0) } else { (-6.0 + (self.d.keas - tgt) * 0.25).clamp(-15.0, -2.0) };
+                        // Vitesse prioritaire : trop lent → plus de pente ; trop vite → moins de pente
+                        // La marge de vitesse (VAPP + 60) sert de réserve d'énergie ; plancher VAPP + 15
+                        if self.d.keas < va + 15.0 {
+                            gamma_cmd -= ((va + 15.0 - self.d.keas) * 0.3).min(8.0);
+                        } else if self.d.keas > tgt + 25.0 {
+                            gamma_cmd = (gamma_cmd + (self.d.keas - tgt - 25.0) * 0.3).min(-3.0);
                         }
                         self.speedbrake = self.d.keas > tgt + 10.0;
                         self.ap.vert = VertMode::Pitch;
@@ -375,7 +399,8 @@ impl Aircraft {
                 let slope = -path_gamma;
                 let err = h_path - agl;
                 // Correction d'écart douce sous 1500 ft (pas de plongée après le pré-arrondi)
-                let corr = if agl < 1_500.0 * FT { (err / 150.0).clamp(-1.5, 2.5) } else { (err / 60.0).clamp(-5.0, 5.0) };
+                // Au-dessus du profil, la finale peut plonger jusqu'à ~19° (aérofreins par l'énergie)
+                let corr = if agl < 1_500.0 * FT { (err / 150.0).clamp(-1.5, 2.5) } else { (err / 60.0).clamp(-10.0, 5.0) };
                 let mut gamma_cmd = path_gamma + corr;
                 // Protection de vitesse : sous VAPP - 10, on plonge pour garder l'énergie
                 let va = vapp(self);
@@ -415,7 +440,7 @@ impl Aircraft {
                     }
                 }
                 // Arrondi déclenché d'autant plus haut que le taux de chute est fort
-                if agl < 15.0 + (-self.d.vs).max(0.0) * 3.0 && along < 300.0 {
+                if agl < 15.0 + (-self.d.vs).max(0.0) * 4.5 && along < 2.0 * NM {
                     next = AlPhase::Flare;
                     self.speedbrake = false;
                     say = Some("AUTOLAND PLANE : FLARE".into());

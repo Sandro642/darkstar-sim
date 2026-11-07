@@ -969,7 +969,9 @@ impl Aircraft {
             let cur = if self.ap.lat == LatMode::Hdg { self.hdg_deg() } else { self.track_deg() };
             let err = wrap180(hdg_cmd - cur);
             // AP MAX : inclinaison du virage en palier au facteur de charge maximal de la loi
-            let bank_lim = if perf { (1.0 / (nz_law * 0.95)).acos().to_degrees().min(67.0) } else if mach > 3.0 { 35.0 } else { 30.0 };
+            // Plané sans moteur : virages à 45° (spirale serrée de gestion d'énergie)
+            let dead_stick = self.autoland.as_ref().is_some_and(|a| a.dead_stick);
+            let bank_lim = if perf { (1.0 / (nz_law * 0.95)).acos().to_degrees().min(67.0) } else if dead_stick { 45.0 } else if mach > 3.0 { 35.0 } else { 30.0 };
             let gain = if perf { 3.0 } else { 2.0 };
             let phi_cmd = (err * gain).clamp(-bank_lim, bank_lim).to_radians();
             let rr = if perf { 1.0 } else { 0.5 };

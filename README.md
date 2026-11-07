@@ -483,3 +483,8 @@ Le SR-72 est un avion de reconnaissance : sa charge utile est simulée.
   **DA** réglable (`DA 250`, seuil + hauteur), affichée sur l'altimètre (cyan, ambre en dessous),
   repère MIN calé dessus ; annonces 1000, 500, 100 ABOVE, APPROACHING MINIMUMS, MINIMUMS,
   50-40-30-20-10, RETARD.
+- v1.30.2 : EMERGENCY OVERRIDE — arrivée par le sud-ouest corrigée : cône d'alignement à rayon
+  adapté (virages à 45° en plané), sortie au point de tangence seulement près du profil, vitesse
+  tenue en approche du cercle, raccourci vers l'axe choisi selon la pente, finale pouvant plonger
+  jusqu'à ~19° aérofreins sortis, arrondi anticipé à fort taux de chute. Essais : FL459 à 16 NM,
+  FL300 au nord, FL250 au sud-ouest → posés sur la piste sans poussée.
