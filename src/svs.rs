@@ -264,12 +264,6 @@ pub fn look_basis(ac: &Aircraft, cam: Cam) -> (Vec3, Vec3) {
     (fwd, right1.cross(fwd).normalize())
 }
 
-/// Fenêtre d'affichage (pixels physiques) d'un rectangle écran.
-pub fn viewport(rect: Rect) -> (i32, i32, i32, i32) {
-    let dpi = screen_dpi_scale();
-    ((rect.x * dpi) as i32, ((screen_height() - rect.y - rect.h) * dpi) as i32, (rect.w * dpi) as i32, (rect.h * dpi) as i32)
-}
-
 #[allow(clippy::too_many_arguments)]
 pub fn draw_svs(world: &World, tiles: &mut Tiles, wx: &crate::weather::Weather, rf: &crate::refuel::Refuel, ac: &Aircraft, rect: Rect, time: f64, style: SvsStyle, cam: Cam) -> View {
     let dark = style == SvsStyle::Darkstar;

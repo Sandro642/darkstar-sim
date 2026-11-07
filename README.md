@@ -352,3 +352,4 @@ Le SR-72 est un avion de reconnaissance : sa charge utile est simulée.
   tubes, chanfreins réels, occlusion ambiante cuite par Cycles, ~27 000 faces ; chargé depuis
   `assets/cockpit.obj` et rendu avec un vrai tampon de profondeur (occlusion exacte), leviers de
   manette animés.
+- v1.19.0 : vue cockpit retirée (touche K, commande COCKPIT, modèle 3D) ; retour à la station sol seule.
