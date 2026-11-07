@@ -250,3 +250,5 @@ Le SR-72 est un avion de reconnaissance : sa charge utile est simulée.
 - **Infos éphémères façon HUD** : vent, RWR, couloir hypersonique et énergie apparaissent quand elles
   changent ou deviennent critiques puis s'effacent ; survol de l'horizon à la souris ou `HUD` (10 s)
   pour tout afficher.
+- v1.9.1 : portée d'accrochage de la caméra portée à 80° hors verticale (≈ 155 km devant à 90 000 ft),
+  indicateur « LOCK CIBLE » et compte à rebours « LOCK DANS ... » dans le volet caméra.

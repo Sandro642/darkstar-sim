@@ -16,7 +16,8 @@ use macroquad::prelude::*;
 pub const ZOOMS: [f64; 6] = [1.0, 2.0, 4.0, 8.0, 16.0, 32.0];
 const FOV_DEG: f64 = 40.0;
 const SENSOR_PX: f64 = 4000.0;
-const GIMBAL_MAX_DEG: f64 = 60.0;
+/// Dépointage maximal de la tourelle : accrochage de l'objectif loin devant (≈ 155 km à 90 000 ft).
+const GIMBAL_MAX_DEG: f64 = 80.0;
 const STORAGE_GB: f64 = 512.0;
 const IMG_GB: f64 = 1.6;
 const SAR_GB: f64 = 4.0;
@@ -282,6 +283,27 @@ impl Recon {
             }
         }
         (ac.lat, ac.lon, 0.0)
+    }
+
+    /// Portée au sol de l'accrochage de la tourelle (m).
+    pub fn lock_range(&self, ac: &Aircraft) -> f64 {
+        agl(ac) * GIMBAL_MAX_DEG.to_radians().tan()
+    }
+
+    /// Accrochage de l'objectif sélectionné : Some(0) si accroché, Some(t) = secondes avant
+    /// accrochage s'il se rapproche, None sinon.
+    pub fn lock_eta(&self, ac: &Aircraft) -> Option<f64> {
+        let t = &self.targets[self.selected];
+        if !self.track || !matches!(t.kind, Kind::Imint(_)) || t.done() {
+            return None;
+        }
+        let (d, brg) = dist_brg(ac.lat, ac.lon, t.lat, t.lon);
+        let lr = self.lock_range(ac);
+        if d <= lr {
+            return Some(0.0);
+        }
+        let closing = ac.ground_speed() * (brg - ac.track_deg()).to_radians().cos();
+        (closing > 1.0).then(|| (d - lr) / closing)
     }
 
     fn slant(&self, ac: &Aircraft) -> f64 {
@@ -923,6 +945,19 @@ pub fn draw_camera(ac: &Aircraft, rc: &Recon, tiles: &mut Tiles, r: Rect) -> Opt
         if off > 0.0 {
             txt_r(&format!("DEP {:.0} deg  OBL {:.0} km", off.to_degrees(), rc.slant(ac) / 1000.0), img.x + img.w - 6.0, img.y + 30.0, 11.0, CYAN_S);
         }
+        // Accrochage de l'objectif : LOCK ou compte à rebours
+        match rc.lock_eta(ac) {
+            Some(t) if t <= 0.0 => {
+                let b = Rect::new(img.x + 8.0, img.y + 8.0, 120.0, 18.0);
+                rrect(b, 4.0, Color::new(0.0, 0.3, 0.1, 0.8));
+                rrect_lines(b, 4.0, 1.5, GREEN_S);
+                txt_c(&format!("LOCK CIBLE {}", rc.targets[rc.selected].code), b.x + b.w / 2.0, b.y + 13.0, 12.0, GREEN_S);
+            }
+            Some(t) => {
+                txt(&format!("LOCK CIBLE {} DANS {}", rc.targets[rc.selected].code, crate::mission::fmt_time(t)), img.x + 8.0, img.y + 20.0, 12.0, CYAN_S);
+            }
+            None => {}
+        }
         draw_rectangle_lines(img.x, img.y, img.w, img.h, 1.0, Color::new(0.5, 0.52, 0.55, 1.0));
     } else {
         txt_c("Camera Zoom Elevation :N/A", r.x + r.w / 2.0 - 10.0, r.y + 17.0, 13.0, WHITE);
@@ -1174,6 +1209,7 @@ fn page_sensors(ac: &Aircraft, rc: &Recon, b: Rect, link_name: &str) -> Option<R
     let (_, _, off) = rc.los(ac);
     line(&mut ry, "LARGEUR IMAGE", format!("{:.2} km", rc.footprint(ac) / 1000.0), WHITE);
     line(&mut ry, "RESOLUTION (GSD)", format!("{:.2} m", rc.gsd(ac)), WHITE);
+    line(&mut ry, "PORTEE DE LOCK (80 deg)", format!("{:.0} km", rc.lock_range(ac) / 1000.0), CYAN_S);
     line(&mut ry, "DEPOINTAGE / DISTANCE", format!("{:.0} deg / {:.0} km", off.to_degrees(), rc.slant(ac) / 1000.0), if off > 0.0 { CYAN_S } else { WHITE });
     line(&mut ry, "QUALITE CAMERA", format!("NIIRS {q:.1}"), if why.is_some() { AMBER } else { GREEN_S });
     if let Some(w) = why {
