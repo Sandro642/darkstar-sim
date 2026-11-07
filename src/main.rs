@@ -106,6 +106,8 @@ struct Game {
     last_ok: mishap::Snapshot,
     /// Dernier état complet du véhicule avant sa perte (deuxième chance).
     last_ac: Option<Aircraft>,
+    /// Panneau d'alarmes resté allumé après une récupération (jusqu'à TOUT RÉPARER).
+    tree: Option<[u8; 32]>,
     muted: bool,
     thermal: thermal::ThermalSys,
     style: svs::SvsStyle,
@@ -272,6 +274,7 @@ impl Game {
             mishap: None,
             last_ok: mishap::Snapshot::default(),
             last_ac: None,
+            tree: None,
             muted: false,
             thermal: thermal::ThermalSys::new(),
             style: svs::SvsStyle::Realiste,
@@ -539,6 +542,7 @@ impl Game {
     fn recover_vehicle(&mut self) {
         let mut ac = self.last_ac.clone().unwrap_or_else(|| self.ac.clone());
         let kind = self.mishap.as_ref().map(|m| m.kind);
+        let lights = self.mishap.as_ref().map(|m| m.lights()).unwrap_or([0; 32]);
         ac.crashed = None;
         ac.phi = 0.0;
         ac.gamma = -5f64.to_radians();
@@ -579,7 +583,45 @@ impl Game {
         self.link.path = link::Path::Emerg;
         self.push(Level::Warning, "2E CHANCE : LE VEHICULE REPOND ! TELEMESURE PARTIELLE VIA IRIDIUM");
         self.push(Level::Warning, "AUTONOMIE DE BORD : ASSIETTE RECUPEREE — MOTEURS PERDUS");
-        self.push(Level::Warning, "INSTRUCTIONS D'URGENCE SEULEMENT : EMERGENCY OVERRIDE (autoland plane) OU EJECTION CONFIRME");
+        self.push(Level::Warning, "INSTRUCTIONS TRANSMISES PAR IRIDIUM (LATENCE 2,5 S), MANCHE INDISPONIBLE — EMERGENCY OVERRIDE (autoland plane) OU EJECTION CONFIRME");
+        // Le panneau d'alarmes reflète l'état réel : chaque voyant de panne resté allumé devient une
+        // panne effective (les voyants de simple condition s'éteignent si la condition a cessé)
+        self.apply_tree(&lights);
+    }
+
+    /// Pannes réelles correspondant aux voyants du panneau d'alarmes (ordre de alarms::LIGHTS).
+    fn apply_tree(&mut self, l: &[u8; 32]) {
+        use systems::Fail;
+        let on = |i: usize| l[i] > 0;
+        let ac = &mut self.ac;
+        for (i, f) in [(0, Fail::GenL), (1, Fail::GenR), (10, Fail::ScramCool), (13, Fail::FuelPump), (15, Fail::H2Leak), (22, Fail::Adc), (23, Fail::FcsDirect), (26, Fail::Hyd), (28, Fail::GearJam), (29, Fail::InletJam)] {
+            if on(i) {
+                ac.set_failure(f, true);
+            }
+        }
+        for k in 0..2 {
+            if on(2 + k) {
+                ac.eng.fadec_fault[k] = true;
+            }
+            if on(4 + k) {
+                ac.eng.side[k] = TurbState::Failed;
+                ac.eng.n2s[k] = 0.0;
+            }
+        }
+        if on(4) && on(5) {
+            ac.eng.turb = TurbState::Failed;
+        }
+        if on(11) {
+            ac.eng.combustor_failed = true;
+        }
+        ac.fuel_dump |= on(16);
+        ac.h2_dump |= on(17);
+        if on(31) {
+            for s in self.thermal.sensors.iter_mut().step_by(5) {
+                s.failed = true;
+            }
+        }
+        self.tree = None;
     }
 
     /// Place l'appareil choisi sur son terrain : aligné sur la piste ou au point d'attente.
@@ -1213,11 +1255,13 @@ impl Game {
             return;
         }
         self.push(Level::Info, format!("GCS > {}", w.join(" ")));
-        // Sans liaison complète : seules les instructions locales et de liaison passent ; le canal de
-        // secours transmet aussi les instructions d'urgence
+        // Sans liaison : seules les instructions locales et de liaison passent. Le canal de secours
+        // transmet toutes les instructions (avec sa latence) ; c'est l'avion qui refuse celles qu'il
+        // ne peut pas exécuter (moteurs détruits...)
         const LOCAL: [&str; 18] = ["AIDE", "HELP", "HUD", "INFOS", "METEO", "WX", "WEATHER", "RESSENTI", "FEEL", "PANNE", "PANNES", "FAIL", "MAJ", "RECONNEXION", "RECONNECT", "RELAIS", "LIAISON", "INCIDENT"];
         const EMERG: [&str; 5] = ["EMERGENCY", "URGENCE", "MAYDAY", "EJECTION", "EJECT"];
-        if !self.link.full() && !LOCAL.contains(&w[0]) && !(self.link.emergency_ok() && EMERG.contains(&w[0])) && !self.onboard {
+        let _ = EMERG;
+        if !self.link.emergency_ok() && !LOCAL.contains(&w[0]) && !self.onboard {
             self.cues.push(audio::Cue::Refused);
             self.push(Level::Caution, "LIAISON PERDUE — INSTRUCTION NON TRANSMISE (RECONNEXION / RELAIS)");
             return;
@@ -2007,9 +2051,18 @@ async fn main() {
     let mut map_full = false;
     let mut frame = 0u64;
 
+    // Instructions différées pour les essais : DARKSTAR_LATE="1400:CAP 090;1500:TURB START"
+    let late: Vec<(u64, String)> = std::env::var("DARKSTAR_LATE")
+        .unwrap_or_default()
+        .split(';')
+        .filter_map(|c| c.split_once(':').and_then(|(f, cmd)| f.trim().parse().ok().map(|f| (f, cmd.to_string()))))
+        .collect();
     loop {
         let real_dt = (get_frame_time() as f64).min(0.05);
         frame += 1;
+        for (_, c) in late.iter().filter(|(f, _)| *f == frame) {
+            g.exec_command(c);
+        }
 
         if is_key_pressed(KeyCode::Tab) {
             show_help = !show_help;
@@ -2201,13 +2254,16 @@ async fn main() {
                     }
                 }
                 gcs::Tab::Moteurs => panels::draw_engines(&g.ac, &g.chambers, cr, time),
-                gcs::Tab::Alarmes => match alarms::draw_alarms(&g.ac, &alerts, cr, time, g.mishap.as_ref().map(|m| m.lights())) {
+                gcs::Tab::Alarmes => match alarms::draw_alarms(&g.ac, &alerts, cr, time, g.mishap.as_ref().map(|m| m.lights()).or(g.tree)) {
                     Some(alarms::AlarmAction::Toggle(f)) => {
                         let on = !g.ac.fails.has(f);
                         g.ac.set_failure(f, on);
                         g.cues.push(audio::Cue::Ack);
                     }
-                    Some(alarms::AlarmAction::RepairAll) => g.exec_command("PANNES OFF"),
+                    Some(alarms::AlarmAction::RepairAll) => {
+                        g.tree = None;
+                        g.exec_command("PANNES OFF");
+                    }
                     None => {}
                 },
                 gcs::Tab::Limites => limits::draw_limits(&g.ac, cr),

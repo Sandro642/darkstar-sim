@@ -159,27 +159,63 @@ impl Mishap {
         };
         let mut msgs: Vec<(f64, Level, String)> = script.into_iter().map(|(t, l, s)| (t, l, s.to_string())).collect();
         msgs.push((t_los, Level::Warning, "LOS — PERTE DU SIGNAL TELEMETRIE".into()));
-        // Panneau d'alarmes : voyants propres à la cause d'abord, puis la cascade (sapin de Noël)
-        let primary: &[usize] = match kind {
-            Kind::Structural => &[21, 23, 26, 22, 18, 4, 5, 29],
-            Kind::Explosion => &[11, 10, 8, 6, 7, 15, 4, 5, 19],
-            Kind::Missile => &[4, 5, 15, 12, 13, 26, 23, 20],
-            Kind::Electrical => &[0, 1, 30, 2, 3, 27],
-            Kind::Impact => &[28, 26, 23, 4, 5],
-            Kind::SelfDestruct => &[16, 17, 27, 30],
+        // Panneau d'alarmes : voyants touchés par l'incident, puis ceux des systèmes raccordés
+        // (dépendances : moteurs → génératrices et hydraulique, électricité → calculateurs...)
+        let c = cause.to_uppercase();
+        let primary: Vec<usize> = match kind {
+            Kind::Structural if c.contains("GOUVERNES") => vec![23, 26, 21, 22],
+            Kind::Structural if c.contains("FACTEUR") => vec![18, 23, 26, 15, 13],
+            Kind::Structural if c.contains("PRESSION") => vec![21, 20, 22, 26],
+            Kind::Structural => vec![20, 19, 7],
+            Kind::Explosion if c.contains("SCRAM") => vec![11, 10, 15],
+            Kind::Explosion => vec![11, 8],
+            Kind::Missile => vec![4, 5, 15, 13, 26],
+            Kind::Electrical => vec![0, 1, 30],
+            Kind::Impact => vec![28, 4, 5],
+            Kind::SelfDestruct => vec![16, 17, 30],
         };
-        let mut rng = Rng(0x9E37_79B9_7F4A_7C15 ^ (snap.lat.to_bits() >> 3) ^ snap.lon.to_bits());
-        let mut lights = [(f64::INFINITY, 0u8); 32];
-        for (k, &i) in primary.iter().enumerate() {
-            lights[i] = (0.05 + k as f64 * 0.12, 2);
-        }
-        let span = (t_los * 0.95).max(0.8);
-        for (i, l) in lights.iter_mut().enumerate() {
-            if l.0.is_infinite() && rng.f() < 0.9 {
-                let lvl = if rng.f() < 0.65 { 2 } else { 1 };
-                *l = (0.4 + rng.f() * span, lvl);
+        // Voyant → voyants des systèmes raccordés (ordre de alarms::LIGHTS)
+        let deps = |i: usize| -> &'static [usize] {
+            match i {
+                4 => &[0, 2],          // moteur G : génératrice G, FADEC G
+                5 => &[1, 3],          // moteur D : génératrice D, FADEC D
+                11 => &[4, 5, 6],      // chambre : les deux moteurs, EGT
+                8 | 10 => &[11],       // parois : chambre
+                15 => &[14],           // fuite H2 : niveau H2
+                13 => &[12],           // pression carburant : niveau
+                26 => &[23, 28, 29],   // hydraulique : FCS, train, portes d'entrée d'air
+                22 => &[23],           // données air : FCS en loi directe
+                21 => &[20],           // survitesse : peau
+                30 => &[27, 31, 22, 2, 3], // électricité : BIT, capteurs, centrale aéro, FADEC
+                _ => &[],
             }
-            let _ = i;
+        };
+        let mut lights = [(f64::INFINITY, 0u8); 32];
+        let mut rng = Rng(0x9E37_79B9_7F4A_7C15 ^ (snap.lat.to_bits() >> 3) ^ snap.lon.to_bits());
+        let mut frontier: Vec<(usize, f64)> = primary.iter().enumerate().map(|(k, &i)| (i, 0.05 + k as f64 * 0.15)).collect();
+        // Deux moteurs perdus : plus de génératrices ni d'hydraulique
+        let mut seen = std::collections::HashSet::new();
+        while let Some((i, t)) = frontier.pop() {
+            if !seen.insert(i) {
+                continue;
+            }
+            lights[i] = (t, if [6, 7, 12, 14, 16, 17, 18, 19, 20, 27, 31].contains(&i) { 1 } else { 2 });
+            for &d in deps(i) {
+                frontier.push((d, t + 0.4 + rng.f() * 0.5));
+            }
+            if seen.contains(&4) && seen.contains(&5) && !seen.contains(&26) {
+                frontier.push((26, t + 0.6));
+            }
+            if seen.contains(&0) && seen.contains(&1) && !seen.contains(&30) {
+                frontier.push((30, t + 0.6));
+            }
+        }
+        // Tout s'allume avant la perte du signal
+        let tmax = lights.iter().filter(|l| l.0.is_finite()).map(|l| l.0).fold(0.0, f64::max);
+        if tmax > t_los * 0.9 {
+            for l in lights.iter_mut().filter(|l| l.0.is_finite()) {
+                l.0 *= t_los * 0.9 / tmax;
+            }
         }
         Mishap { second: Second::Available, start: now_s(), cause: cause.to_string(), kind, t_los, msgs, next: 0, lights, snap }
     }

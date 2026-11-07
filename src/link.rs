@@ -266,7 +266,7 @@ impl Link {
                         self.state = State::Connected;
                         self.path = path;
                         self.events.push((Level::Info, if path == Path::Emerg {
-                            "LIAISON DE SECOURS IRIDIUM ETABLIE — INSTRUCTIONS D'URGENCE SEULEMENT".to_string()
+                            "LIAISON DE SECOURS IRIDIUM ETABLIE — INSTRUCTIONS SEULEMENT (LATENCE 2,5 S), PAS DE MANCHE".to_string()
                         } else {
                             format!("LIAISON ETABLIE AVEC DARKSTAR {} VIA {}", tail(), path.name())
                         }));
@@ -293,7 +293,7 @@ pub fn draw_lost(link: &Link, last: &Aircraft, r: macroquad::prelude::Rect, time
     let connecting = matches!(link.state, State::Connecting { .. });
     let blink = (time * 2.0).fract() < 0.65;
     let title = if emerg {
-        "LIAISON DE SECOURS IRIDIUM — URGENCE SEULEMENT".to_string()
+        "LIAISON DE SECOURS IRIDIUM".to_string()
     } else if connecting {
         "LIAISON PERDUE — TENTATIVE EN COURS".to_string()
     } else {
@@ -309,7 +309,7 @@ pub fn draw_lost(link: &Link, last: &Aircraft, r: macroquad::prelude::Rect, time
         txt_c(&title, b.x + b.w / 2.0, b.y + 20.0, 14.0, if emerg { CYAN_S } else { AMBER });
     }
     let sub = if emerg {
-        "EMERGENCY OVERRIDE (autoland plane)  ou  EJECTION CONFIRME"
+        "INSTRUCTIONS POSSIBLES (LATENCE 2,5 S), MANCHE INDISPONIBLE"
     } else {
         "TELEMESURE FIGEE — PROCEDURE AUTONOME : MAINTIEN CAP / ALTITUDE"
     };
@@ -319,7 +319,7 @@ pub fn draw_lost(link: &Link, last: &Aircraft, r: macroquad::prelude::Rect, time
         let row = Rect::new(b.x + 10.0, b.y + 50.0 + k as f32 * 21.0, b.w - 20.0, 19.0);
         let est = link.estimate(*p, last);
         let (state, c) = match (&est, p) {
-            (_, Path::Emerg) => ("URGENCE SEULE".to_string(), CYAN_S),
+            (_, Path::Emerg) => ("LENT, SANS MANCHE".to_string(), CYAN_S),
             (Ok((lat, m)), _) => (format!("POSSIBLE  {lat:.0} ms{}", if *m < 0.15 { "  LIMITE" } else { "" }), GREEN_S),
             (Err(why), _) => (format!("{why} (estime)"), DIM),
         };

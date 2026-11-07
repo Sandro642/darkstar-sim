@@ -456,3 +456,10 @@ Le SR-72 est un avion de reconnaissance : sa charge utile est simulée.
   alerte et la rupture.
 - v1.29.3 : deuxième chance garantie — le véhicule répond toujours à la reconnexion par le secours
   Iridium, sauf s'il a percuté le sol (ou s'est autodétruit après éjection).
+- v1.29.4 : après la reconnexion de secours, **toutes les instructions** passent par Iridium
+  (latence 2,5 s, manche indisponible) ; l'avion refuse ce qu'il ne peut pas exécuter.
+  **Panneau d'alarmes cohérent** : le « sapin de Noël » n'allume que les systèmes touchés par
+  l'incident puis ceux qui en dépendent (moteurs → génératrices / FADEC / hydraulique,
+  hydraulique → FCS / train / portes d'entrée d'air, électricité → calculateurs...) ; à la
+  récupération, chaque voyant de panne allumé devient une panne réelle (FCS en loi directe,
+  hydraulique, génératrices, train bloqué → sortie par gravité en autoland plané...).

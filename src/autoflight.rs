@@ -279,7 +279,12 @@ impl Aircraft {
                 // Vitesse tenue aux aérofreins sur la pente extérieure
                 self.speedbrake = slope > 5.0 && self.d.keas > DS_KEAS.max(va + 55.0);
                 if along < 2.0 * NM && !self.gear_down {
-                    self.cmd_gear();
+                    // Train bloqué : sortie de secours par gravité
+                    if self.fails.has(crate::systems::Fail::GearJam) {
+                        self.cmd_gear_alt();
+                    } else {
+                        self.cmd_gear();
+                    }
                 }
                 // Arrondi déclenché d'autant plus haut que le taux de chute est fort
                 if agl < 15.0 + (-self.d.vs).max(0.0) * 3.0 && along < 300.0 {
