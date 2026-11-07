@@ -38,10 +38,10 @@ impl View {
     }
 }
 
-struct SvsCam {
-    mat: Mat4,
-    vp: (i32, i32, i32, i32),
-    depth: bool,
+pub struct SvsCam {
+    pub mat: Mat4,
+    pub vp: (i32, i32, i32, i32),
+    pub depth: bool,
 }
 
 impl Camera for SvsCam {
@@ -252,10 +252,8 @@ impl Default for Cam {
     }
 }
 
-#[allow(clippy::too_many_arguments)]
-pub fn draw_svs(world: &World, tiles: &mut Tiles, wx: &crate::weather::Weather, rf: &crate::refuel::Refuel, ac: &Aircraft, rect: Rect, time: f64, style: SvsStyle, cam: Cam) -> View {
-    let dark = style == SvsStyle::Darkstar;
-    let dpi = screen_dpi_scale();
+/// Axes de visée (avant, haut) en repère monde local pour le regard du pilote.
+pub fn look_basis(ac: &Aircraft, cam: Cam) -> (Vec3, Vec3) {
     let (fwd0, up0, _) = basis(ac);
     // Regard du pilote : lacet autour de l'axe vertical avion, puis site
     let (sy, cy) = (-cam.yaw.to_radians()).sin_cos();
@@ -263,7 +261,20 @@ pub fn draw_svs(world: &World, tiles: &mut Tiles, wx: &crate::weather::Weather, 
     let right1 = fwd1.cross(up0).normalize();
     let (sp, cp) = cam.pitch.to_radians().sin_cos();
     let fwd = (fwd1 * cp + up0 * sp).normalize();
-    let up = right1.cross(fwd).normalize();
+    (fwd, right1.cross(fwd).normalize())
+}
+
+/// Fenêtre d'affichage (pixels physiques) d'un rectangle écran.
+pub fn viewport(rect: Rect) -> (i32, i32, i32, i32) {
+    let dpi = screen_dpi_scale();
+    ((rect.x * dpi) as i32, ((screen_height() - rect.y - rect.h) * dpi) as i32, (rect.w * dpi) as i32, (rect.h * dpi) as i32)
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn draw_svs(world: &World, tiles: &mut Tiles, wx: &crate::weather::Weather, rf: &crate::refuel::Refuel, ac: &Aircraft, rect: Rect, time: f64, style: SvsStyle, cam: Cam) -> View {
+    let dark = style == SvsStyle::Darkstar;
+    let dpi = screen_dpi_scale();
+    let (fwd, up) = look_basis(ac, cam);
     let fovy = cam.fovy;
     // Plan proche adapté à la hauteur : précision du tampon de profondeur pour le relief
     let mut near = ((ac.alt - ac.d.elev) * 0.02).clamp(1.5, 1_500.0) as f32;

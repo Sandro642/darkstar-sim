@@ -328,3 +328,14 @@ Le SR-72 est un avion de reconnaissance : sa charge utile est simulée.
 - **Clic droit glissé** : tourner la tête (l'intérieur suit) ; double clic droit : recentrer.
 - **H** : se pencher vers l'écran Darkstar (affiché en grand) ; `COCKPIT HUD` : HUD vert facultatif
   (le Darkstar n'en a pas). K de nouveau : retour à la station sol.
+
+## Cockpit 3D texturé (v1.15.0)
+- La vue cockpit (K) est désormais un **vrai cockpit 3D** dans le repère de l'avion, rendu avec la même
+  caméra que la vue extérieure (parallaxe réelle en tournant la tête au clic droit) : arceaux de
+  verrière, plafond, **pyramide centrale**, appuis de fenêtres nervurés, consoles latérales à boutons
+  éclairés, plancher antidérapant, manche avec soufflet, manette des gaz qui suit la poussée.
+- **Textures procédurales** générées au démarrage (métal brossé, platine vissée et biseautée, parois
+  nervurées, antidérapant, consoles, soufflet jaune/noir) et éclairage par face depuis la verrière.
+- Les instruments (écran Darkstar, écran moteurs, radio, DSPLY, jauges CG/H2, interrupteurs gardés,
+  levier et voyants de train) sont posés sur leurs emplacements 3D projetés et restent interactifs ;
+  ils se masquent quand on regarde sur le côté. H : écran Darkstar en grand.

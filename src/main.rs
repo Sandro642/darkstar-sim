@@ -8,6 +8,7 @@ mod elec;
 mod emergency;
 mod audio;
 mod cockpit;
+mod cockpit3d;
 mod combat;
 mod autoflight;
 mod fcs;
@@ -2158,6 +2159,32 @@ fn draw_debrief(lines: &[String], r: Rect) {
     ui::txt_c("ENTREE : NOUVEAU VOL   -   instruction QUITTER pour fermer", b.x + w / 2.0, b.y + b.h - 14.0, 14.0, ui::DIM);
 }
 
+/// Messages, console, infos éphémères et aide par-dessus la vue cockpit.
+fn draw_cockpit_overlays(g: &mut Game, body: Rect, time: f64) {
+    // Messages dans la fenêtre gauche, console et infos éphémères au centre
+    let mut y = body.y + body.h * 0.08;
+    for (_, lvl, m) in g.log.iter().rev().take(4).collect::<Vec<_>>().into_iter().rev() {
+        let c = match lvl {
+            Level::Warning => RED,
+            Level::Caution => ui::AMBER,
+            Level::Info => Color::new(0.92, 0.94, 0.96, 0.9),
+        };
+        let t: String = m.chars().take(60).collect();
+        ui::txt(&t, body.x + 41.0, y + 1.0, 12.0, Color::new(0.0, 0.0, 0.0, 0.7));
+        ui::txt(&t, body.x + 40.0, y, 12.0, c);
+        y += 16.0;
+    }
+    let center = Rect::new(body.x + body.w * 0.15, body.y + body.h * 0.06, body.w * 0.7, body.h * 0.5);
+    draw_console(g, center);
+    if g.ac.crashed.is_some() && !g.crash_report.is_empty() {
+        draw_crash_report(&g.crash_report, center);
+    }
+    draw_flashes(&mut g.flashes, center);
+    emergency::draw_hud(&g.emerg, &g.ac, center, time);
+    let hint = if g.mfd_zoom { "H : se rasseoir" } else { "K : station sol   H : ecran Darkstar   clic droit : regarder" };
+    ui::txt_r(hint, body.x + body.w - 20.0, body.y + 18.0, 11.0, Color::new(1.0, 1.0, 1.0, 0.55));
+}
+
 /// Vue cockpit, d'après l'intérieur du Darkstar : fenêtres latérales, pyramide centrale et écran principal.
 #[allow(clippy::too_many_arguments)]
 fn draw_cockpit(g: &mut Game, world: &world::World, tiles: &mut tiles::Tiles, alerts: &[(Level, String)], body: Rect, time: f64, warp: f64, ln: &str, lat: f64) {
@@ -2182,71 +2209,72 @@ fn draw_cockpit(g: &mut Game, world: &world::World, tiles: &mut tiles::Tiles, al
     // Vue extérieure plein écran, intérieur par-dessus
     let cam = svs::Cam { fovy: cockpit::FOVY, yaw: g.look.0, pitch };
     let view = svs::draw_svs(world, tiles, &g.wx, &g.refuel, &g.ac, body, time, svs::SvsStyle::Realiste, cam);
-    let lay = cockpit::layout(body, (g.look.0, pitch), mfd::COCKPIT_ASPECT);
     if g.cockpit_hud && g.look.0.abs() < 35.0 && g.ac.crashed.is_none() {
         let warn = alerts.iter().find(|(l, _)| *l == Level::Warning).map(|(_, s)| s.as_str());
         let hud_r = Rect::new(body.x + body.w * 0.30, body.y + body.h * 0.04, body.w * 0.40, body.h * 0.26);
         cockpit::hud(&g.ac, &view, hud_r, &hud_modes(&g.ac), warn, time);
     }
-    cockpit::interior(&lay, g.ac.throttle as f32);
-    // Instruments de la pyramide centrale
-    cockpit::radio(lay.radio, if g.emerg.mode.is_some() { "7700" } else { "1200" });
-    cockpit::dsply(lay.dsply);
-    cockpit::plate(lay.engines);
-    let er = lay.engines;
-    draw_rectangle(er.x + 8.0, er.y + 8.0, er.w - 16.0, er.h - 16.0, Color::new(0.13, 0.135, 0.14, 1.0));
-    panels::draw_nacelles(&g.ac, Rect::new(er.x + 10.0, er.y + 10.0, er.w - 20.0, er.h - 20.0), time);
-    cockpit::dial(lay.cg.0, lay.cg.1, ((g.ac.cg() - 14.0) / 16.0) as f32, "CG %", &["14", "18", "22", "26", "30"]);
-    cockpit::dial(lay.h2.0, lay.h2.1, (g.ac.h2_psi() / 200.0) as f32, "H2 psi", &["0", "50", "100", "150", "200"]);
+    // Cockpit 3D texturé, puis instruments posés sur leurs emplacements projetés
+    let sp = cockpit3d::draw(&g.ac, body, cam, g.ac.throttle as f32);
+    if let Some(r) = sp.radio {
+        cockpit::radio(r, if g.emerg.mode.is_some() { "7700" } else { "1200" });
+    }
+    if let Some(r) = sp.dsply {
+        cockpit::dsply(r);
+    }
+    if let Some(er) = sp.engines {
+        cockpit::plate(er);
+        draw_rectangle(er.x + 4.0, er.y + 4.0, er.w - 8.0, er.h - 8.0, Color::new(0.13, 0.135, 0.14, 1.0));
+        panels::draw_nacelles(&g.ac, Rect::new(er.x + 5.0, er.y + 5.0, er.w - 10.0, er.h - 10.0), time);
+    }
+    if let Some((c, r)) = sp.cg {
+        cockpit::dial(c, r, ((g.ac.cg() - 14.0) / 16.0) as f32, "CG %", &["14", "18", "22", "26", "30"]);
+    }
+    if let Some((c, r)) = sp.h2 {
+        cockpit::dial(c, r, (g.ac.h2_psi() / 200.0) as f32, "H2 psi", &["0", "50", "100", "150", "200"]);
+    }
     let (scram_on, fuel_dump, h2_dump) = (g.ac.eng.scram != ScramState::Off, g.ac.fuel_dump, g.ac.h2_dump);
-    if cockpit::guarded(lay.switches[0], "SCRAM ENABLE", scram_on, time) {
-        g.apply_switch(gcs::Switch::ScramEnable);
+    if let Some(r) = sp.switches[0] {
+        if cockpit::guarded(r, "SCRAM ENABLE", scram_on, time) {
+            g.apply_switch(gcs::Switch::ScramEnable);
+        }
     }
-    if cockpit::guarded(lay.switches[1], "EMER FUEL DUMP", fuel_dump, time) {
-        g.apply_switch(gcs::Switch::FuelDump);
+    if let Some(r) = sp.switches[1] {
+        if cockpit::guarded(r, "EMER FUEL DUMP", fuel_dump, time) {
+            g.apply_switch(gcs::Switch::FuelDump);
+        }
     }
-    if cockpit::guarded(lay.switches[2], "EMER H2 DUMP", h2_dump, time) {
-        g.apply_switch(gcs::Switch::H2Dump);
+    if let Some(r) = sp.switches[2] {
+        if cockpit::guarded(r, "EMER H2 DUMP", h2_dump, time) {
+            g.apply_switch(gcs::Switch::H2Dump);
+        }
     }
-    if cockpit::gear_lever(lay.gear, g.ac.gear_down) {
-        g.ac.cmd_gear();
-        g.cues.push(audio::Cue::Ack);
+    if let Some(r) = sp.gear {
+        if cockpit::gear_lever(r, g.ac.gear_down) {
+            g.ac.cmd_gear();
+            g.cues.push(audio::Cue::Ack);
+        }
     }
-    let unsafe_gear = alerts.iter().any(|(_, a)| a == "TOO LOW — GEAR");
-    pfd::draw_gear(&g.ac, lay.greens.x + 40.0, lay.greens.y, time, unsafe_gear);
+    if let Some(c) = sp.greens {
+        let unsafe_gear = alerts.iter().any(|(_, a)| a == "TOO LOW — GEAR");
+        pfd::draw_gear(&g.ac, c.x, c.y, time, unsafe_gear);
+    }
     // Écran Darkstar : sur la pyramide, ou agrandi (touche H : se pencher vers l'écran)
     let mfd_r = if g.mfd_zoom {
         draw_rectangle(body.x, body.y, body.w, body.h, Color::new(0.0, 0.0, 0.0, 0.55));
         let h = (body.h * 0.94).min(body.w * 0.9 / mfd::COCKPIT_ASPECT);
-        Rect::new(body.x + (body.w - h * mfd::COCKPIT_ASPECT) / 2.0, body.y + (body.h - h) / 2.0, h * mfd::COCKPIT_ASPECT, h)
+        Some(Rect::new(body.x + (body.w - h * mfd::COCKPIT_ASPECT) / 2.0, body.y + (body.h - h) / 2.0, h * mfd::COCKPIT_ASPECT, h))
     } else {
-        lay.mfd
+        sp.mfd
+    };
+    let Some(mfd_r) = mfd_r else {
+        draw_cockpit_overlays(g, body, time);
+        return;
     };
     let lit: [bool; 6] = std::array::from_fn(|i| g.tab == BEZEL_PAGES[i]);
     let info = pfd_info(g, alerts, ln, lat, warp, time);
     let (_, act) = mfd::draw_mfd(world, tiles, &g.wx, &g.refuel, &g.ac, &g.recon, mfd_r, &mut g.mfd, &info, g.style, time, lit);
     drop(info);
     handle_mfd(g, act);
-    // Messages dans la fenêtre gauche, console et infos éphémères au centre
-    let mut y = body.y + body.h * 0.08;
-    for (_, lvl, m) in g.log.iter().rev().take(4).collect::<Vec<_>>().into_iter().rev() {
-        let c = match lvl {
-            Level::Warning => RED,
-            Level::Caution => ui::AMBER,
-            Level::Info => Color::new(0.92, 0.94, 0.96, 0.9),
-        };
-        let t: String = m.chars().take(60).collect();
-        ui::txt(&t, body.x + 41.0, y + 1.0, 12.0, Color::new(0.0, 0.0, 0.0, 0.7));
-        ui::txt(&t, body.x + 40.0, y, 12.0, c);
-        y += 16.0;
-    }
-    let center = Rect::new(body.x + body.w * 0.15, body.y + body.h * 0.06, body.w * 0.7, body.h * 0.5);
-    draw_console(g, center);
-    if g.ac.crashed.is_some() && !g.crash_report.is_empty() {
-        draw_crash_report(&g.crash_report, center);
-    }
-    draw_flashes(&mut g.flashes, center);
-    emergency::draw_hud(&g.emerg, &g.ac, center, time);
-    let hint = if g.mfd_zoom { "H : se rasseoir" } else { "K : station sol   H : ecran Darkstar   clic droit : regarder" };
-    ui::txt_r(hint, body.x + body.w - 20.0, body.y + 18.0, 11.0, Color::new(1.0, 1.0, 1.0, 0.55));
+    draw_cockpit_overlays(g, body, time);
 }
