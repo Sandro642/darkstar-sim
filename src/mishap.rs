@@ -45,7 +45,16 @@ impl Snapshot {
     }
 }
 
+/// Deuxième chance : une tentative de reconnexion par le canal de secours après la perte du signal.
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub enum Second {
+    Available,
+    Trying(f64),
+    Failed,
+}
+
 pub struct Mishap {
+    pub second: Second,
     start: f64,
     pub cause: String,
     pub kind: Kind,
@@ -172,7 +181,45 @@ impl Mishap {
             }
             let _ = i;
         }
-        Mishap { start: now_s(), cause: cause.to_string(), kind, t_los, msgs, next: 0, lights, snap }
+        Mishap { second: Second::Available, start: now_s(), cause: cause.to_string(), kind, t_los, msgs, next: 0, lights, snap }
+    }
+
+    /// Probabilité que le véhicule réponde encore (selon la cause) : un avion qui a percuté le sol ou
+    /// s'est autodétruit ne répondra jamais ; une perte électrique ou une explosion moteur laisse
+    /// souvent la cellule intacte.
+    pub fn chance(&self) -> f64 {
+        let c = self.cause.to_uppercase();
+        match self.kind {
+            Kind::Impact | Kind::SelfDestruct => 0.0,
+            Kind::Electrical => 0.7,
+            Kind::Explosion => 0.5,
+            Kind::Missile => 0.25,
+            Kind::Structural if c.contains("GOUVERNES") => 0.35,
+            Kind::Structural if c.contains("FACTEUR") => 0.2,
+            Kind::Structural => 0.1,
+        }
+    }
+
+    /// Lance la tentative de deuxième chance.
+    pub fn try_second(&mut self) {
+        if self.second == Second::Available {
+            self.second = Second::Trying(now_s());
+        }
+    }
+
+    /// Résultat de la tentative (Some(vrai) : le véhicule répond) une fois la poignée de main finie.
+    pub fn second_result(&mut self) -> Option<bool> {
+        if let Second::Trying(t0) = self.second {
+            if now_s() - t0 >= 8.0 {
+                let r = (now_s() * 1000.0).fract();
+                let ok = r < self.chance();
+                if !ok {
+                    self.second = Second::Failed;
+                }
+                return Some(ok);
+            }
+        }
+        None
     }
 
     pub fn elapsed(&self) -> f64 {
@@ -219,11 +266,12 @@ impl Mishap {
         (self.elapsed() / self.t_los).clamp(0.0, 1.0) as f32
     }
 
-    /// Écran de perte du signal par-dessus l'horizon (`r` : zone centrale du PFD).
-    pub fn draw_los(&self, r: Rect) {
+    /// Écran de perte du signal par-dessus l'horizon (`r` : zone centrale du PFD). Renvoie vrai si
+    /// la deuxième chance est demandée.
+    pub fn draw_los(&self, r: Rect) -> bool {
         let e = self.elapsed() - self.t_los;
         if e < 0.0 {
-            return;
+            return false;
         }
         let blink = (e * 1.6).fract() < 0.7;
         let s = &self.snap;
@@ -265,6 +313,29 @@ impl Mishap {
             }
             txt_c(l, b.x + b.w / 2.0, y - 4.0, *sz, *c);
         }
+        // Deuxième chance : une tentative de reconnexion par le secours Iridium
+        let bt = Rect::new(b.x + b.w / 2.0 - 170.0, b.y + b.h + 8.0, 340.0, 26.0);
+        match self.second {
+            Second::Available => {
+                let hov = hovered(bt);
+                rrect(bt, 6.0, if hov { Color::new(0.08, 0.3, 0.36, 1.0) } else { Color::new(0.04, 0.18, 0.22, 0.95) });
+                rrect_lines(bt, 6.0, 1.5, CYAN_S);
+                txt_c("2E CHANCE : TENTER UNE RECONNEXION (SECOURS)", bt.x + bt.w / 2.0, bt.y + 17.0, 12.0, WHITE);
+                return clicked(bt);
+            }
+            Second::Trying(t0) => {
+                let k = ((now_s() - t0) / 8.0).clamp(0.0, 1.0) as f32;
+                rrect(bt, 6.0, Color::new(0.0, 0.0, 0.0, 0.85));
+                draw_rectangle(bt.x + 2.0, bt.y + bt.h - 5.0, (bt.w - 4.0) * k, 3.0, CYAN_S);
+                let step = crate::link::STEPS[((k * 5.0) as usize).min(4)];
+                txt_c(&format!("IRIDIUM : {step}..."), bt.x + bt.w / 2.0, bt.y + 16.0, 12.0, CYAN_S);
+            }
+            Second::Failed => {
+                rrect(bt, 6.0, Color::new(0.0, 0.0, 0.0, 0.85));
+                txt_c("AUCUNE REPONSE DU VEHICULE — PERTE CONFIRMEE", bt.x + bt.w / 2.0, bt.y + 17.0, 12.0, RED);
+            }
+        }
+        false
     }
 }
 

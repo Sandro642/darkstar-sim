@@ -6,6 +6,7 @@ mod airports;
 mod atmosphere;
 mod elec;
 mod emergency;
+mod health;
 mod link;
 mod connect;
 mod appr;
@@ -103,6 +104,8 @@ struct Game {
     mishap: Option<mishap::Mishap>,
     /// Dernière trame de télémétrie valide.
     last_ok: mishap::Snapshot,
+    /// Dernier état complet du véhicule avant sa perte (deuxième chance).
+    last_ac: Option<Aircraft>,
     muted: bool,
     thermal: thermal::ThermalSys,
     style: svs::SvsStyle,
@@ -122,6 +125,8 @@ struct Game {
     /// Écran de connexion à la flotte (démarrage).
     connect: Option<connect::ConnectUi>,
     link_msg: String,
+    /// Surveillance des chambres de combustion (courbes et état calculé).
+    chambers: health::ChamberMon,
     /// Instructions générées à bord (procédure d'urgence) : pas besoin de liaison.
     onboard: bool,
     /// Roulage automatique du point d'attente vers la piste : (points, index, cap final).
@@ -266,6 +271,7 @@ impl Game {
             crash_report: Vec::new(),
             mishap: None,
             last_ok: mishap::Snapshot::default(),
+            last_ac: None,
             muted: false,
             thermal: thermal::ThermalSys::new(),
             style: svs::SvsStyle::Realiste,
@@ -282,6 +288,7 @@ impl Game {
             stale: None,
             connect: None,
             link_msg: String::new(),
+            chambers: health::ChamberMon::new(),
             onboard: false,
             taxi: None,
             hold_apt: None,
@@ -410,7 +417,7 @@ impl Game {
         if ac.eng.combustor_failed {
             f.push("CHAMBRE DE COMBUSTION DÉTRUITE".into());
         } else if ac.eng.health < 0.3 {
-            f.push(format!("CHAMBRES DÉGRADÉES {:.0}%", ac.eng.health * 100.0));
+            f.push(format!("CHAMBRES {} — {}", self.chambers.state.label(), self.chambers.cause));
         }
         for s in self.thermal.sensors.iter().filter(|s| s.failed) {
             f.push(format!("CAPTEUR {} CIRCUIT OUVERT", s.id));
@@ -525,6 +532,54 @@ impl Game {
             link::State::Connecting { .. } => ("CONNEXION".into(), 0.0),
             _ => ("PERDUE".into(), 0.0),
         }
+    }
+
+    /// Deuxième chance réussie : le véhicule répond par le secours Iridium. L'autonomie de bord a
+    /// stabilisé l'avion, moteurs perdus ; seules les instructions d'urgence passent.
+    fn recover_vehicle(&mut self) {
+        let mut ac = self.last_ac.clone().unwrap_or_else(|| self.ac.clone());
+        let kind = self.mishap.as_ref().map(|m| m.kind);
+        ac.crashed = None;
+        ac.phi = 0.0;
+        ac.gamma = -5f64.to_radians();
+        ac.theta = ac.gamma + 4f64.to_radians();
+        // Pression dynamique ramenée sous 30 kPa (l'avion a perdu de la vitesse en se stabilisant)
+        let rho = atmosphere::isa(ac.alt).rho;
+        ac.tas = ac.tas.min((2.0 * 30_000.0 / rho).sqrt()).max(90.0);
+        ac.set_turbines(TurbState::Off, 0.0);
+        ac.eng.ram = RamState::Off;
+        ac.eng.scram = ScramState::Off;
+        ac.throttle = 0.0;
+        ac.autoland = None;
+        // Parois et peau refroidies sous leurs limites (la cellule a survécu)
+        ac.skin_temp = ac.skin_temp.min(SKIN_LIMIT_C + 273.15 - 60.0);
+        ac.eng.ram_wall = ac.eng.ram_wall.min(systems::RAM_WALL_CAUTION - 200.0);
+        ac.eng.scram_wall = ac.eng.scram_wall.min(systems::SCRAM_WALL_CAUTION - 200.0);
+        match kind {
+            Some(mishap::Kind::Electrical) => {
+                ac.elec.lost = false;
+                ac.elec.bus_ok = true;
+                ac.elec.batt = ac.elec.batt.max(0.4);
+            }
+            Some(mishap::Kind::Explosion) | Some(mishap::Kind::Missile) => ac.eng.combustor_failed = true,
+            Some(mishap::Kind::Structural) => ac.set_failure(systems::Fail::FcsDirect, true),
+            _ => {}
+        }
+        ac.ap.on = true;
+        ac.ap.at_on = false;
+        ac.ap.lat = LatMode::Hdg;
+        ac.ap.hdg_tgt = ac.hdg_deg().round();
+        ac.ap.vert = VertMode::Pitch;
+        ac.ap.pitch_tgt = -1.0;
+        self.ac = ac;
+        self.mishap = None;
+        self.crash_report.clear();
+        self.stale = None;
+        self.link.state = link::State::Connected;
+        self.link.path = link::Path::Emerg;
+        self.push(Level::Warning, "2E CHANCE : LE VEHICULE REPOND ! TELEMESURE PARTIELLE VIA IRIDIUM");
+        self.push(Level::Warning, "AUTONOMIE DE BORD : ASSIETTE RECUPEREE — MOTEURS PERDUS");
+        self.push(Level::Warning, "INSTRUCTIONS D'URGENCE SEULEMENT : EMERGENCY OVERRIDE (autoland plane) OU EJECTION CONFIRME");
     }
 
     /// Place l'appareil choisi sur son terrain : aligné sur la piste ou au point d'attente.
@@ -953,6 +1008,9 @@ impl Game {
             }
         }
 
+        if self.ac.crashed.is_none() {
+            self.chambers.update(&self.ac, sim_dt);
+        }
         // Liaison de données : bascules, perte, procédure autonome
         if self.ac.crashed.is_none() {
             let lost_now = self.link.update(&self.ac, real_dt, sim_dt);
@@ -1095,7 +1153,10 @@ impl Game {
         // Enregistreur de vol : trace continue, analyse et sauvegarde définitive au crash
         let alerts = self.alerts();
         match &mut self.mishap {
-            None if self.ac.crashed.is_none() => self.last_ok = mishap::Snapshot::of(&self.ac, self.sim_time),
+            None if self.ac.crashed.is_none() => {
+                self.last_ok = mishap::Snapshot::of(&self.ac, self.sim_time);
+                self.last_ac = Some(self.ac.clone());
+            }
             None => {
                 let cause = self.ac.crashed.clone().unwrap_or_default();
                 // Crash dès la première trame : la trame courante sert de dernière trame valide
@@ -1107,10 +1168,17 @@ impl Game {
             }
             Some(_) => {}
         }
-        if let Some(m) = &mut self.mishap {
-            for (l, s) in m.due() {
-                self.push(l, s);
-            }
+        let (due, second) = match &mut self.mishap {
+            Some(m) => (m.due(), m.second_result()),
+            None => (Vec::new(), None),
+        };
+        for (l, s) in due {
+            self.push(l, s);
+        }
+        match second {
+            Some(true) => self.recover_vehicle(),
+            Some(false) => self.push(Level::Warning, "2E CHANCE : AUCUNE REPONSE DU VEHICULE — PERTE CONFIRMEE"),
+            None => {}
         }
         if self.ac.crashed.is_some() {
             if self.crash_report.is_empty() {
@@ -1147,7 +1215,7 @@ impl Game {
         self.push(Level::Info, format!("GCS > {}", w.join(" ")));
         // Sans liaison complète : seules les instructions locales et de liaison passent ; le canal de
         // secours transmet aussi les instructions d'urgence
-        const LOCAL: [&str; 17] = ["AIDE", "HELP", "HUD", "INFOS", "METEO", "WX", "WEATHER", "RESSENTI", "FEEL", "PANNE", "PANNES", "FAIL", "MAJ", "RECONNEXION", "RECONNECT", "RELAIS", "LIAISON"];
+        const LOCAL: [&str; 18] = ["AIDE", "HELP", "HUD", "INFOS", "METEO", "WX", "WEATHER", "RESSENTI", "FEEL", "PANNE", "PANNES", "FAIL", "MAJ", "RECONNEXION", "RECONNECT", "RELAIS", "LIAISON", "INCIDENT"];
         const EMERG: [&str; 5] = ["EMERGENCY", "URGENCE", "MAYDAY", "EJECTION", "EJECT"];
         if !self.link.full() && !LOCAL.contains(&w[0]) && !(self.link.emergency_ok() && EMERG.contains(&w[0])) && !self.onboard {
             self.cues.push(audio::Cue::Refused);
@@ -1298,6 +1366,29 @@ impl Game {
             "ARMEMENT" | "ARMES" => {
                 self.tab = gcs::Tab::Armement;
                 reply = Ok("PAGE ARMEMENT".into());
+            }
+            "RECONNEXION" | "RECONNECT" | "RELAIS" | "LIAISON" if self.mishap.as_ref().is_some_and(|m| m.lost()) => {
+                if let Some(m) = &mut self.mishap {
+                    m.try_second();
+                }
+                reply = Ok("2E CHANCE : TENTATIVE DE RECONNEXION PAR LE SECOURS IRIDIUM".into());
+            }
+            // Injection d'incident grave (essais) : perte du véhicule de la cause choisie
+            "INCIDENT" if airborne => {
+                let why = match arg(1) {
+                    "ELEC" => Some("PERTE TOTALE D'ALIMENTATION ÉLECTRIQUE — LIAISON PERDUE"),
+                    "MOTEUR" | "STATO" => Some("EXPLOSION DE LA CHAMBRE DE COMBUSTION DU STATORÉACTEUR"),
+                    "GOUVERNES" | "FCS" => Some("DESTRUCTION DES GOUVERNES (FCS) — CHARGE AÉRODYNAMIQUE EXCESSIVE"),
+                    "STRUCTURE" => Some("RUPTURE STRUCTURELLE — FACTEUR DE CHARGE"),
+                    _ => None,
+                };
+                match why {
+                    Some(w) => {
+                        ac.crash(w);
+                        reply = Ok(format!("INCIDENT INJECTE : {w}"));
+                    }
+                    None => reply = Err("INCIDENT ELEC | MOTEUR | GOUVERNES | STRUCTURE".into()),
+                }
             }
             "RECONNEXION" | "RECONNECT" | "RELAIS" | "LIAISON" => {
                 let p = match (arg(1), arg(2)) {
@@ -2038,10 +2129,17 @@ async fn main() {
             let lay = mfd::layout(mfd_r).1;
             let svs_r = lay.inner;
             draw_console(&g, svs_r);
+            // Essai automatique de la deuxième chance (DARKSTAR_AUTO2=1)
+            let auto2 = std::env::var("DARKSTAR_AUTO2").is_ok() && g.mishap.as_ref().is_some_and(|m| m.lost() && m.second == mishap::Second::Available);
+            if g.mishap.as_ref().is_some_and(|m| m.draw_los(svs_r)) || auto2 {
+                if let Some(m) = &mut g.mishap {
+                    m.try_second();
+                }
+                g.push(Level::Info, "GCS > 2E CHANCE : TENTATIVE DE RECONNEXION PAR LE SECOURS IRIDIUM");
+            }
             if let Some(m) = &g.mishap {
-                m.draw_los(svs_r);
                 // Analyse de l'enregistreur après quelques secondes de perte du signal
-                if m.elapsed() > m.t_los + 3.0 && !g.crash_report.is_empty() {
+                if (m.second == mishap::Second::Failed || (m.second == mishap::Second::Available && m.elapsed() > m.t_los + 20.0)) && !g.crash_report.is_empty() {
                     draw_crash_report(&g.crash_report, svs_r);
                 }
             } else if g.ac.crashed.is_some() && !g.crash_report.is_empty() {
@@ -2102,7 +2200,7 @@ async fn main() {
                         g.tab = t;
                     }
                 }
-                gcs::Tab::Moteurs => panels::draw_engines(&g.ac, cr, time),
+                gcs::Tab::Moteurs => panels::draw_engines(&g.ac, &g.chambers, cr, time),
                 gcs::Tab::Alarmes => match alarms::draw_alarms(&g.ac, &alerts, cr, time, g.mishap.as_ref().map(|m| m.lights())) {
                     Some(alarms::AlarmAction::Toggle(f)) => {
                         let on = !g.ac.fails.has(f);
@@ -2134,7 +2232,7 @@ async fn main() {
                 gcs::Tab::Essais => panels::draw_card(&g.ac, &g.mission, cr),
                 gcs::Tab::Domaine => panels::draw_envelope(&g.ac, cr, &g.history),
                 gcs::Tab::Override => {
-                    if let Some(sw) = gcs::draw_overrides(&g.ac, cr) {
+                    if let Some(sw) = gcs::draw_overrides(&g.ac, &g.chambers, cr) {
                         g.apply_switch(sw);
                     }
                 }

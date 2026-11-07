@@ -195,7 +195,7 @@ fn nacelle(r: Rect, side: &str, ac: &Aircraft, i: usize, egt_off: f64, time: f64
     deg_txt(&format!("{door_deg:02.0}"), p(82.0, 0.0).x, p(0.0, 196.0).y, fs * 1.05, dc, "");
 }
 
-pub fn draw_engines(ac: &Aircraft, r: Rect, time: f64) {
+pub fn draw_engines(ac: &Aircraft, mon: &crate::health::ChamberMon, r: Rect, time: f64) {
     panel(r, "MOTEURS - TBCC DARKSTAR");
     let e = &ac.eng;
     let x = r.x + 10.0;
@@ -260,8 +260,12 @@ pub fn draw_engines(ac: &Aircraft, r: Rect, time: f64) {
 
     // Ligne basse
     let by = r.y + r.h - 28.0;
-    let hc = if e.combustor_failed { RED } else if e.health < 0.3 { AMBER } else { GREEN_S };
-    txt(&format!("CHAMBRES {:.0}%", e.health * 100.0), x, by, 13.0, hc);
+    txt(&format!("CHAMBRES {}", mon.state.label()), x, by, 13.0, mon.state.color());
+    // Courbes de surveillance entre les nacelles et la ligne basse
+    let gtop = top + 2.0 * (nh + 6.0) + 10.0;
+    if by - 18.0 - gtop > 90.0 {
+        mon.draw(Rect::new(x, gtop, w, by - 18.0 - gtop));
+    }
     let thr = format!("MANETTE {:.0}%{}", ac.throttle * 100.0, if e.ab_frac > 0.0 { " PC" } else { "" });
     txt(&thr, x + 130.0, by, 13.0, if ac.throttle > 1.0 { RED } else if ac.throttle > 0.8 { AMBER } else { WHITE });
     if ac.ovr_engine {

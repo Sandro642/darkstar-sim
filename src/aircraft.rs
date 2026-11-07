@@ -1466,7 +1466,7 @@ impl Aircraft {
             let before = e.health;
             e.health = (e.health - (overboost + 1.5 * rich) * 0.012 * dt).max(0.0);
             if before >= 0.3 && e.health < 0.3 {
-                ev.push((Level::Caution, "ENGINE DEGRADED : SANTÉ DES CHAMBRES < 30 %".into()));
+                ev.push((Level::Caution, "ENGINE DEGRADED : USURE DES CHAMBRES ELEVEE (page MOTEURS)".into()));
             }
             if e.health <= 0.0 && !e.combustor_failed {
                 e.combustor_failed = true;

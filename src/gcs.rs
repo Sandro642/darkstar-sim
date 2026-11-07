@@ -183,7 +183,7 @@ fn guarded_switch(r: Rect, label: &str, on: bool, warn: bool) -> bool {
     clicked(r)
 }
 
-pub fn draw_overrides(ac: &Aircraft, r: Rect) -> Option<Switch> {
+pub fn draw_overrides(ac: &Aircraft, mon: &crate::health::ChamberMon, r: Rect) -> Option<Switch> {
     panel(r, "OVERRIDE / URGENCES");
     let mut out = None;
     let gap = 8.0;
@@ -210,10 +210,11 @@ pub fn draw_overrides(ac: &Aircraft, r: Rect) -> Option<Switch> {
     let y = r.y + 30.0 + h + gap;
     let e = &ac.eng;
     txt("CHAMBRES", x + 4.0, y + 16.0, 13.0, DIM);
-    let hc = if e.combustor_failed { RED } else if e.health < 0.3 { AMBER } else { GREEN_S };
-    draw_rectangle_lines(x + 4.0, y + 22.0, w - 8.0, 12.0, 1.0, DIM);
-    draw_rectangle(x + 5.0, y + 23.0, (w - 10.0) * e.health as f32, 10.0, hc);
-    txt(&if e.combustor_failed { "DETRUITES".to_string() } else { format!("SANTE {:.0}%", e.health * 100.0) }, x + 4.0, y + 50.0, 13.0, hc);
+    // État calculé à partir des courbes de surveillance (page MOTEURS)
+    let _ = e;
+    txt(mon.state.label(), x + 4.0, y + 34.0, 15.0, mon.state.color());
+    let cause: String = mon.cause.chars().take(30).collect();
+    txt(&cause, x + 4.0, y + 50.0, 10.0, mon.state.color());
     let lim = if ac.ovr_engine { "FADEC : INHIBE".to_string() } else if ac.fadec_limit < 0.995 { format!("FADEC : LIMITE {:.0}%", ac.fadec_limit * 100.0) } else { "FADEC : NOMINAL".to_string() };
     txt(&lim, x + 4.0, y + 68.0, 13.0, if ac.ovr_engine || ac.fadec_limit < 0.995 { AMBER } else { GREEN_S });
     let sat = ac.throttle > 1.6;

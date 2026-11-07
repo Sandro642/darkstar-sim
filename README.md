@@ -433,3 +433,12 @@ Le SR-72 est un avion de reconnaissance : sa charge utile est simulée.
   d'occultation plasma, connexion initiale toujours établie) ; la perte de liaison ne survient que
   sur incident (panne émetteur, panne SATCOM hors portée radio, perte du bus électrique), et le
   canal de secours Iridium reste disponible pour l'EMERGENCY OVERRIDE.
+- v1.29.0 : **deuxième chance** après la perte du véhicule sur incident : bouton sous l'écran LOS
+  (une tentative par le secours Iridium, poignée de main de 8 s) ; selon la cause, le véhicule peut
+  répondre (perte électrique 70 %, explosion moteur 50 %, gouvernes 35 %, missile 25 %, rupture
+  20 / 10 %, impact ou autodestruction jamais) : l'autonomie de bord a stabilisé l'avion, moteurs
+  perdus, liaison d'urgence seulement → EMERGENCY OVERRIDE ou EJECTION CONFIRME. Injection
+  d'essai : `INCIDENT ELEC | MOTEUR | GOUVERNES | STRUCTURE`. **Surveillance des chambres** à la
+  place du « % santé » : cinq courbes sur 3 min (EGT, parois stato / scram, excès de carburant,
+  usure cumulée) avec seuils et limites ; état calculé (NOMINAL, SURVEILLANCE, DÉGRADÉ, CRITIQUE,
+  DÉTRUITES) d'après marges, temps au-delà des seuils et tendance de l'usure, avec la cause.
