@@ -168,7 +168,7 @@ fn pfd_info<'a>(g: &Game, alerts: &'a [(Level, String)], ln: &'a str, lat: f64, 
         }
     }
     let mishap = g.mishap.as_ref().map(|m| (m.decay(), m.elapsed() - m.t_los));
-    pfd::PfdInfo { da_ft: g.da_ft, mishap, alerts, link_name: ln, latency_ms: lat, dest: g.dest, warp, time, cue, wx: g.wx.info.clone(), threats, fuel: g.fuel_plan.clone(), fuel_since: get_time() - g.fuel_change_t }
+    pfd::PfdInfo { da_ft: if in_approach(&g.ac) { Some(g.da_ft) } else { None }, mishap, alerts, link_name: ln, latency_ms: lat, dest: g.dest, warp, time, cue, wx: g.wx.info.clone(), threats, fuel: g.fuel_plan.clone(), fuel_since: get_time() - g.fuel_change_t }
 }
 
 /// Actions demandées sur l'écran Darkstar (vidange, zoom caméra, boutons de lunette).
@@ -1052,7 +1052,7 @@ impl Game {
             self.push(l, s);
         }
         // Minimums (hauteur de décision 200 ft au-dessus du seuil) en approche ILS / autoland
-        match self.ac.approach.filter(|_| !self.ac.on_ground && self.ac.crashed.is_none()) {
+        match self.ac.approach.filter(|_| in_approach(&self.ac)) {
             Some((_, _, _, _, tel)) => {
                 let h = (self.ac.alt - tel) / FT;
                 let dead = self.ac.autoland.as_ref().is_some_and(|a| a.dead_stick);
@@ -2027,6 +2027,13 @@ impl Game {
             self.push(Level::Info, s);
         }
     }
+}
+
+/// Approche réellement en cours (autoland engagé ou ILS armé / capturé, en vol) : seule
+/// situation où la DA et les minimums ont un sens.
+fn in_approach(ac: &Aircraft) -> bool {
+    let ils = ac.ap.loc_armed || ac.ap.gs_armed || ac.ap.lat == LatMode::Loc || matches!(ac.ap.vert, VertMode::Gs | VertMode::Flare);
+    !ac.on_ground && ac.crashed.is_none() && ac.approach.is_some() && (ac.autoland.is_some() || ils)
 }
 
 #[macroquad::main(window_conf)]

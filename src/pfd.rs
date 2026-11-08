@@ -24,7 +24,8 @@ pub struct PfdInfo<'a> {
     /// Perte du véhicule : (dégradation 0..1, secondes depuis la perte du signal, < 0 avant).
     pub mishap: Option<(f32, f64)>,
     /// Hauteur de décision au-dessus du seuil (ft).
-    pub da_ft: f64,
+    /// Hauteur de décision, seulement pendant une approche (autoland / ILS)
+    pub da_ft: Option<f64>,
 }
 
 const LINE: Color = Color::new(0.92, 0.94, 0.95, 1.0);
@@ -560,7 +561,7 @@ fn draw_speed(ac: &Aircraft, g: &Geo, time: f64) {
     txt(&format!("MAX {:+.1}  MIN {:+.1}", ac.g_max, ac.g_min), t.x + 2.0, y + 64.0, 11.0, mc);
 }
 
-fn draw_altitude(ac: &Aircraft, g: &Geo, da_ft: f64) {
+fn draw_altitude(ac: &Aircraft, g: &Geo, da_ft: Option<f64>) {
     let d = &ac.d;
     let t = g.alt;
     tape_bg(t);
@@ -605,7 +606,7 @@ fn draw_altitude(ac: &Aircraft, g: &Geo, da_ft: f64) {
         draw_line(lx + 4.0, cy, lx + 4.0, yt, 2.5, GREEN_S);
     }
     // Minimums (200 ft au-dessus du seuil) en approche
-    if let Some((_, _, _, _, el)) = ac.approach {
+    if let (Some((_, _, _, _, el)), Some(da_ft)) = (ac.approach, da_ft) {
         let mda = (el / FT) as f32 + da_ft as f32;
         let y = cy - (mda - alt) * ppf;
         let c = if alt < mda { AMBER } else { CYAN_S };
@@ -633,7 +634,7 @@ fn draw_altitude(ac: &Aircraft, g: &Geo, da_ft: f64) {
         txt("STD", t.x + 4.0, t.y - 6.0, 12.0, LABEL);
     }
     // Altitude de décision (seuil + hauteur de décision) en approche
-    if let Some((_, _, _, _, el)) = ac.approach {
+    if let (Some((_, _, _, _, el)), Some(da_ft)) = (ac.approach, da_ft) {
         let da = el / FT + da_ft;
         let below = ac.alt / FT < da;
         txt_r(&format!("DA {da:.0}"), t.x + t.w - 4.0, t.y - 6.0, 12.0, if below { AMBER } else { CYAN_S });

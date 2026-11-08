@@ -502,3 +502,5 @@ Le SR-72 est un avion de reconnaissance : sa charge utile est simulée.
   les pannes réelles du moment de la déconnexion ; le « sapin de Noël » de l'écran de perte du signal
   reste une indication et n'est plus converti en pannes. Mode dégradé (manche indisponible, terminal)
   et refus d'instructions basés sur les pannes réellement présentes.
+- v1.30.6 : DA / minimums seulement pendant une approche réelle (autoland engagé ou ILS armé /
+  capturé, en vol) — plus d'affichage « DA » ni de ligne MIN au sol ou en croisière près du terrain.
