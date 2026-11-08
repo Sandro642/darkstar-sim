@@ -1,6 +1,6 @@
 //! Ravitaillement en vol autonome (perche rigide) : ravitailleur en hippodrome, rendez-vous,
 //! jonction sur la trace du ravitailleur, capture en précontact, contact sous la perche, transfert
-//! de JP-7, déconnexion et dégagement. Rendu 3D du ravitailleur et de la perche dans l'horizon.
+//! de JP-7 et d'hydrogène liquide (scramjet), déconnexion et dégagement. Rendu 3D du ravitailleur et de la perche dans l'horizon.
 
 use crate::aircraft::*;
 use crate::airports::AIRPORTS;
@@ -17,6 +17,9 @@ const BANK_DEG: f64 = 25.0;
 const OFFLOAD: f64 = 40_000.0;
 /// Débit de transfert (kg/s) : ~2,5 t/min.
 const RATE: f64 = 42.0;
+/// Hydrogène liquide (scramjet) : réserve du ravitailleur et débit (kg/s, ~1 t/min).
+const OFFLOAD_H2: f64 = 16_000.0;
+const RATE_H2: f64 = 17.0;
 /// Positions relatives au ravitailleur (m) : (en arrière, à droite, au-dessus).
 const PRECONTACT: (f64, f64, f64) = (60.0, 0.0, -12.0);
 /// Contact : perche déployée ~12 m sous la queue du ravitailleur, visible ~16° au-dessus du nez.
@@ -66,6 +69,8 @@ pub struct Tanker {
     pub bank: f64,
     pub tas: f64,
     pub offload: f64,
+    /// Hydrogène liquide disponible (kg).
+    pub offload_h2: f64,
 }
 
 impl Tanker {
@@ -137,6 +142,8 @@ pub struct Refuel {
     pub tanker: Option<Tanker>,
     pub phase: Phase,
     pub given: f64,
+    /// Hydrogène transféré (kg).
+    pub given_h2: f64,
     t_phase: f64,
     /// Glissement en maintien de position : (départ, arrivée, progression 0..1).
     glide: Option<((f64, f64, f64), (f64, f64, f64), f64)>,
@@ -145,7 +152,7 @@ pub struct Refuel {
 
 impl Refuel {
     pub fn new() -> Refuel {
-        Refuel { tanker: None, phase: Phase::Off, given: 0.0, t_phase: 0.0, glide: None, events: Vec::new() }
+        Refuel { tanker: None, phase: Phase::Off, given: 0.0, given_h2: 0.0, t_phase: 0.0, glide: None, events: Vec::new() }
     }
 
     fn tanker_tas(alt: f64) -> f64 {
@@ -160,7 +167,7 @@ impl Refuel {
             Some(i) => ((AIRPORTS[i].lat, AIRPORTS[i].lon), wrap360(ac.track_deg())),
             None => (destination(ac.lat, ac.lon, ac.track_deg(), 20.0 * NM), ac.track_deg()),
         };
-        let mut t = Tanker { callsign: "SHELL 71", anchor, inbound, s: 0.0, lat: 0.0, lon: 0.0, alt, hdg: 0.0, bank: 0.0, tas, offload: OFFLOAD };
+        let mut t = Tanker { callsign: "SHELL 71", anchor, inbound, s: 0.0, lat: 0.0, lon: 0.0, alt, hdg: 0.0, bank: 0.0, tas, offload: OFFLOAD, offload_h2: OFFLOAD_H2 };
         t.place();
         let (d, b) = dist_brg(ac.lat, ac.lon, t.lat, t.lon);
         let msg = format!("RAVITAILLEUR {} EN ORBITE FL{:.0} {:.0} KEAS — {b:03.0} deg {:.0} NM, {:.0} t DISPONIBLES", t.callsign, TANKER_FL / 100.0, TANKER_KEAS, d / NM, OFFLOAD / 1000.0);
@@ -199,8 +206,8 @@ impl Refuel {
             let m = self.spawn(ac, None);
             self.events.push((Level::Info, m));
         }
-        if ac.fuel >= FUEL_MAX - 50.0 {
-            return Err("RESERVOIRS DEJA PLEINS".into());
+        if ac.fuel >= FUEL_MAX - 50.0 && ac.h2 >= H2_MAX - 50.0 {
+            return Err("RESERVOIRS JP-7 ET H2 DEJA PLEINS".into());
         }
         ac.autoland = None;
         ac.ap.on = true;
@@ -318,17 +325,24 @@ impl Refuel {
                 if self.phase == Phase::Precontact && k >= 1.0 && self.t_phase > 9.0 {
                     self.glide = Some((PRECONTACT, CONTACT, 0.0));
                     self.set_phase(Phase::Contact);
-                    self.events.push((Level::Info, "PERCHE : CONTACT — TRANSFERT JP-7 EN COURS".into()));
+                    self.events.push((Level::Info, "PERCHE : CONTACT — TRANSFERT JP-7 + H2 EN COURS".into()));
                 }
                 if self.phase == Phase::Contact && k >= 1.0 {
                     let t = self.tanker.as_mut().unwrap();
-                    let q = (RATE * dt).min(FUEL_MAX - ac.fuel).min(t.offload);
+                    // JP-7 et hydrogène liquide en parallèle (deux circuits dans la perche)
+                    let q = (RATE * dt).min((FUEL_MAX - ac.fuel).max(0.0)).min(t.offload);
                     ac.fuel += q;
                     t.offload -= q;
                     self.given += q;
-                    if ac.fuel >= FUEL_MAX - 1.0 || t.offload <= 0.0 {
-                        let why = if t.offload <= 0.0 { "RAVITAILLEUR VIDE" } else { "RESERVOIRS PLEINS" };
-                        self.events.push((Level::Info, format!("RAVITAILLEMENT TERMINE : +{:.1} t ({why})", self.given / 1000.0)));
+                    let qh = (RATE_H2 * dt).min((H2_MAX - ac.h2).max(0.0)).min(t.offload_h2);
+                    ac.h2 += qh;
+                    t.offload_h2 -= qh;
+                    self.given_h2 += qh;
+                    let jp_done = ac.fuel >= FUEL_MAX - 1.0 || t.offload <= 0.0;
+                    let h2_done = ac.h2 >= H2_MAX - 1.0 || t.offload_h2 <= 0.0;
+                    if jp_done && h2_done {
+                        let why = if t.offload <= 0.0 || t.offload_h2 <= 0.0 { "RAVITAILLEUR VIDE" } else { "RESERVOIRS PLEINS" };
+                        self.events.push((Level::Info, format!("RAVITAILLEMENT TERMINE : JP-7 +{:.1} t, H2 +{:.1} t ({why})", self.given / 1000.0, self.given_h2 / 1000.0)));
                         self.release(ac);
                         self.set_phase(Phase::Disconnect);
                     }
@@ -471,13 +485,16 @@ pub fn draw_hud(rf: &Refuel, ac: &Aircraft, s: Rect, time: f64) {
         shadow(&format!("AV/AR {:+.0} m   G/D {:+.0} m   H/B {:+.0} m", -da, dr, du), cx, y0 + 18.0, 12.0, WHITE);
     }
     if ph == Phase::Contact {
-        let f = (ac.fuel / FUEL_MAX) as f32;
-        let b = Rect::new(cx - 90.0, y0 + 26.0, 180.0, 10.0);
-        draw_rectangle_lines(b.x, b.y, b.w, b.h, 1.0, Color::new(0.4, 1.0, 0.5, 0.8));
-        draw_rectangle(b.x + 1.0, b.y + 1.0, (b.w - 2.0) * f, b.h - 2.0, Color::new(0.3, 1.0, 0.45, 0.8));
+        // Deux jauges : JP-7 (vert) et hydrogène liquide (cyan)
+        for (k, (lbl, f, c)) in [("JP-7", ac.fuel / FUEL_MAX, Color::new(0.3, 1.0, 0.45, 0.8)), ("H2", ac.h2 / H2_MAX, Color::new(0.35, 0.85, 1.0, 0.85))].into_iter().enumerate() {
+            let b = Rect::new(cx - 80.0, y0 + 26.0 + k as f32 * 15.0, 160.0, 10.0);
+            txt_r(lbl, b.x - 6.0, b.y + 9.0, 11.0, c);
+            draw_rectangle_lines(b.x, b.y, b.w, b.h, 1.0, c);
+            draw_rectangle(b.x + 1.0, b.y + 1.0, (b.w - 2.0) * f as f32, b.h - 2.0, c);
+        }
         let blink = (time * 2.0).fract() < 0.7;
         if blink {
-            shadow(&format!("TRANSFERT +{:.1} t  ({:.1} t/min)", rf.given / 1000.0, RATE * 60.0 / 1000.0), cx, y0 + 52.0, 13.0, GREEN_S);
+            shadow(&format!("TRANSFERT JP-7 +{:.1} t   H2 +{:.1} t", rf.given / 1000.0, rf.given_h2 / 1000.0), cx, y0 + 68.0, 13.0, GREEN_S);
         }
     }
     // Directeur de perche : feux UP/DN et FWD/AFT (comme les feux directeurs sous le ravitailleur)
@@ -515,7 +532,7 @@ pub fn draw_map(rf: &Refuel, to_s: &dyn Fn(f64, f64) -> Vec2, r: Rect) {
     let sd = vec2(-f.y, f.x);
     let c = Color::new(0.4, 0.85, 1.0, 1.0);
     draw_triangle(p + f * 10.0, p - f * 6.0 + sd * 7.0, p - f * 6.0 - sd * 7.0, c);
-    txt(&format!("{} FL{:.0} {:.0}t", t.callsign, t.alt / FT / 100.0, t.offload / 1000.0), p.x + 10.0, p.y - 6.0, 12.0, c);
+    txt(&format!("{} FL{:.0} {:.0}t + H2 {:.0}t", t.callsign, t.alt / FT / 100.0, t.offload / 1000.0, t.offload_h2 / 1000.0), p.x + 10.0, p.y - 6.0, 12.0, c);
 }
 
 #[cfg(test)]
@@ -542,6 +559,7 @@ mod tests {
         ac.set_turbines(TurbState::Running, 0.8);
         ac.throttle = 0.6;
         ac.fuel = 12_000.0;
+        ac.h2 = 4_000.0;
         let mut rf = Refuel::new();
         rf.spawn(&ac, None);
         rf.start(&mut ac).expect("start");
@@ -569,5 +587,6 @@ mod tests {
         assert!(min_aft > 0.0, "depassement du ravitailleur");
         assert!(rf.given > 20_000.0, "transfert {:.0} kg", rf.given);
         assert!(ac.fuel > FUEL_MAX - 100.0);
+        assert!(ac.h2 > H2_MAX - 100.0, "H2 {:.0} kg", ac.h2);
     }
 }

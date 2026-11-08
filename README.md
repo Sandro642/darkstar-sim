@@ -521,3 +521,6 @@ Le SR-72 est un avion de reconnaissance : sa charge utile est simulée.
 - v1.31.1 : horizon — zone centrale symétrique autour de l'axe de l'avion (bannières carburant,
   approche, ILS, blocs éphémères centrés sur la maquette et le ruban de cap) ; bandeau « WXR … » retiré
   de l'horizon (le radar météo reste sur le ND, la page SYSTEMES et en rideaux dans l'horizon).
+- v1.31.2 : ravitaillement en vol — transfert simultané de JP-7 et d'hydrogène liquide (scramjet) :
+  ravitailleur avec 40 t de JP-7 et 16 t de H2 (~1 t/min), deux jauges en contact, bilan JP-7 + H2,
+  ravitaillement possible si l'un des deux réservoirs n'est pas plein.
