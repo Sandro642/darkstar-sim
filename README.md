@@ -504,3 +504,17 @@ Le SR-72 est un avion de reconnaissance : sa charge utile est simulée.
   et refus d'instructions basés sur les pannes réellement présentes.
 - v1.30.6 : DA / minimums seulement pendant une approche réelle (autoland engagé ou ILS armé /
   capturé, en vol) — plus d'affichage « DA » ni de ligne MIN au sol ou en croisière près du terrain.
+- v1.31.0 : ressenti de vol et réalisme.
+  - Pilotage : inertie de la cellule (vitesses angulaires du 2e ordre, réponse molle à basse
+    vitesse, vive à forte pression dynamique) et autorité manuelle d'avion d'arme (≈10°/s en
+    tangage, 55°/s en roulis en subsonique, décroissantes avec le Mach).
+  - Turbulence physique (bruit filtré façon Dryden) : rafales verticales qui changent l'incidence
+    (bosses de facteur de charge), perturbations de roulis et de tangage.
+  - Masses d'air turbulentes localisées : thermiques en basse couche, ondes / rotors en aval du
+    relief par vent fort, poches de turbulence en air clair entre FL200 et FL500.
+  - Décollage : annonces 100 KT, V1, ROTATE (VR selon la masse), POSITIVE RATE ; rotation sans
+    effet sous ~120 KEAS ; TAIL STRIKE au-delà de 12° ; effet girouette par vent de travers ;
+    joints de piste, levée de la roulette avant, claquement du train, tête poussée à l'accélération.
+  - Reconnaissance : objectifs et émetteurs répartis dans le monde entier (Gizeh, Trois-Gorges,
+    Baïkonour, Panama, Rotterdam, Uluru, Perito Moreno, Kourou ; sites ELINT Sahara, Gobi,
+    Australie, golfe Persique, océan Indien, Groenland).

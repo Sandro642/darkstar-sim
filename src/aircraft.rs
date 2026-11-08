@@ -231,7 +231,13 @@ pub struct Aircraft {
     pub wind: (f64, f64),
     /// Intensité de turbulence 0..1.
     pub turb: f64,
-    turb_t: f64,
+    /// Vitesses angulaires réelles (tangage, roulis, rad/s) et leurs dérivées : inertie de la cellule
+    rates: [f64; 4],
+    /// Turbulence (bruit filtré façon Dryden) : rafale verticale (m/s), roulis, tangage (rad/s)
+    gust: [f64; 3],
+    rng: u64,
+    /// Annonces de décollage déjà faites (bits : 100 KT, V1, ROTATE, POSITIVE RATE, TAIL STRIKE)
+    to_calls: u8,
     pub approach: Option<(usize, f64, f64, f64, f64)>, // (aéroport, lat seuil, lon seuil, cap, élévation)
     pub autoland: Option<crate::autoflight::Autoland>,
     pub autotakeoff: Option<crate::autoflight::Takeoff>,
@@ -415,11 +421,33 @@ impl Aircraft {
             jolt: 0.0,
             wind: (0.0, 0.0),
             turb: 0.0,
-            turb_t: 0.0,
+            rates: [0.0; 4],
+            gust: [0.0; 3],
+            rng: 0x9e37_79b9_7f4a_7c15,
+            to_calls: 0,
             approach: None,
             autoland: None,
             autotakeoff: None,
         }
+    }
+
+    /// Tirage pseudo-aléatoire ~ N(0, 1) (somme de 4 uniformes).
+    fn gauss(&mut self) -> f64 {
+        let mut sum = 0.0;
+        for _ in 0..4 {
+            self.rng ^= self.rng << 13;
+            self.rng ^= self.rng >> 7;
+            self.rng ^= self.rng << 17;
+            sum += (self.rng >> 11) as f64 / (1u64 << 53) as f64;
+        }
+        (sum - 2.0) * 1.732
+    }
+
+    /// Vitesse de rotation (KEAS) selon la masse : 92 % de la vitesse d'envol à 10° d'assiette
+    /// (effet de sol compris), arrondie à 5 kt.
+    pub fn vr_keas(&self) -> f64 {
+        let v_lof = ((2.0 * self.mass() * G0) / (RHO0 * S_WING * cl_alpha(0.3) * 10f64.to_radians() * 1.15)).sqrt() / KT;
+        (v_lof * 0.92 / 5.0).round() * 5.0
     }
 
     pub fn mass(&self) -> f64 {
@@ -987,8 +1015,12 @@ impl Aircraft {
                 self.msg(Level::Caution, "AP OFF — MINIMUMS : ARRONDI MANUEL");
             }
         } else {
-            pitch_rate = pitch_in * qmax;
-            roll_rate = roll_in * pmax;
+            // Manuel : autorité d'un avion d'arme lourd (≈10°/s en tangage, 55°/s en roulis en
+            // subsonique), décroissante avec le Mach ; elle passe ensuite par l'inertie de la cellule
+            let qmax_m = (10.0f64).to_radians() / (1.0 + mach / 3.0) * hyd;
+            let pmax_m = (55.0f64).to_radians() / (1.0 + mach / 4.0) * hyd;
+            pitch_rate = pitch_in * qmax_m;
+            roll_rate = roll_in * pmax_m;
         }
         // Loi FBW : protection haute vitesse anticipatrice (q prévue à 8 s), cabré automatique
         // prioritaire sur le manche, sauf FBW OVERRIDE
@@ -1073,10 +1105,48 @@ impl Aircraft {
             self.throttle = (self.throttle + rate * dt).clamp(0.0, self.thr_max());
         }
 
+        // --- Inertie de la cellule : les vitesses angulaires réelles suivent l'ordre de la loi
+        // (2e ordre, amortissement 0,7). Pulsation selon la pression dynamique : réponse molle
+        // à basse vitesse, vive à forte q (gouvernes efficaces), plus lente en hypersonique.
+        let q_auth = (q / 12_000.0).clamp(0.0, 1.0);
+        let wn = (1.6 + 4.4 * q_auth) / (1.0 + mach / 5.0);
+        let z = 0.7;
+        let (cmd_q, cmd_p) = (pitch_rate, roll_rate);
+        if self.on_ground {
+            self.rates = [0.0; 4];
+        } else {
+            let acc_q = wn * wn * (cmd_q - self.rates[0]) - 2.0 * z * wn * self.rates[2];
+            let acc_p = wn * wn * (cmd_p - self.rates[1]) - 2.0 * z * wn * self.rates[3];
+            self.rates[2] += acc_q * dt;
+            self.rates[3] += acc_p * dt;
+            self.rates[0] += self.rates[2] * dt;
+            self.rates[1] += self.rates[3] * dt;
+            pitch_rate = self.rates[0];
+            roll_rate = self.rates[1];
+        }
+        // --- Turbulence : bruit filtré (rafale verticale, roulis, tangage), amplitude selon la
+        // masse d'air traversée ; la rafale verticale change l'incidence (bosses de facteur de charge)
+        let tb = if self.on_ground { 0.0 } else { self.turb };
+        for (i, (sig, tau)) in [(4.5 * tb, 1.4), (0.22 * tb, 0.6), (0.05 * tb, 0.7)].iter().enumerate() {
+            let w = self.gauss();
+            let n = &mut self.gust[i];
+            *n += (-*n / tau) * dt + sig * (2.0 * dt / tau).sqrt() * w;
+            if tb <= 0.0 {
+                *n *= (1.0 - dt * 2.0).max(0.0);
+            }
+        }
+        let k_rot = 1.0 / (1.0 + mach * 0.7);
+        let alpha_gust = (self.gust[0] / v.max(30.0)).clamp(-0.12, 0.12);
+        pitch_rate += self.gust[2] * k_rot;
+        roll_rate += self.gust[1] * k_rot;
+
         // --- Assiette (loi de vol FBW : commande en vitesse de tangage, protections) ---
         if self.on_ground {
-            if v > 55.0 {
-                self.theta += pitch_rate.max(-qmax) * dt;
+            // Rotation : efficacité des élevons selon la vitesse (rien sous ~120 KEAS)
+            let keas_g = v * (air.rho / RHO0).sqrt() / KT;
+            let auth = ((keas_g - 120.0) / 45.0).clamp(0.0, 1.0);
+            if auth > 0.0 {
+                self.theta += (pitch_rate * auth).max(-qmax) * dt;
             } else {
                 self.theta -= 3f64.to_radians() * dt;
             }
@@ -1131,7 +1201,7 @@ impl Aircraft {
             self.phi += (self.jolt * 37.0).sin() * 0.02;
         }
         let alpha_now = if self.on_ground { self.theta } else { self.theta - self.gamma };
-        let alpha = alpha_now;
+        let alpha = alpha_now + if self.on_ground { 0.0 } else { alpha_gust };
 
         // --- Aérodynamique ---
         let a_stall = 20f64.to_radians();
@@ -1165,10 +1235,45 @@ impl Aircraft {
             }
             self.gamma = 0.0;
             self.alt = elev;
+            // Annonces de course au décollage (VR selon la masse : CL de rotation ~ 9° d'incidence)
+            let vr = self.vr_keas();
+            let accel = acc > 0.5 && self.throttle > 0.5;
+            let call = |bit: u8, c: &mut Self, txt: String| {
+                if c.to_calls & bit == 0 {
+                    c.to_calls |= bit;
+                    c.msg(Level::Info, txt);
+                }
+            };
+            if accel && keas > 100.0 {
+                call(1, self, "100 KT — MOTEURS STABLES, PARAMETRES VERIFIES".into());
+            }
+            if accel && keas > vr - 10.0 {
+                call(2, self, format!("V1 ({:.0} KEAS) — DECISION : DECOLLAGE CONTINUE", vr - 10.0));
+            }
+            if accel && keas > vr {
+                call(4, self, format!("ROTATE ({vr:.0} KEAS) — ASSIETTE 10 DEG"));
+            }
+            if keas < 30.0 {
+                self.to_calls &= !7;
+            }
+            // Tail strike : assiette > 12° roues au sol
+            if self.theta > 12f64.to_radians() && keas > 80.0 && self.to_calls & 16 == 0 {
+                self.to_calls |= 16;
+                self.jolt = 0.6;
+                self.msg(Level::Warning, "TAIL STRIKE — CONTACT ARRIERE DU FUSELAGE AVEC LA PISTE");
+            }
+            // Vent de travers : effet girouette (le nez part au vent), à contrer au palonnier/roulette
+            if !self.ap.on && self.tas > 15.0 {
+                let (we, wn) = self.wind;
+                let cross = we * self.psi.cos() - wn * self.psi.sin(); // vent venant de gauche > 0
+                let k = ((self.tas - 15.0) / 40.0).clamp(0.0, 1.0) * (1.0 - ((self.tas - 70.0) / 30.0).clamp(0.0, 1.0) * 0.6);
+                self.psi -= (cross * 0.0025 * k).clamp(-0.02, 0.02) * dt;
+            }
             if vert_force > mass * g && self.theta > 0.02 {
                 self.on_ground = false;
                 self.gamma = 0.002;
                 self.msg(Level::Info, format!("DÉCOLLAGE — LIFTOFF {keas:.0} KEAS"));
+                self.to_calls &= !(32 | 16);
             }
             if self.tas > 15.0 && !AIRPORTS.iter().any(|a| a.on_runway(self.lat, self.lon)) {
                 self.crash("SORTIE DE PISTE");
@@ -1176,6 +1281,10 @@ impl Aircraft {
         } else {
             let acc = (thrust * alpha.cos() - drag) / mass - g * self.gamma.sin();
             self.tas = (self.tas + acc * dt).max(1.0);
+            if self.to_calls & 32 == 0 && self.to_calls & 4 != 0 && self.d.vs > 2.0 && agl > 10.0 {
+                self.to_calls |= 32;
+                self.msg(Level::Info, if self.gear_down { "POSITIVE RATE — TRAIN SUR RENTREE (G)" } else { "POSITIVE RATE" });
+            }
             let v = self.tas;
             self.gamma += (vert_force * self.phi.cos() / (mass * v) - (g / v - v / r) * self.gamma.cos()) * dt;
             self.gamma = self.gamma.clamp(-1.5, 1.5);
@@ -1191,14 +1300,6 @@ impl Aircraft {
         let (we, wn) = if self.on_ground { (0.0, 0.0) } else { self.wind };
         self.lat += ((gs * self.psi.cos() + wn) / r * dt).to_degrees();
         self.lon += ((gs * self.psi.sin() + we) / (r * self.lat.to_radians().cos().max(0.01)) * dt).to_degrees();
-        // Turbulence : perturbations de pente et d'inclinaison
-        if self.turb > 0.01 && !self.on_ground {
-            self.turb_t += dt;
-            let t = self.turb_t;
-            let k = self.turb * (1.0 / (1.0 + self.d.mach)).max(0.15);
-            self.gamma += k * 0.012 * ((t * 5.3).sin() + 0.6 * (t * 13.1 + 1.0).sin()) * dt * (v / 250.0).clamp(0.3, 1.0);
-            self.phi += k * 0.03 * ((t * 3.7 + 2.0).sin() + 0.5 * (t * 11.3).sin()) * dt;
-        }
         if self.lat.abs() > 89.5 {
             self.lat = self.lat.signum() * (179.0 - self.lat.abs());
             self.lon += 180.0;
@@ -1784,6 +1885,55 @@ mod tests {
         assert!(ac.on_ground && ac.tas < 3.0, "pas arrete sur la piste");
         assert_eq!(max_thrust, 0.0, "poussee pendant le plane");
         assert_eq!(max_throttle, 0.0, "manette pendant le plane");
+    }
+
+    /// Turbulence modérée : l'AP tient l'altitude et le cap, bosses de facteur de charge réalistes ;
+    /// manche : la cellule a de l'inertie (pas de réponse instantanée).
+    #[test]
+    fn turbulence_and_inertia() {
+        let mut ac = Aircraft::new_on_runway(0);
+        ac.on_ground = false;
+        ac.alt = 3_000.0;
+        ac.tas = 200.0;
+        ac.gear_down = false;
+        ac.gear_pos = 0.0;
+        ac.brakes = false;
+        ac.set_turbines(TurbState::Running, 0.7);
+        ac.throttle = 0.7;
+        ac.ap.on = true;
+        ac.ap.vert = VertMode::Alt;
+        ac.ap.alt_tgt_ft = 3_000.0 / FT;
+        ac.ap.hdg_tgt = ac.hdg_deg();
+        for _ in 0..(20 * 120) {
+            ac.step(1.0 / 120.0, 0.0, 0.0);
+        }
+        ac.turb = 0.5;
+        let (mut nz_lo, mut nz_hi, mut dev, mut bank) = (9.0f64, -9.0f64, 0.0f64, 0.0f64);
+        for _ in 0..(120 * 120) {
+            ac.step(1.0 / 120.0, 0.0, 0.0);
+            nz_lo = nz_lo.min(ac.d.nz);
+            nz_hi = nz_hi.max(ac.d.nz);
+            dev = dev.max((ac.alt - 3_000.0).abs() / FT);
+            bank = bank.max(ac.phi.to_degrees().abs());
+        }
+        println!("turbulence : nz {nz_lo:+.2}/{nz_hi:+.2}  ecart alt {dev:.0} ft  inclinaison max {bank:.1}");
+        assert!(ac.crashed.is_none());
+        assert!(nz_hi - nz_lo > 0.3, "turbulence sans effet");
+        assert!(nz_hi < 2.5 && nz_lo > -0.5, "turbulence trop violente");
+        assert!(dev < 400.0 && bank < 25.0);
+        // Inertie : 0,1 s après un plein manche en roulis, la vitesse de roulis n'est pas encore établie
+        ac.turb = 0.0;
+        ac.ap.on = false;
+        for _ in 0..12 {
+            ac.step(1.0 / 120.0, 0.0, 1.0);
+        }
+        let early = ac.fcs.roll_rate;
+        for _ in 0..120 {
+            ac.step(1.0 / 120.0, 0.0, 1.0);
+        }
+        let late = ac.fcs.roll_rate;
+        println!("roulis : {early:.1} deg/s a 0,1 s, {late:.1} deg/s a 1,1 s");
+        assert!(early < late * 0.7 && late > 30.0);
     }
 
     #[test]

@@ -187,7 +187,7 @@ impl Aircraft {
         let (thr_lat, thr_lon) = apt.point(if hdg == apt.hdg { -apt.len / 2.0 } else { apt.len / 2.0 }, 0.0);
         self.autotakeoff = Some(Takeoff { hdg, alt_ft, thr_lat, thr_lon });
         self.autoland = None;
-        self.msg(Level::Info, format!("DÉCOLLAGE AUTO : PLEINE PUISSANCE, ROTATION 170 KEAS, MONTÉE {alt_ft:.0} FT"));
+        self.msg(Level::Info, format!("DÉCOLLAGE AUTO : PLEINE PUISSANCE, ROTATION {:.0} KEAS (VR), MONTÉE {alt_ft:.0} FT", self.vr_keas()));
         Ok(())
     }
 
@@ -249,7 +249,7 @@ impl Aircraft {
                 let cross = cross_track(tla, tlo, hdg, self.lat, self.lon);
                 let herr = wrap180(self.hdg_deg() - hdg);
                 let steer = (-(0.03 * cross + 0.2 * herr)).clamp(-1.0, 1.0);
-                let pitch = if self.d.keas >= 170.0 && self.theta < 10f64.to_radians() { 1.0 } else { 0.0 };
+                let pitch = if self.d.keas >= self.vr_keas() && self.theta < 10f64.to_radians() { 1.0 } else { 0.0 };
                 return Some((pitch, steer));
             }
             if self.d.agl > 30.0 {
@@ -453,7 +453,7 @@ impl Aircraft {
                 self.speedbrake = e_now > e_req + 120.0 || self.d.keas > va + 120.0;
                 // S-turns : excès d'énergie en finale → virages alternés de ±35° autour de l'axe
                 // (trajet rallongé), tant que l'avion est loin du seuil
-                if e_now > e_req + 250.0 && along > 2.5 * NM && cross.abs() < 1.5 * NM {
+                if e_now > e_req + 250.0 && along > 3.0 * NM && cross.abs() < 0.6 * NM {
                     let s = if (along / 2_500.0).sin() >= 0.0 { 1.0 } else { -1.0 };
                     self.ap.lat = LatMode::Hdg;
                     self.ap.hdg_tgt = wrap360(hdg + 35.0 * s);

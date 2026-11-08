@@ -79,14 +79,14 @@ fn emitters() -> Vec<Emitter> {
         destroyed: false,
         meas_t: 0.0,
     };
-    // Émetteurs d'exercice fictifs (champs de tir du Nevada et de Californie)
+    // Émetteurs d'exercice fictifs répartis dans le monde (zones désertiques / océaniques isolées)
     vec![
-        e("VEILLE EW-1", EmKind::Search, "E/F", 37.30, -116.20, 350.0, 0.0, 0.0),
-        e("SAM LONGUE PORTEE LR-7", EmKind::Sam, "G/H", 37.55, -116.55, 150.0, 95_000.0, 5.0),
-        e("SAM MOYENNE PORTEE MR-3", EmKind::Sam, "H/I", 36.40, -115.90, 70.0, 75_000.0, 3.5),
-        e("CONDUITE DE TIR FC-2", EmKind::FireControl, "I/J", 35.75, -117.40, 60.0, 0.0, 0.0),
-        e("RADAR COTIER CR-5", EmKind::Search, "E", 33.30, -119.45, 250.0, 0.0, 0.0),
-        e("SAM MOBILE SH-9", EmKind::Sam, "J", 34.95, -116.70, 45.0, 50_000.0, 3.0),
+        e("VEILLE EW-1", EmKind::Search, "E/F", 22.80, 11.60, 350.0, 0.0, 0.0),
+        e("SAM LONGUE PORTEE LR-7", EmKind::Sam, "G/H", 42.60, 104.40, 150.0, 95_000.0, 5.0),
+        e("SAM MOYENNE PORTEE MR-3", EmKind::Sam, "H/I", -24.90, 129.30, 70.0, 75_000.0, 3.5),
+        e("CONDUITE DE TIR FC-2", EmKind::FireControl, "I/J", 23.40, 52.80, 60.0, 0.0, 0.0),
+        e("RADAR COTIER CR-5", EmKind::Search, "E", -46.40, 51.80, 250.0, 0.0, 0.0),
+        e("SAM MOBILE SH-9", EmKind::Sam, "J", 64.80, -42.50, 45.0, 50_000.0, 3.0),
     ]
 }
 
@@ -144,15 +144,15 @@ fn targets(em: &[Emitter]) -> Vec<Target> {
     // Zone de recherche ELINT : centrée à ~12 km de l'émetteur (position réelle inconnue)
     let zone = |i: usize| (em[i].lat + 0.08, em[i].lon - 0.09);
     vec![
-        t("A", "LAC SEC ROGERS (EDWARDS)", 34.92, -117.83, Kind::Imint(3.0), 3),
-        t("B", "CHAMP DE TIR CHINA LAKE", 35.69, -117.69, Kind::Imint(4.0), 2),
-        t("C", "AERODROME TONOPAH", 37.79, -116.78, Kind::Imint(5.0), 1),
-        t("D", "VANDENBERG SLC-6", 34.58, -120.63, Kind::Imint(5.0), 1),
-        t("E", "PORT DE LONG BEACH", 33.75, -118.21, Kind::Sar, 2),
-        t("F", "BARRAGE HOOVER", 36.016, -114.737, Kind::Imint(5.0), 3),
-        t("G", "ILE SAN NICOLAS", 33.25, -119.50, Kind::Sar, 2),
-        t("H", "METEOR CRATER (ARIZONA)", 35.027, -111.022, Kind::Imint(3.0), 3),
-        t("I", "SITE SAM LR-7 (NTTR)", zone(1).0, zone(1).1, Kind::Elint(1), 1),
+        t("A", "PYRAMIDES DE GIZEH", 29.979, 31.134, Kind::Imint(3.0), 3),
+        t("B", "BARRAGE DES TROIS-GORGES", 30.823, 111.003, Kind::Imint(4.0), 2),
+        t("C", "COSMODROME DE BAIKONOUR", 45.920, 63.342, Kind::Imint(5.0), 1),
+        t("D", "CANAL DE PANAMA (MIRAFLORES)", 8.997, -79.592, Kind::Imint(5.0), 1),
+        t("E", "PORT DE ROTTERDAM", 51.950, 4.050, Kind::Sar, 2),
+        t("F", "ULURU (AUSTRALIE)", -25.344, 131.036, Kind::Imint(5.0), 3),
+        t("G", "GLACIER PERITO MORENO", -50.470, -73.030, Kind::Sar, 2),
+        t("H", "CENTRE SPATIAL DE KOUROU", 5.236, -52.768, Kind::Imint(3.0), 3),
+        t("I", "SITE SAM LR-7 (GOBI)", zone(1).0, zone(1).1, Kind::Elint(1), 1),
         t("J", "CONDUITE DE TIR FC-2", zone(3).0, zone(3).1, Kind::Elint(3), 2),
         t("K", "RADAR COTIER CR-5", zone(4).0, zone(4).1, Kind::Elint(4), 3),
     ]

@@ -73,6 +73,8 @@ pub struct Weather {
     cells: HashMap<(i32, i32), Vec<Cloud>>,
     pub info: WxInfo,
     gust_t: f64,
+    /// Origine de la masse turbulente traversée (THERMIQUE, ONDE, CAT)
+    pub turb_cause: &'static str,
     /// Météo réelle (prioritaire quand disponible).
     pub use_real: bool,
     pub real: crate::wxreal::Real,
@@ -150,6 +152,7 @@ impl Weather {
             cells: HashMap::new(),
             info: WxInfo::default(),
             gust_t: 0.0,
+            turb_cause: "",
             use_real: true,
             real: crate::wxreal::Real::new(),
             show3d: true,
@@ -457,6 +460,16 @@ impl Weather {
                 }
             }
         }
+        // Masses d'air turbulentes localisées (cellules de ~20 à 60 km) : convection thermique
+        // basse couche, ondes / rotors en aval du relief par vent fort, poches de turbulence en air
+        // clair en altitude ; air calme au-dessus du FL600
+        let (pt, pc) = turb_mass(ac.lat, ac.lon, ac.alt, ac.d.elev, spd);
+        if pt > turb {
+            turb = pt;
+            self.turb_cause = pc;
+        } else if pt < 0.05 {
+            self.turb_cause = "";
+        }
         // Turbulence mécanique près du sol par vent fort, turbulence en air clair près du jet
         let h_ft = (ac.alt - ac.d.elev) / FT;
         if h_ft < 3_000.0 && spd > 18.0 {
@@ -689,4 +702,42 @@ pub fn draw_map(wx: &Weather, ac: &Aircraft, to_s: &dyn Fn(f64, f64) -> Vec2, z:
             }
         }
     }
+}
+
+/// Turbulence (0..1) des masses d'air localisées au point, et son origine.
+pub fn turb_mass(lat: f64, lon: f64, alt: f64, elev: f64, wind_kt: f64) -> (f64, &'static str) {
+    let sm = |x: f64| {
+        let x = x.clamp(0.0, 1.0);
+        x * x * (3.0 - 2.0 * x)
+    };
+    let h = alt - elev;
+    let h_ft = alt / FT;
+    let mut best = (0.0f64, "");
+    // Thermiques : sous ~8000 ft sol, au-dessus des terres chaudes (latitudes < 45°)
+    if h < 2_500.0 && elev > 0.0 && lat.abs() < 45.0 {
+        let n = vnoise(lat * 4.0, lon * 4.0, 901);
+        let v = sm((n - 0.45) / 0.35) * 0.45 * sm(h / 300.0) * (1.0 - sm((h - 1_800.0) / 700.0));
+        if v > best.0 {
+            best = (v, "THERMIQUE");
+        }
+    }
+    // Ondes et rotors : relief marqué et vent > 20 kt, jusqu'à ~4 km au-dessus du sol
+    if elev > 1_000.0 && wind_kt > 20.0 && h < 4_000.0 {
+        let n = vnoise(lat * 6.0, lon * 6.0, 902);
+        let v = sm((elev - 1_000.0) / 1_200.0) * sm((wind_kt - 20.0) / 30.0) * (0.35 + 0.4 * n) * (1.0 - sm((h - 2_500.0) / 1_500.0));
+        if v > best.0 {
+            best = (v, "ONDE / ROTOR");
+        }
+    }
+    // Poches de turbulence en air clair entre FL200 et FL500 (couches de ~4000 ft)
+    if (20_000.0..50_000.0).contains(&h_ft) {
+        let layer = (h_ft / 4_000.0).floor() as i64;
+        let n = vnoise(lat * 2.5, lon * 2.5, 910 + layer);
+        let edge = sm((h_ft - 20_000.0) / 2_000.0) * (1.0 - sm((h_ft - 46_000.0) / 4_000.0));
+        let v = sm((n - 0.72) / 0.2) * 0.65 * edge;
+        if v > best.0 {
+            best = (v, "CAT");
+        }
+    }
+    best
 }

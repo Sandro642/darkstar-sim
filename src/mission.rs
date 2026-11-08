@@ -16,7 +16,7 @@ pub struct Step {
 
 pub const STEPS: &[Step] = &[
     Step { title: "TP-01  PRÉ-VOL / DÉMARRAGE", text: "Entrées d'air turbine ouvertes. Démarrer les turbines (T). Attendre N2 62% (IDLE) et EGT stabilisée.", hold: 0.0 },
-    Step { title: "TP-02  DÉCOLLAGE KPMD", text: "Relâcher les freins (B). Plein gaz PC (R). Rotation vers 170 KEAS, assiette 10°, train rentré avant 270 KEAS. Instruction DECOLLAGE 15000 pour le décollage automatique.", hold: 0.0 },
+    Step { title: "TP-02  DÉCOLLAGE KPMD", text: "Relâcher les freins (B). Plein gaz PC (R). Rotation à VR (annoncée, ~190 KEAS à pleine charge), assiette 10°, train rentré avant 270 KEAS. Instruction DECOLLAGE 15000 pour le décollage automatique.", hold: 0.0 },
     Step { title: "TP-03  MONTÉE SUBSONIQUE", text: "Monter au FL350 et accélérer à M0.90. Stabiliser 10 s. (Après DECOLLAGE, l'A/THR tient 350 KEAS : suffisant ici.)", hold: 10.0 },
     Step { title: "TP-04  PASSAGE SUPERSONIQUE", text: "PC plein : pousser la manette à 100 % (R, l'A/THR se coupe) ou instruction MACH 2.7. Accélérer à M2.0 au-dessus du FL450, puis continuer vers M2.5 pour le stato (garder q < 100 kPa).", hold: 3.0 },
     Step { title: "TP-05  ALLUMAGE STATORÉACTEUR", text: "Armer le stato (Y) à M>=2.0. Allumer (Y) à M>=2.5, au-dessus du FL400, q entre 15 et 95 kPa. Mode DUAL.", hold: 0.0 },

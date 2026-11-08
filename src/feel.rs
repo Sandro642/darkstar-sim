@@ -25,6 +25,8 @@ pub struct Feel {
     pub rumble: f32,
     /// Bang supersonique à jouer.
     pub boom: bool,
+    /// Distance roulée (m) : joints de dalles de la piste
+    roll_dist: f64,
 }
 
 struct Prev {
@@ -33,6 +35,8 @@ struct Prev {
     mach: f64,
     scram: bool,
     ab: f64,
+    gear: f64,
+    theta: f64,
 }
 
 fn smooth(x: f64) -> f32 {
@@ -50,7 +54,7 @@ fn wobble(t: f64, f: f64, seed: f64) -> f32 {
 
 impl Feel {
     pub fn new() -> Feel {
-        Feel { on: true, pos: Vec3::ZERO, vel: Vec3::ZERO, noise: Vec3::ZERO, t: 0.0, prev: None, veil: 0.0, rumble: 0.0, boom: false }
+        Feel { on: true, pos: Vec3::ZERO, vel: Vec3::ZERO, noise: Vec3::ZERO, t: 0.0, prev: None, veil: 0.0, rumble: 0.0, boom: false, roll_dist: 0.0 }
     }
 
     pub fn reset(&mut self) {
@@ -76,7 +80,7 @@ impl Feel {
         let scram = if ac.eng.scram == ScramState::Lit { 0.18 * smooth(d.q / 50_000.0) } else { 0.0 };
         let buffet = stall.max(transonic).max(q_buf).max(g_buf).max(scram);
         let gs = ac.ground_speed();
-        let roll = if ac.on_ground && alive { smooth(gs / 90.0) * 0.8 } else { 0.0 };
+        let roll = if ac.on_ground && alive { (smooth(gs / 90.0) * 1.1).min(1.0) } else { 0.0 };
         let turb = ac.turb as f32;
 
         // --- Bruit direct (haute fréquence) ---
@@ -95,11 +99,26 @@ impl Feel {
         self.noise = n;
 
         // --- Inertie de la tête (ressort amorti) ---
+        // En vol : enfoncement sous facteur de charge, retard sur le roulis ; au sol : la tête part
+        // en arrière à l'accélération (vue qui monte) et en avant au freinage
+        let surge = (-(d.accel as f32) * 0.06).clamp(-0.9, 0.9);
         let target = if self.on && alive && !ac.on_ground {
-            vec3(0.0, (-(d.nz - 1.0) * 0.28).clamp(-1.2, 1.2) as f32, (-ac.fcs.roll_rate * 0.012).clamp(-2.0, 2.0) as f32)
+            vec3(0.0, (-(d.nz - 1.0) * 0.28).clamp(-1.2, 1.2) as f32 + surge * 0.5, (-ac.fcs.roll_rate * 0.012).clamp(-2.0, 2.0) as f32)
+        } else if self.on && alive {
+            vec3(0.0, surge, 0.0)
         } else {
             Vec3::ZERO
         };
+        // Roulage : joints de dalles (à-coup tous les ~25 m), plus secs avec la vitesse
+        if self.on && alive && ac.on_ground && gs > 3.0 {
+            let before = (self.roll_dist / 25.0).floor();
+            self.roll_dist += gs * dt as f64;
+            if (self.roll_dist / 25.0).floor() != before {
+                let k = smooth(gs / 80.0) * 2.2 + 0.3;
+                self.vel.y -= k;
+                self.vel.z += k * 0.35 * if (t * 7.0).sin() > 0.0 { 1.0 } else { -1.0 };
+            }
+        }
         // À-coups sur transition
         if let Some(p) = &self.prev {
             if self.on && alive {
@@ -119,9 +138,22 @@ impl Feel {
                 if ac.eng.ab_frac > 0.5 && p.ab <= 0.5 {
                     self.vel.y += 8.0;
                 }
+                // Rotation : la roulette avant quitte la piste
+                if ac.on_ground && p.theta < 0.01 && ac.theta >= 0.01 {
+                    self.vel.y += 6.0;
+                }
+                // Décollage : fin du grondement, léger enfoncement
+                if p.ground && !ac.on_ground {
+                    self.vel.y -= 4.0;
+                }
+                // Train verrouillé (rentré ou sorti) : claquement des trappes
+                if (p.gear > 0.02 && ac.gear_pos <= 0.02) || (p.gear < 0.98 && ac.gear_pos >= 0.98) {
+                    self.vel.y += 5.0;
+                    self.vel.z += 2.0;
+                }
             }
         }
-        self.prev = Some(Prev { ground: ac.on_ground, vs: d.vs, mach: d.mach, scram: ac.eng.scram == ScramState::Lit, ab: ac.eng.ab_frac });
+        self.prev = Some(Prev { ground: ac.on_ground, vs: d.vs, mach: d.mach, scram: ac.eng.scram == ScramState::Lit, ab: ac.eng.ab_frac, gear: ac.gear_pos, theta: ac.theta });
         let (k, c) = (60.0, 8.5);
         let acc = (target - self.pos) * k - self.vel * c;
         self.vel += acc * dt;
