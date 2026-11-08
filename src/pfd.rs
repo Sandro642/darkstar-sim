@@ -64,7 +64,11 @@ pub fn geo(r: Rect) -> Geo {
     let hdg = Rect::new((r.x + (r.w - hw) / 2.0).round(), r.y + r.h - 38.0, hw.round(), 32.0);
     let ix = spd.x + spd.w + 16.0;
     let iy = fma.y + fma.h + 4.0;
-    let inner = Rect::new(ix, iy, alt.x - 16.0 - ix, hdg.y - 6.0 - iy);
+    // Zone centrale symétrique autour de l'axe de l'horizon (maquette, cap) : les bannières et
+    // blocs centrés tombent ainsi sur l'axe de l'avion
+    let cx = r.x + r.w / 2.0;
+    let half = (cx - ix).min(alt.x - 16.0 - cx);
+    let inner = Rect::new((cx - half).round(), iy, (2.0 * half).round(), hdg.y - 6.0 - iy);
     Geo { fma, spd, alt, vsi, hdg, inner }
 }
 

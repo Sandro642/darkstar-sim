@@ -182,58 +182,6 @@ impl Wxr {
         draw_line(c.x, c.y, s.x, s.y, 1.0, Color::new(0.3, 1.0, 0.5, 0.18 + 0.05 * (time * 8.0).sin() as f32));
     }
 
-    /// Écho le plus significatif : (niveau, azimut relatif deg, distance m) — le plus fort, puis le plus proche.
-    pub fn strongest(&self) -> Option<(u8, f32, f64)> {
-        let mut best: Option<(u8, f32, f64)> = None;
-        for col in 0..AZ {
-            for k in 0..RG {
-                let (l, _) = self.bins[col * RG + k];
-                if l == 0 {
-                    continue;
-                }
-                let d = (k as f64 + 0.5) / RG as f64 * self.range_m;
-                let az = -HALF_SCAN + (col as f32 + 0.5) / AZ as f32 * 2.0 * HALF_SCAN;
-                if best.is_none_or(|b| l > b.0 || (l == b.0 && d < b.2)) {
-                    best = Some((l, az, d));
-                }
-            }
-        }
-        best
-    }
-
-    /// Bloc radar météo sur l'horizon (zone centrale `r`, côté droit sous le bloc vent).
-    pub fn draw_hud(&self, r: Rect, time: f64) {
-        // Une ligne compacte sous le bloc vent (colonne droite)
-        let w = 196.0;
-        let x = r.x + r.w - w - 30.0;
-        let y = r.y + 196.0;
-        let b = Rect::new(x, y, w, 18.0);
-        rrect(b, 4.0, Color::new(0.0, 0.0, 0.0, 0.55));
-        if !self.on {
-            txt("WXR OFF", x + 6.0, y + 13.0, 11.0, AMBER);
-            return;
-        }
-        txt(&format!("WXR {}", self.tilt_label()), x + 6.0, y + 13.0, 10.0, GREEN_S);
-        match self.strongest() {
-            Some((l, az, d)) => {
-                let clock = ((az / 30.0).round() as i32).rem_euclid(12);
-                let clock = if clock == 0 { 12 } else { clock };
-                let what = match l {
-                    4 => "TURB",
-                    3 => "FORT",
-                    2 => "MODERE",
-                    _ => "FAIBLE",
-                };
-                let blink = l < 3 || (time * 2.0).fract() < 0.7;
-                draw_rectangle(x + 64.0, y + 5.0, 7.0, 7.0, level_color(l, 1.0));
-                if blink {
-                    txt(&format!("{what} {clock}H {:.0}NM", d / NM), x + 76.0, y + 13.0, 10.0, level_color(l, 1.0));
-                }
-            }
-            None => txt("AUCUN ECHO", x + 64.0, y + 13.0, 10.0, Color::new(0.6, 0.65, 0.7, 1.0)),
-        }
-    }
-
     /// Dans l'horizon : rideaux translucides aux échos jaunes, rouges et magenta, et bande de synthèse
     /// le long de la ligne d'horizon (écho le plus fort par direction).
     pub fn draw_horizon(&self, ac: &Aircraft, v: &View, time: f64) {

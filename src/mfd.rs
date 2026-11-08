@@ -114,7 +114,6 @@ pub fn draw_mfd(world: &World, tiles: &mut crate::tiles::Tiles, wx: &crate::weat
     crate::refuel::draw_hud(rf, ac, lay.inner, time);
     if info.mishap.is_none() {
         crate::recon::draw_cam_hud(ac, recon, lay.inner, time);
-        st.wxr.draw_hud(lay.inner, time);
         crate::appr::draw(ac, lay.inner, time);
     }
     act.fuel_dump = draw_fuel(ac, panes[0]);

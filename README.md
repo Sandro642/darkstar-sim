@@ -518,3 +518,6 @@ Le SR-72 est un avion de reconnaissance : sa charge utile est simulée.
   - Reconnaissance : objectifs et émetteurs répartis dans le monde entier (Gizeh, Trois-Gorges,
     Baïkonour, Panama, Rotterdam, Uluru, Perito Moreno, Kourou ; sites ELINT Sahara, Gobi,
     Australie, golfe Persique, océan Indien, Groenland).
+- v1.31.1 : horizon — zone centrale symétrique autour de l'axe de l'avion (bannières carburant,
+  approche, ILS, blocs éphémères centrés sur la maquette et le ruban de cap) ; bandeau « WXR … » retiré
+  de l'horizon (le radar météo reste sur le ND, la page SYSTEMES et en rideaux dans l'horizon).
