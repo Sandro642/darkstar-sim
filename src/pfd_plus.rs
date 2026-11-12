@@ -10,6 +10,15 @@ use crate::terrain::EyeFrame;
 use crate::ui::*;
 use macroquad::prelude::*;
 
+/// Horizon : cadres à angles nets (présentation d'afficheur de bord, pas d'arrondis).
+fn rrect(r: Rect, _rad: f32, c: Color) {
+    draw_rectangle(r.x, r.y, r.w, r.h, c);
+}
+
+fn rrect_lines(r: Rect, _rad: f32, th: f32, c: Color) {
+    draw_rectangle_lines(r.x, r.y, r.w, r.h, th, c);
+}
+
 const PANEL_BG: Color = Color::new(0.0, 0.0, 0.0, 0.55);
 const ARMED: Color = Color::new(0.35, 0.85, 1.0, 1.0);
 
@@ -206,15 +215,15 @@ pub fn predicted_path(ac: &Aircraft, v: &View, time: f64) -> Option<(f64, f64)> 
 pub fn terrain_warning(clr: Option<(f64, f64)>, s: Rect, time: f64) {
     let Some((c, t)) = clr else { return };
     let (cx, cy) = (s.x + s.w / 2.0, s.y + s.h / 2.0);
-    if c < 0.0 && (time * 3.0).fract() < 0.65 {
-        for k in 0..3 {
-            let y = cy - 40.0 - k as f32 * 14.0;
-            stroke(&[vec2(cx - 26.0, y + 10.0), vec2(cx, y), vec2(cx + 26.0, y + 10.0)], false, 3.0, RED);
+    let blink = (time * 3.0).fract() < 0.65;
+    if c < 0.0 {
+        if blink {
+            for k in 0..3 {
+                let y = cy - 40.0 - k as f32 * 14.0;
+                stroke(&[vec2(cx - 26.0, y + 10.0), vec2(cx, y), vec2(cx + 26.0, y + 10.0)], false, 3.0, RED);
+            }
         }
-        let msg = format!("TERRAIN  T-{t:.0}s");
-        let w = txt_w(&msg, 18.0) + 20.0;
-        rrect(Rect::new(cx - w / 2.0, cy - 110.0, w, 26.0), 5.0, Color::new(0.3, 0.0, 0.0, 0.8));
-        txt_c(&msg, cx, cy - 91.0, 18.0, RED);
+        tag(cx, cy - 96.0, "TERRAIN", &format!("PULL UP   T-{t:.0} s"), RED, 18.0, false, blink);
     }
 }
 
@@ -709,39 +718,24 @@ pub fn fuel_alert(ac: &Aircraft, p: &crate::fuel::Plan, s: Rect, time: f64, sinc
     let cx = s.x + s.w / 2.0;
     let detail = since_change < 12.0 || reveal;
     let title = if p.level == F::Ok { "H2 BINGO" } else { p.level.name() };
+    let flashing = matches!(p.level, F::MinFuel | F::Emergency | F::Bingo) && since_change < 6.0;
+    let y = s.y + s.h * 0.30;
     if detail {
-        // Sous l'arc d'inclinaison, sur un fond sombre (lisible par-dessus l'échelle de tangage)
-        let y = s.y + s.h * 0.30;
-        let a = if since_change < 12.0 { ((12.0 - since_change) / 1.5).clamp(0.0, 1.0) as f32 } else { 1.0 };
-        let a = if reveal { 1.0 } else { a };
-        rrect(Rect::new(cx - 250.0, y - 26.0, 500.0, 92.0), 8.0, Color::new(0.0, 0.0, 0.0, 0.45 * a));
-        let flashing = matches!(p.level, F::MinFuel | F::Emergency | F::Bingo) && since_change < 6.0;
-        if !flashing || blink {
-            htxt(title, cx - txt_w(title, 26.0) / 2.0, y, 26.0, col, a);
-        }
+        tag(cx, y, "CARBURANT", &format!("{title}   JP-7 {:.1} t   BINGO {:.1} t{}", ac.fuel / 1000.0, p.bingo / 1000.0, if p.manual { " (MAN)" } else { "" }), col, 16.0, false, !flashing || blink);
         let (icao, brg, dist, eta, need) = p.rtb;
-        let l1 = format!("JP7 {:.1} t   BINGO {:.1} t{}", ac.fuel / 1000.0, p.bingo / 1000.0, if p.manual { " (MAN)" } else { "" });
-        htxt(&l1, cx - txt_w(&l1, 14.0) / 2.0, y + 22.0, 14.0, WHITE, a);
-        let l2 = format!("RTB {icao}  CAP {brg:03.0}  {:.0} NM  {}  BESOIN {:.1} t", dist / NM, crate::mission::fmt_time(eta), need / 1000.0);
-        htxt(&l2, cx - txt_w(&l2, 13.0) / 2.0, y + 40.0, 13.0, if need + crate::fuel::RESERVE > ac.fuel { RED } else { GREEN_S }, a);
-        let mut yy = y + 58.0;
+        let short = need + crate::fuel::RESERVE > ac.fuel;
+        tag(cx, y + 28.0, "RTB", &format!("{icao}  CAP {brg:03.0}  {:.0} NM  {}  BESOIN {:.1} t", dist / NM, crate::mission::fmt_time(eta), need / 1000.0), if short { RED } else { GREEN_S }, 13.0, false, true);
+        let mut yy = y + 52.0;
         if let Some((cs, d)) = p.tanker {
-            let l3 = format!("RAVITAILLEUR {cs} {:.0} NM — RAVITAILLEMENT", d / NM);
-            htxt(&l3, cx - txt_w(&l3, 13.0) / 2.0, yy, 13.0, Color::new(0.4, 0.85, 1.0, 1.0), a);
-            yy += 18.0;
+            tag(cx, yy, "AAR", &format!("RAVITAILLEUR {cs}  {:.0} NM", d / NM), CYAN_S, 13.0, false, true);
+            yy += 24.0;
         }
         if p.h2_bingo {
-            let l4 = "H2 BINGO : HYDROGENE < 3 MIN — DECELERER (DESCENTE)";
-            htxt(l4, cx - txt_w(l4, 13.0) / 2.0, yy, 13.0, AMBER, a);
+            tag(cx, yy, "H2", "HYDROGENE < 3 MIN — DECELERER (DESCENTE)", AMBER, 13.0, false, true);
         }
     } else if p.level >= F::Bingo || p.h2_bingo {
-        // Annonciateur compact permanent sous l'échelle d'assiette supérieure
+        // Annonciateur compact permanent
         let lbl = if p.level >= F::Bingo { format!("{}  {:.1} t", p.level.name(), ac.fuel / 1000.0) } else { "H2 BINGO".to_string() };
-        let w = txt_w(&lbl, 14.0) + 16.0;
-        let b = Rect::new(cx - w / 2.0, s.y + 58.0, w, 20.0);
-        if p.level < F::MinFuel || blink {
-            draw_rectangle_lines(b.x, b.y, b.w, b.h, 1.5, col);
-            htxt(&lbl, b.x + 8.0, b.y + 15.0, 14.0, col, 1.0);
-        }
+        tag(cx, s.y + 70.0, "CARBURANT", &lbl, col, 14.0, false, p.level < F::MinFuel || blink);
     }
 }

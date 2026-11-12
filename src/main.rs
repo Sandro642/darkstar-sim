@@ -2695,11 +2695,8 @@ async fn main() {
             // Mode dégradé après reconnexion
             if g.degraded.is_some() && g.mishap.is_none() {
                 let fcs = g.ac.fails.has(systems::Fail::FcsDirect) && g.ac.fails.has(systems::Fail::Hyd);
-                let m = if fcs { "CANAL D'URGENCE IRIDIUM — TELEMESURE, CAMERA, TERMINAL — FCS PERDU" } else { "CANAL D'URGENCE IRIDIUM — TELEMESURE, CAMERA, TERMINAL — MANCHE INDISPONIBLE" };
-                let w = ui::txt_w(m, 12.0) + 30.0;
-                let b = Rect::new(svs_r.x + svs_r.w / 2.0 - w / 2.0, svs_r.y + 4.0, w, 20.0);
-                ui::rrect(b, 5.0, Color::new(0.35, 0.18, 0.0, 0.85));
-                ui::txt_c(m, b.x + b.w / 2.0, b.y + 14.0, 12.0, if fcs { Color::new(1.0, 0.3, 0.25, 1.0) } else { ui::AMBER });
+                let m = if fcs { "IRIDIUM — TELEMESURE, CAMERA, TERMINAL — FCS PERDU" } else { "IRIDIUM — TELEMESURE, CAMERA, TERMINAL — MANCHE INDISPONIBLE" };
+                ui::tag(svs_r.x + svs_r.w / 2.0, svs_r.y + 18.0, "LIAISON", m, if fcs { Color::new(1.0, 0.3, 0.25, 1.0) } else { ui::AMBER }, 12.0, false, true);
             }
             // Décision aux minimums : CONTINUE ou GO AROUND
             if g.mins == 2 {
@@ -3124,11 +3121,9 @@ fn draw_flashes(flashes: &mut Vec<(String, Color, f64)>, r: Rect) {
     let mut y = r.y + 64.0;
     for (s, c, t) in flashes.iter() {
         let a = ((t - now) as f32).min(1.0);
-        let w = ui::txt_w(s, 18.0) + 24.0;
-        let x = r.x + (r.w - w) / 2.0;
-        ui::rrect(Rect::new(x, y - 18.0, w, 26.0), 6.0, Color::new(0.0, 0.0, 0.0, 0.55 * a));
-        ui::rrect_lines(Rect::new(x, y - 18.0, w, 26.0), 6.0, 1.0, Color::new(c.r, c.g, c.b, 0.6 * a));
-        ui::txt_c(s, r.x + r.w / 2.0, y, 18.0, Color::new(c.r, c.g, c.b, a));
+        // Catégorie selon la couleur du message (rouge : alarme, ambre : panne, sinon info)
+        let label = if c.r > 0.8 && c.g < 0.5 { "ALARME" } else if c.r > 0.8 && c.g > 0.5 && c.b < 0.4 { "PANNE" } else { "INFO" };
+        ui::tag(r.x + r.w / 2.0, y, label, s, Color::new(c.r, c.g, c.b, a), 16.0, false, true);
         y += 30.0;
     }
 }

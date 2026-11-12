@@ -77,6 +77,29 @@ pub const PANEL_BORDER: Color = Color::new(0.16, 0.19, 0.23, 1.0);
 pub const ACCENT: Color = Color::new(0.30, 0.78, 1.0, 1.0);
 
 /// Rectangle à coins arrondis (plein).
+/// Étiquette d'alerte de l'horizon (style unique) : bloc de couleur avec la catégorie en noir
+/// (« PANNE », « ALARME »…), puis le message encadré dans la même couleur, angles nets.
+/// `x` est le centre (ou le bord gauche si `left`). Renvoie la largeur.
+pub fn tag(x: f32, y: f32, label: &str, body: &str, col: Color, size: f32, left: bool, show_body: bool) -> f32 {
+    let ls = (size * 0.72).max(10.0);
+    let lw = if label.is_empty() { 7.0 } else { txt_w(label, ls) + 12.0 };
+    let bw = txt_w(body, size) + 16.0;
+    let w = lw + bw;
+    let h = size + 9.0;
+    let x0 = if left { x } else { (x - w / 2.0).round() };
+    let top = (y - size * 0.82 - 4.0).round();
+    draw_rectangle(x0, top, w, h, Color::new(0.0, 0.0, 0.0, 0.68));
+    draw_rectangle(x0, top, lw, h, col);
+    if !label.is_empty() {
+        txt_c(label, x0 + lw / 2.0, top + h / 2.0 + ls * 0.36, ls, BLACK);
+    }
+    draw_rectangle_lines(x0, top, w, h, 1.5, col);
+    if show_body {
+        txt(body, x0 + lw + 8.0, top + h / 2.0 + size * 0.36, size, col);
+    }
+    w
+}
+
 pub fn rrect(r: Rect, rad: f32, c: Color) {
     let rad = rad.min(r.w / 2.0).min(r.h / 2.0);
     draw_rectangle(r.x + rad, r.y, r.w - 2.0 * rad, r.h, c);

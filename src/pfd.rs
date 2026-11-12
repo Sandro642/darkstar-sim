@@ -7,6 +7,15 @@ use crate::svs::{dir, View};
 use crate::ui::*;
 use macroquad::prelude::*;
 
+/// Horizon : cadres à angles nets (présentation d'afficheur de bord, pas d'arrondis).
+fn rrect(r: Rect, _rad: f32, c: Color) {
+    draw_rectangle(r.x, r.y, r.w, r.h, c);
+}
+
+fn rrect_lines(r: Rect, _rad: f32, th: f32, c: Color) {
+    draw_rectangle_lines(r.x, r.y, r.w, r.h, th, c);
+}
+
 pub struct PfdInfo<'a> {
     pub alerts: &'a [(Level, String)],
     pub link_name: &'a str,
@@ -396,12 +405,8 @@ fn draw_svs_overlay(ac: &Aircraft, v: &View, s: Rect, info: &PfdInfo) {
     ];
     for (on, label, col, flash) in memos {
         if on {
-            draw_rectangle(s.x + 8.0, oy - 13.0, 92.0, 17.0, Color::new(0.0, 0.0, 0.0, 0.6));
-            draw_rectangle_lines(s.x + 8.0, oy - 13.0, 92.0, 17.0, 1.0, col);
-            if blink || !flash {
-                txt_c(label, s.x + 54.0, oy, if label.len() > 10 { 11.0 } else { 13.0 }, col);
-            }
-            oy += 21.0;
+            tag(s.x + 8.0, oy, "", label, col, 12.0, true, blink || !flash);
+            oy += 24.0;
         }
     }
     if braking {
@@ -481,8 +486,7 @@ fn overspeed_graph(ac: &Aircraft, r: Rect, time: f64) {
 }
 
 /// Consignes au pilote pour éviter la casse des gouvernes / la survitesse / l'impact :
-/// RELEASE STICK (braquage proche de la rupture des charnières), ROLL LEFT / ROLL RIGHT (ailes à
-/// plat d'abord), PULL (ressource), avec flèches ; en cyan pendant une récupération automatique.
+/// RELEASE STICK, ROLL LEFT / ROLL RIGHT, PULL (flèches) ; cyan pendant une récupération automatique.
 fn directives(ac: &Aircraft, cx: f32, y: f32, fast: bool) {
     if ac.on_ground || ac.crashed.is_some() {
         return;
@@ -500,13 +504,9 @@ fn directives(ac: &Aircraft, cx: f32, y: f32, fast: bool) {
         return;
     }
     let col = if auto { CYAN_S } else { RED };
+    let label = if auto { "AUTO" } else { "MANCHE" };
     if release {
-        if fast {
-            let m = "RELEASE STICK";
-            let w = txt_w(m, 22.0) + 22.0;
-            rrect_lines(Rect::new(cx - w / 2.0, y - 18.0, w, 28.0), 4.0, 2.0, RED);
-            txt_c(m, cx, y + 3.0, 22.0, RED);
-        }
+        tag(cx, y, "MANCHE", "RELEASE STICK", RED, 18.0, false, fast);
         return;
     }
     let phi = ac.phi.to_degrees();
@@ -522,51 +522,43 @@ fn directives(ac: &Aircraft, cx: f32, y: f32, fast: bool) {
         parts.push("PULL");
     }
     let msg = parts.join("  ");
-    if msg.is_empty() || (!auto && !fast) {
+    if msg.is_empty() {
         return;
     }
-    txt_c(&msg, cx, y + 3.0, 20.0, col);
-    let w = txt_w(&msg, 20.0);
+    let w = tag(cx, y, label, &msg, col, 18.0, false, auto || fast);
     // Flèches : roulis (latérale) et ressource (vers le haut)
     if roll != 0 {
         let sx = roll as f32;
-        let ax = cx + sx * (w / 2.0 + 20.0);
-        draw_triangle(vec2(ax + sx * 14.0, y - 4.0), vec2(ax, y - 14.0), vec2(ax, y + 6.0), col);
-        draw_line(ax - sx * 16.0, y - 4.0, ax, y - 4.0, 4.0, col);
+        let ax = cx + sx * (w / 2.0 + 22.0);
+        draw_triangle(vec2(ax + sx * 14.0, y - 5.0), vec2(ax, y - 15.0), vec2(ax, y + 5.0), col);
+        draw_line(ax - sx * 16.0, y - 5.0, ax, y - 5.0, 3.0, col);
     }
     if pull {
-        let ay = y - 22.0;
-        draw_triangle(vec2(cx, ay - 16.0), vec2(cx - 10.0, ay - 2.0), vec2(cx + 10.0, ay - 2.0), col);
-        draw_line(cx, ay - 2.0, cx, ay + 6.0, 4.0, col);
+        let ay = y - 30.0;
+        draw_triangle(vec2(cx, ay - 14.0), vec2(cx - 9.0, ay), vec2(cx + 9.0, ay), col);
+        draw_line(cx, ay, cx, ay + 6.0, 3.0, col);
     }
 }
 
 /// GEAR DOWN / SPEED BRAKE EXT|RET demandés par l'autoland (touches G et S).
 fn config_cues(ac: &Aircraft, cx: f32, y: f32, time: f64) {
-    let mut items: Vec<(String, Color)> = Vec::new();
+    let mut items: Vec<(&str, Color)> = Vec::new();
     if ac.cue_gear && !ac.gear_down {
-        items.push(("GEAR DOWN  (G)".into(), GREEN_S));
+        items.push(("GEAR DOWN  (G)", GREEN_S));
     }
     match ac.cue_sb {
-        Some(true) => items.push(("SPEED BRAKE EXT  (S)".into(), CYAN_S)),
-        Some(false) => items.push(("SPEED BRAKE RET  (S)".into(), CYAN_S)),
+        Some(true) => items.push(("SPEED BRAKE EXT  (S)", CYAN_S)),
+        Some(false) => items.push(("SPEED BRAKE RET  (S)", CYAN_S)),
         None => {}
     }
     let blink = (time * 2.0).fract() < 0.7;
     for (k, (m, c)) in items.iter().enumerate() {
-        let yy = y + k as f32 * 32.0;
-        let w = txt_w(m, 18.0) + 28.0;
-        let b = Rect::new(cx - w / 2.0, yy - 20.0, w, 28.0);
-        rrect(b, 5.0, Color::new(0.0, 0.0, 0.0, 0.7));
-        rrect_lines(b, 5.0, 2.0, *c);
-        if blink {
-            txt_c(m, cx, yy, 18.0, *c);
-        }
+        tag(cx, y + k as f32 * 30.0, "CONFIG", m, *c, 17.0, false, blink);
     }
 }
 
-/// Repères de vol critiques en grosses lettres au-dessus de la maquette (style HUD F/A-18) :
-/// FLY UP / chevrons Auto-GCAS, OVER G, AOA, OVERSPEED, SPEED. Rouge clignotant, ambre fixe.
+/// Repères critiques au-dessus de la maquette : FEU, GCAS (chevrons, PULL UP, FLY UP), limites
+/// (OVER G, AOA, OVERSPEED, SPEED). Rouge clignotant, ambre fixe.
 fn hud_cues(ac: &Aircraft, cx: f32, cy: f32, bank_rad: f32, time: f64) {
     if ac.on_ground || ac.crashed.is_some() {
         return;
@@ -574,31 +566,20 @@ fn hud_cues(ac: &Aircraft, cx: f32, cy: f32, bank_rad: f32, time: f64) {
     let d = &ac.d;
     let fast = (time * 3.0).fract() < 0.6;
     let y = cy - bank_rad * 0.42;
-    // Consignes de pilotage (style avion de chasse) : RELEASE STICK, ROLL LEFT/RIGHT, PULL
     directives(ac, cx, y + 44.0, fast);
-    // Feu : priorité absolue
     if ac.fire.any() {
-        if fast {
-            let names: Vec<&str> = ac.fire.zones.iter().enumerate().filter(|(_, z)| z.fire).map(|(i, _)| crate::fire::ZONES[i].0).collect();
-            let msg = format!("FIRE {}", names.join(" "));
-            let w = txt_w(&msg, 24.0) + 24.0;
-            rrect(Rect::new(cx - w / 2.0, y - 46.0, w, 30.0), 5.0, Color::new(0.45, 0.0, 0.0, 0.9));
-            txt_c(&msg, cx, y - 24.0, 24.0, WHITE);
-        }
+        let names: Vec<&str> = ac.fire.zones.iter().enumerate().filter(|(_, z)| z.fire).map(|(i, _)| crate::fire::ZONES[i].0).collect();
+        tag(cx, y - 24.0, "FEU", &names.join("  "), RED, 22.0, false, fast);
         return;
     }
-    // Auto-GCAS : chevrons qui se referment avant le déclenchement, puis FLY UP
     if ac.gcas_active {
         if fast {
             for k in 0..3 {
                 let yy = y + 26.0 - k as f32 * 13.0;
-                stroke(&[vec2(cx - 34.0, yy + 12.0), vec2(cx, yy), vec2(cx + 34.0, yy + 12.0)], false, 3.5, RED);
+                stroke(&[vec2(cx - 34.0, yy + 12.0), vec2(cx, yy), vec2(cx + 34.0, yy + 12.0)], false, 3.0, RED);
             }
-            let msg = if ac.gcas_ovr { "FLY UP  5G" } else { "FLY UP" };
-            let w = txt_w(msg, 24.0) + 22.0;
-            rrect(Rect::new(cx - w / 2.0, y - 46.0, w, 30.0), 5.0, Color::new(0.35, 0.0, 0.0, 0.85));
-            txt_c(msg, cx, y - 24.0, 24.0, RED);
         }
+        tag(cx, y - 24.0, "GCAS", if ac.gcas_ovr { "FLY UP  5G" } else { "FLY UP" }, RED, 22.0, false, fast);
         return;
     }
     if ac.gcas_on && ac.gcas_t < 6.0 {
@@ -610,37 +591,31 @@ fn hud_cues(ac: &Aircraft, cx: f32, cy: f32, bank_rad: f32, time: f64) {
             let x = cx + sgn * gap;
             stroke(&[vec2(x + sgn * 16.0, y - 14.0), vec2(x, y), vec2(x + sgn * 16.0, y + 14.0)], false, 3.0, c);
         }
-        if ac.gcas_t < 2.5 && fast {
-            txt_c("PULL UP", cx, y - 22.0, 20.0, RED);
+        if ac.gcas_t < 2.5 {
+            tag(cx, y - 26.0, "GCAS", "PULL UP", RED, 20.0, false, fast);
         }
         return;
     }
     let nmax = ac.fcs.nz_max.max(1.5);
     let amax = ac.fcs.alpha_max.max(1.0);
-    let keas = d.keas;
     let cue: Option<(&str, bool)> = if d.nz > nmax * 0.95 || d.nz < -1.5 {
         Some(("OVER G", true))
-    } else if d.alpha.to_degrees() > amax * 0.92 && keas < 300.0 {
+    } else if d.alpha.to_degrees() > amax * 0.92 && d.keas < 300.0 {
         Some(("AOA", true))
     } else if d.q > 0.92 * Q_LIMIT {
         Some(("OVERSPEED", true))
-    } else if !ac.gear_down && keas < 150.0 && d.agl > 100.0 {
+    } else if !ac.gear_down && d.keas < 150.0 && d.agl > 100.0 {
         Some(("SPEED", false))
     } else {
         None
     };
     if let Some((m, red)) = cue {
-        if !red || fast {
-            let c = if red { RED } else { AMBER };
-            let w = txt_w(m, 22.0) + 22.0;
-            rrect_lines(Rect::new(cx - w / 2.0, y - 18.0, w, 28.0), 4.0, 2.0, c);
-            txt_c(m, cx, y + 3.0, 22.0, c);
-        }
+        tag(cx, y, "LIMITE", m, if red { RED } else { AMBER }, 20.0, false, !red || fast);
     }
 }
 
-/// Fenêtre d'alarmes façon Rafale : cadre rouge « ALARME » (voyants rouges, clignotants) et ligne
-/// ambre « PANNE » (voyants ambre), sans répéter les mémos déjà affichés à gauche.
+/// Fenêtre d'alarmes : « ALARME » (voyants rouges, clignotants) et « PANNE » (voyants ambre),
+/// sans répéter les mémos déjà affichés à gauche.
 fn alarm_window(ac: &Aircraft, info: &PfdInfo, cx: f32, y: f32) {
     if ac.crashed.is_some() {
         return;
@@ -648,45 +623,24 @@ fn alarm_window(ac: &Aircraft, info: &PfdInfo, cx: f32, y: f32) {
     const MEMO: [&str; 5] = ["ENG OVRD", "FADEC LIMIT", "FUEL DUMP", "H2 DUMP", "FCS DIRECT"];
     let lit = crate::alarms::lit(ac, info.alerts);
     let skip = |n: &str, l: u8| MEMO.contains(&n) && !(n == "FCS DIRECT" && l == 2);
-    let reds: Vec<&str> = lit.iter().filter(|(n, l)| *l == 2 && !skip(n, *l)).map(|(n, _)| *n).collect();
-    let ambers: Vec<&str> = lit.iter().filter(|(n, l)| *l == 1 && !skip(n, *l)).map(|(n, _)| *n).collect();
+    let list = |lvl: u8| -> String {
+        let v: Vec<&str> = lit.iter().filter(|(n, l)| *l == lvl && !skip(n, *l)).map(|(n, _)| *n).collect();
+        let more = if v.len() > 3 { format!("  +{}", v.len() - 3) } else { String::new() };
+        if v.is_empty() { String::new() } else { format!("{}{more}", v.iter().take(3).copied().collect::<Vec<_>>().join("  ")) }
+    };
+    let (reds, ambers) = (list(2), list(1));
     let blink = (info.time * 2.0).fract() < 0.65;
-    // Une seule ligne compacte : [ALARME] rouges  [PANNE] ambres
-    let red_body = {
-        let n = reds.iter().take(3).copied().collect::<Vec<_>>().join("  ");
-        if reds.len() > 3 { format!("{n}  +{}", reds.len() - 3) } else { n }
-    };
-    let amb_body = {
-        let n = ambers.iter().take(3).copied().collect::<Vec<_>>().join("  ");
-        if ambers.len() > 3 { format!("{n}  +{}", ambers.len() - 3) } else { n }
-    };
-    let ta = txt_w("ALARME", 13.0) + 12.0;
-    let tp = txt_w("PANNE", 13.0) + 12.0;
-    let w_red = if reds.is_empty() { 0.0 } else { ta + txt_w(&red_body, 16.0) + 18.0 };
-    let w_amb = if ambers.is_empty() { 0.0 } else { tp + txt_w(&amb_body, 14.0) + 16.0 };
-    let gap = if w_red > 0.0 && w_amb > 0.0 { 8.0 } else { 0.0 };
-    if w_red + w_amb == 0.0 {
-        return;
+    let size = 15.0;
+    let wr = if reds.is_empty() { 0.0 } else { txt_w("ALARME", size * 0.72) + 12.0 + txt_w(&reds, size) + 16.0 };
+    let wa = if ambers.is_empty() { 0.0 } else { txt_w("PANNE", size * 0.72) + 12.0 + txt_w(&ambers, size) + 16.0 };
+    let gap = if wr > 0.0 && wa > 0.0 { 8.0 } else { 0.0 };
+    let mut x = cx - (wr + gap + wa) / 2.0;
+    if wr > 0.0 {
+        tag(x, y, "ALARME", &reds, RED, size, true, blink);
+        x += wr + gap;
     }
-    let mut x = cx - (w_red + gap + w_amb) / 2.0;
-    if w_red > 0.0 {
-        let b = Rect::new(x, y - 18.0, w_red, 26.0);
-        draw_rectangle(b.x, b.y, b.w, b.h, Color::new(0.0, 0.0, 0.0, 0.65));
-        draw_rectangle_lines(b.x, b.y, b.w, b.h, 2.0, RED);
-        draw_rectangle(b.x, b.y, ta, b.h, if blink { RED } else { Color::new(0.45, 0.0, 0.0, 1.0) });
-        txt_c("ALARME", b.x + ta / 2.0, y, 13.0, BLACK);
-        if blink {
-            txt(&red_body, b.x + ta + 9.0, y + 1.0, 16.0, RED);
-        }
-        x += w_red + gap;
-    }
-    if w_amb > 0.0 {
-        let b = Rect::new(x, y - 16.0, w_amb, 22.0);
-        draw_rectangle(b.x, b.y, b.w, b.h, Color::new(0.0, 0.0, 0.0, 0.55));
-        draw_rectangle_lines(b.x, b.y, b.w, b.h, 1.5, AMBER);
-        draw_rectangle(b.x, b.y, tp, b.h, AMBER);
-        txt_c("PANNE", b.x + tp / 2.0, y - 1.0, 13.0, BLACK);
-        txt(&amb_body, b.x + tp + 8.0, y, 14.0, AMBER);
+    if wa > 0.0 {
+        tag(x, y, "PANNE", &ambers, AMBER, size, true, true);
     }
 }
 

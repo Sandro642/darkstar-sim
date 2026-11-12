@@ -11,6 +11,16 @@ use crate::autoflight::AlPhase;
 use crate::geo::*;
 use crate::ui::*;
 use macroquad::prelude::*;
+
+/// Horizon : cadres à angles nets (présentation d'afficheur de bord).
+fn rrect(r: Rect, _rad: f32, c: Color) {
+    draw_rectangle(r.x, r.y, r.w, r.h, c);
+}
+
+#[allow(dead_code)]
+fn rrect_lines(r: Rect, _rad: f32, th: f32, c: Color) {
+    draw_rectangle_lines(r.x, r.y, r.w, r.h, th, c);
+}
 use std::cell::RefCell;
 
 thread_local! {

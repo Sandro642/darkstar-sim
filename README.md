@@ -643,3 +643,7 @@ Le SR-72 est un avion de reconnaissance : sa charge utile est simulée.
     d'arriver, sinon Mach minimisant la consommation totale (accélération + croisière), sinon
     « DESTINATION HORS D'ATTEINTE — DEROUTEMENT CONSEILLE » ; JP-7 insuffisant pour deux
     remises des gaz : alerte et aéroport le plus proche.
+- v1.42.0 : horizon — présentation unifiée des alertes sur le modèle du carré « PANNE » : bloc de
+  couleur avec la catégorie (ALARME, PANNE, FEU, GCAS, LIMITE, MANCHE / AUTO, CONFIG, CARBURANT,
+  RTB, AAR, TERRAIN, LIAISON, INFO) et message encadré ; mémos à repère de couleur ; cadres à
+  angles nets sur tout l'horizon (fini les boîtes arrondies et translucides disparates).
