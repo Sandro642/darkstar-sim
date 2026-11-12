@@ -656,3 +656,8 @@ Le SR-72 est un avion de reconnaissance : sa charge utile est simulée.
   d'entrée (plus de palier à 7000 ft / 250 kt à 1000 NM de l'arrivée) ; manette reprise à la
   main respectée par le VNAV (plus de « A/THR OFF » en rafale) ; plus de turbulence au-dessus du
   FL600. Rejeu de l'OFP : Mach 11 FL1220, posé à Zurich en 89 min, 21,5 t de JP-7 restantes.
+- v1.43.0 : horizon style F-35 (par défaut) — symbologie verte monochrome façon casque (échelle
+  d'assiette, maquette, vecteur vitesse, horizon), échelles défilantes remplacées par des valeurs
+  encadrées : vitesse KEAS à gauche (consigne au-dessus ; Mach, g, incidence, GS, TAS, g max
+  dessous), altitude à droite (consigne ; vario, FL, q, peau, sonde radio R, DA dessous), textes à
+  liseré sombre. Instruction HUD STYLE DARKSTAR pour revenir aux échelles, HUD STYLE F35.
