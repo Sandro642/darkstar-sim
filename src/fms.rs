@@ -174,7 +174,7 @@ fn value(b: &[u8], i: &mut usize) -> Result<Json, String> {
 
 // ---------- Plan de vol ----------
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Default)]
 pub struct Wpt {
     pub ident: String,
     pub lat: f64,
@@ -184,9 +184,15 @@ pub struct Wpt {
     pub mach: f64,
     /// Phase du profil Darkstar au point
     pub phase: &'static str,
+    /// Voie / procédure (airway, SID, STAR) menant au point
+    pub via: String,
+    /// 0 en route, 1 SID, 2 STAR
+    pub proc: u8,
+    /// Altitude prévue par SimBrief au point (ft, 0 si inconnue) : contrainte des procédures
+    pub sb_alt: f64,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Default)]
 pub struct Fpln {
     pub origin: String,
     pub dest: String,
@@ -200,6 +206,11 @@ pub struct Fpln {
     pub jp7_req: f64,
     pub h2_req: f64,
     pub ete: f64,
+    /// IFR : pistes de départ / d'arrivée et procédures
+    pub dep_rwy: String,
+    pub arr_rwy: String,
+    pub sid: String,
+    pub star: String,
 }
 
 /// Distance de descente (m) : descente à q constant (~(1 + M/2) NM par 1000 ft, mesuré en vol
@@ -274,6 +285,14 @@ impl Fpln {
                 w.phase = if i == 0 { "DEP" } else { "ARR" };
                 w.mach = if i == 0 { 0.3 } else { 0.25 };
                 w.alt_ft = AIRPORTS.iter().find(|a| a.icao == w.ident).map(|a| a.elev / FT).unwrap_or(0.0);
+            } else if w.proc == 1 {
+                w.phase = "SID";
+                w.mach = 0.6;
+                w.alt_ft = if w.sb_alt > 0.0 { w.sb_alt.min(fl * 100.0) } else { fl * 100.0 };
+            } else if w.proc == 2 {
+                w.phase = "STAR";
+                w.mach = 0.7;
+                w.alt_ft = if w.sb_alt > 0.0 { w.sb_alt } else { fl * 100.0 };
             } else {
                 w.phase = ph;
                 w.mach = m;
@@ -288,7 +307,15 @@ impl Fpln {
 
     /// Point de début de descente (distance à destination, m).
     pub fn tod(&self) -> f64 {
-        tod_dist(self.crz_fl, self.crz_mach)
+        // Avec une STAR : la descente hypersonique doit finir à son entrée (puis la STAR est volée
+        // aux altitudes prévues)
+        match self.wpts.iter().position(|w| w.proc == 2) {
+            Some(k) => {
+                let star: f64 = self.wpts[k..].windows(2).map(|w| dist_brg(w[0].lat, w[0].lon, w[1].lat, w[1].lon).0).sum();
+                star + ((self.crz_fl / 10.0) * (1.0 + 0.5 * self.crz_mach) + 30.0) * NM
+            }
+            None => tod_dist(self.crz_fl, self.crz_mach),
+        }
     }
 }
 
@@ -311,7 +338,7 @@ pub fn dispatch(from: &str, to: &str, crz_fl: f64, crz_mach: f64) -> Result<Fpln
             marks.push((nm_from * NM, name.to_string()));
         }
     }
-    let mut fp = Fpln { origin: from.into(), dest: to.into(), wpts: Vec::new(), active: 1, source: "DISPATCH", flt: "DKS01".into(), crz_fl, crz_mach, jp7_req: 0.0, h2_req: 0.0, ete: 0.0 };
+    let mut fp = Fpln { origin: from.into(), dest: to.into(), wpts: Vec::new(), active: 1, source: "DISPATCH", flt: "DKS01".into(), crz_fl, crz_mach, jp7_req: 0.0, h2_req: 0.0, ete: 0.0, ..Default::default() };
     let tod = fp.tod().min(d * 0.5);
     marks.push((d - tod, "T/D".into()));
     // Points intermédiaires toutes les ~400 NM
@@ -323,16 +350,16 @@ pub fn dispatch(from: &str, to: &str, crz_fl: f64, crz_mach: f64) -> Result<Fpln
         }
     }
     marks.sort_by(|p, q| p.0.partial_cmp(&q.0).unwrap());
-    fp.wpts.push(Wpt { ident: from.into(), lat: a.lat, lon: a.lon, alt_ft: 0.0, mach: 0.0, phase: "DEP" });
+    fp.wpts.push(Wpt { ident: from.into(), lat: a.lat, lon: a.lon, alt_ft: 0.0, mach: 0.0, phase: "DEP", ..Default::default() });
     // Orthodromie : point à la distance x sur l'arc a→b (relèvement initial)
     for (x, name) in marks {
         let (la, lo) = destination(a.lat, a.lon, brg, x);
         // Correction : on se recale vers b le long de l'orthodromie
         let (_, b2) = dist_brg(la, lo, b.lat, b.lon);
         let _ = b2;
-        fp.wpts.push(Wpt { ident: name, lat: la, lon: lo, alt_ft: 0.0, mach: 0.0, phase: "" });
+        fp.wpts.push(Wpt { ident: name, lat: la, lon: lo, alt_ft: 0.0, mach: 0.0, phase: "", ..Default::default() });
     }
-    fp.wpts.push(Wpt { ident: to.into(), lat: b.lat, lon: b.lon, alt_ft: 0.0, mach: 0.0, phase: "ARR" });
+    fp.wpts.push(Wpt { ident: to.into(), lat: b.lat, lon: b.lon, alt_ft: 0.0, mach: 0.0, phase: "ARR", ..Default::default() });
     fp.compute();
     Ok(fp)
 }
@@ -350,7 +377,10 @@ pub fn from_simbrief(j: &Json, crz_mach: f64) -> Result<Fpln, String> {
     let pt = |x: &Json| -> Option<(String, f64, f64)> { Some((x.get("icao_code")?.s(), x.get("pos_lat")?.f()?, x.get("pos_long")?.f()?)) };
     let (oi, ola, olo) = pt(o).ok_or("ORIGINE INVALIDE")?;
     let (di, dla, dlo) = pt(d).ok_or("DESTINATION INVALIDE")?;
-    let mut wpts = vec![Wpt { ident: oi.clone(), lat: ola, lon: olo, alt_ft: 0.0, mach: 0.0, phase: "DEP" }];
+    let mut wpts = vec![Wpt { ident: oi.clone(), lat: ola, lon: olo, alt_ft: 0.0, mach: 0.0, phase: "DEP", ..Default::default() }];
+    let (mut sid, mut star) = (String::new(), String::new());
+    let dep_rwy = o.get("plan_rwy").map(|x| x.s()).unwrap_or_default();
+    let arr_rwy = d.get("plan_rwy").map(|x| x.s()).unwrap_or_default();
     if let Some(fixes) = j.path(&["navlog", "fix"]) {
         for f in fixes.items() {
             let ident = f.get("ident").map(|x| x.s()).unwrap_or_default();
@@ -359,19 +389,25 @@ pub fn from_simbrief(j: &Json, crz_mach: f64) -> Result<Fpln, String> {
             if ident.is_empty() || ident == di || ident == oi || typ == "apt" {
                 continue;
             }
-            // Pas de points trop rapprochés : inutiles à Mach 6
-            if let Some(l) = wpts.last() {
-                if dist_brg(l.lat, l.lon, la, lo).0 < 15.0 * NM {
-                    continue;
-                }
+            // IFR : tous les points sont gardés (procédures comprises)
+            let ss = f.get("is_sid_star").map(|x| x.s() == "1").unwrap_or(false);
+            let stage = f.get("stage").map(|x| x.s()).unwrap_or_default();
+            let via = f.get("via_airway").map(|x| x.s()).unwrap_or_default();
+            let proc = if ss && stage == "CLB" { 1 } else if ss { 2 } else { 0 };
+            if proc == 1 && sid.is_empty() {
+                sid = via.clone();
             }
-            wpts.push(Wpt { ident: ident.chars().take(7).collect(), lat: la, lon: lo, alt_ft: 0.0, mach: 0.0, phase: "" });
+            if proc == 2 {
+                star = via.clone();
+            }
+            let sb_alt = f.get("altitude_feet").and_then(|x| x.f()).unwrap_or(0.0);
+            wpts.push(Wpt { ident: ident.chars().take(7).collect(), lat: la, lon: lo, alt_ft: 0.0, mach: 0.0, phase: "", via, proc, sb_alt });
         }
     }
-    wpts.push(Wpt { ident: di.clone(), lat: dla, lon: dlo, alt_ft: 0.0, mach: 0.0, phase: "ARR" });
+    wpts.push(Wpt { ident: di.clone(), lat: dla, lon: dlo, alt_ft: 0.0, mach: 0.0, phase: "ARR", ..Default::default() });
     let flt = j.path(&["atc", "callsign"]).map(|x| x.s()).filter(|s| !s.is_empty()).unwrap_or("DKS01".into());
     // Le niveau de croisière SimBrief (avion de ligne) est remplacé par le profil Darkstar
-    let mut fp = Fpln { origin: oi, dest: di, wpts, active: 1, source: "SIMBRIEF", flt, crz_fl: if crz_mach > 4.8 { 950.0 } else { 650.0 }, crz_mach, jp7_req: 0.0, h2_req: 0.0, ete: 0.0 };
+    let mut fp = Fpln { origin: oi, dest: di, wpts, active: 1, source: "SIMBRIEF", flt, crz_fl: if crz_mach > 4.8 { 950.0 } else { 650.0 }, crz_mach, jp7_req: 0.0, h2_req: 0.0, ete: 0.0, dep_rwy, arr_rwy, sid, star };
     fp.compute();
     Ok(fp)
 }
@@ -502,6 +538,9 @@ impl Fms {
         let tot = fp.total();
         let tod = fp.tod().min(tot * 0.5);
         let (crz_ft, crz_m, dest) = (fp.crz_fl * 100.0, fp.crz_mach, fp.dest.clone());
+        // Procédures IFR : point actif dans une SID / STAR et altitudes prévues par SimBrief
+        let act = fp.wpts.get(fp.active).cloned().unwrap_or_default();
+        let star_first = fp.wpts.iter().find(|w| w.proc == 2).map(|w| w.sb_alt).unwrap_or(0.0);
         let mach = ac.d.mach;
         let e = ac.eng.clone();
         let turb_on = e.side.iter().any(|s| matches!(s, TurbState::Running | TurbState::Starting));
@@ -511,7 +550,16 @@ impl Fms {
                 m.push(McduOut::Msg(Level::Info, txt));
             }
         };
-        if rem > tod && !self.desc_started {
+        if act.proc == 1 && !self.desc_started {
+            // ----- SID : altitudes de la procédure, 250 kt sous le FL100 -----
+            let tgt = if act.sb_alt > 0.0 { act.sb_alt } else { 10_000.0 };
+            ac.ap.vert = VertMode::Alt;
+            ac.ap.alt_tgt_ft = ((tgt / 500.0).ceil() * 500.0).max(3_000.0);
+            ac.ap.at_on = true;
+            ac.ap.spd_managed = false;
+            ac.ap.spd_keas = Some(if ac.alt / FT < 10_000.0 { 250.0 } else { 300.0 });
+            say(&mut out, &mut self.phase, "SID", format!("FMS : SID {} — ALTITUDES DE LA PROCEDURE", act.via));
+        } else if rem > tod && !self.desc_started {
             // ----- Montée / accélération / croisière -----
             ac.ap.at_on = true;
             ac.ap.spd_keas = None;
@@ -590,7 +638,18 @@ impl Fms {
                 ac.eng.ram = RamState::Off;
                 out.push(McduOut::Msg(Level::Info, "FMS : STATO OFF (MACH < 2,6) — RALLUMAGE TURBINES".into()));
             }
-            if ac.ap.vert != VertMode::QHold {
+            if ac.ap.vert != VertMode::QHold && (act.proc == 2 || star_first > 0.0) {
+                // STAR : altitudes prévues de la procédure (entrée de STAR avant d'y être)
+                let tgt = if act.proc == 2 && act.sb_alt > 0.0 { act.sb_alt } else { star_first.max(3_000.0) };
+                ac.ap.vert = VertMode::Alt;
+                ac.ap.alt_tgt_ft = (tgt / 500.0).round() * 500.0;
+                ac.ap.at_on = true;
+                ac.ap.spd_managed = false;
+                ac.ap.spd_keas = Some(if ac.alt / FT < 10_000.0 { 250.0 } else { 280.0 });
+                if act.proc == 2 {
+                    say(&mut out, &mut self.phase, "STAR", format!("FMS : STAR {} — ALTITUDES DE LA PROCEDURE", act.via));
+                }
+            } else if ac.ap.vert != VertMode::QHold {
                 // Descente finale : plan à ~3,5° vers la destination, 250-300 KEAS
                 let elev_ft = AIRPORTS.iter().find(|a| a.icao == dest).map(|a| a.elev / FT).unwrap_or(0.0);
                 let tgt = (elev_ft + rem * 3.5f64.to_radians().tan() / FT).clamp(elev_ft + 3_000.0, 35_000.0);
@@ -627,7 +686,9 @@ impl Fms {
             self.msg = "SIMBRIEF ID REQUIS".into();
             return;
         }
-        let url = format!("https://www.simbrief.com/api/xml.fetcher.php?username={}&json=1", self.user.to_lowercase());
+        // Pilot ID numérique (userid) ou nom d'utilisateur (username)
+        let key = if self.user.chars().all(|c| c.is_ascii_digit()) { "userid" } else { "username" };
+        let url = format!("https://www.simbrief.com/api/xml.fetcher.php?{key}={}&json=1", self.user.to_lowercase());
         *self.fetch.lock().unwrap() = Fetch::Busy;
         let f = self.fetch.clone();
         std::thread::spawn(move || {
@@ -816,7 +877,7 @@ impl Fms {
                         } else if !sp.is_empty() {
                             match parse_point(&sp) {
                                 Some((id, la, lo)) if idx > 0 => {
-                                    p.wpts.insert(idx, Wpt { ident: id, lat: la, lon: lo, alt_ft: 0.0, mach: 0.0, phase: "" });
+                                    p.wpts.insert(idx, Wpt { ident: id, lat: la, lon: lo, alt_ft: 0.0, mach: 0.0, phase: "", ..Default::default() });
                                     if p.active >= idx && active_view {
                                         p.active += 1;
                                     }
@@ -866,7 +927,7 @@ impl Fms {
                     if !sp.is_empty() {
                         if let Some((id, la, lo)) = parse_point(&sp) {
                             let at = p.active.min(p.wpts.len());
-                            p.wpts.insert(at, Wpt { ident: id.clone(), lat: la, lon: lo, alt_ft: 0.0, mach: 0.0, phase: "" });
+                            p.wpts.insert(at, Wpt { ident: id.clone(), lat: la, lon: lo, alt_ft: 0.0, mach: 0.0, phase: "", ..Default::default() });
                             p.compute();
                             self.scratch.clear();
                             out = Some(McduOut::Msg(Level::Info, format!("FMS : DIRECT {id}")));
@@ -973,7 +1034,13 @@ fn page_lines(f: &Fms, ac: &Aircraft) -> (String, Color, Vec<(Line, Line)>) {
                         };
                         let act = !tmp && i == p.active;
                         let col = if tmp { AMB_M } else if act { MAG_M } else if i < p.active { LBL_M } else { GREEN_M };
-                        let lab = if i == 0 { format!(" {}", w.phase) } else { format!(" C{:03.0} {:.0}NM {}", brg, dd / NM, w.phase) };
+                        let lab = if i == 0 {
+                            format!(" DEP RWY{} {}", p.dep_rwy, p.sid)
+                        } else if !w.via.is_empty() && w.via != "DCT" {
+                            format!(" {} C{:03.0} {:.0}NM", w.via, brg, dd / NM)
+                        } else {
+                            format!(" C{:03.0} {:.0}NM {}", brg, dd / NM, w.phase)
+                        };
                         let cons = if w.mach > 1.0 { format!("M{:.1}/FL{:.0}", w.mach, w.alt_ft / 100.0) } else if w.alt_ft > 0.0 && i > 0 && i + 1 < p.wpts.len() { format!("M.{:.0}/FL{:.0}", w.mach * 100.0, w.alt_ft / 100.0) } else { format!("{:.0}", w.alt_ft) };
                         rows.push((ln(lab, LBL_M, "", LBL_M), ln(w.ident.clone(), col, cons, if act { MAG_M } else { CYAN_M })));
                         prev = Some(w);
@@ -983,7 +1050,8 @@ fn page_lines(f: &Fms, ac: &Aircraft) -> (String, Color, Vec<(Line, Line)>) {
                     }
                     let rem = if tmp { p.total() } else { p.remaining(ac.lat, ac.lon) };
                     let dest = format!("{} {:.0}NM {}", p.dest, rem / NM, fmt_eta(p.ete));
-                    rows.push((ln(" DEST   DIST  TEMPS", LBL_M, "", LBL_M), if tmp { ln("<EFFACER", AMB_M, "ACTIVATE*", AMB_M) } else { ln(dest, WHITE_M, "", WHITE_M) }));
+                    let dlab = if p.arr_rwy.is_empty() { " DEST   DIST  TEMPS".to_string() } else { format!(" DEST RWY{} {}", p.arr_rwy, p.star) };
+                    rows.push((ln(dlab, LBL_M, "", LBL_M), if tmp { ln("<EFFACER", AMB_M, "ACTIVATE*", AMB_M) } else { ln(dest, WHITE_M, "", WHITE_M) }));
                 }
             }
         }
@@ -1281,5 +1349,36 @@ mod tests {
         println!("crash {:?} sol {} M max {mmax:.2} FL max {:.0}", ac.crashed, ac.on_ground, altmax / 100.0);
         assert!(mmax > 5.5 && altmax > 85_000.0, "croisiere scram atteinte");
         assert!(ac.crashed.is_none() && ac.on_ground, "pose a destination");
+    }
+
+    /// OFP SimBrief réel (fichier fourni par DARKSTAR_OFP) : import sans erreur.
+    #[test]
+    fn real_ofp_file() {
+        let Ok(path) = std::env::var("DARKSTAR_OFP") else { return };
+        let body = std::fs::read_to_string(path).unwrap();
+        let fp = from_simbrief(&parse_json(&body).unwrap(), 6.0).unwrap();
+        println!("{}-{} RWY {} / {} SID {} STAR {} : {} points", fp.origin, fp.dest, fp.dep_rwy, fp.arr_rwy, fp.sid, fp.star, fp.wpts.len());
+    }
+
+    /// OFP IFR avec SID et STAR : procédures reconnues, T/D avant l'entrée de STAR.
+    #[test]
+    fn simbrief_sid_star() {
+        let body = r#"{"fetch":{"status":"Success"},"origin":{"icao_code":"KLAX","pos_lat":"33.94","pos_long":"-118.40","plan_rwy":"25R"},
+            "destination":{"icao_code":"KSFO","pos_lat":"37.62","pos_long":"-122.37","plan_rwy":"28L"},
+            "navlog":{"fix":[
+            {"ident":"GARDY","type":"wpt","stage":"CLB","is_sid_star":"1","via_airway":"ORCKA5","altitude_feet":"6000","pos_lat":"33.90","pos_long":"-118.70"},
+            {"ident":"ORCKA","type":"wpt","stage":"CLB","is_sid_star":"1","via_airway":"ORCKA5","altitude_feet":"15000","pos_lat":"34.20","pos_long":"-119.20"},
+            {"ident":"AVE","type":"vor","stage":"CRZ","is_sid_star":"0","via_airway":"J1","altitude_feet":"37000","pos_lat":"35.65","pos_long":"-119.98"},
+            {"ident":"SERFR","type":"wpt","stage":"DSC","is_sid_star":"1","via_airway":"SERFR4","altitude_feet":"19000","pos_lat":"36.60","pos_long":"-121.70"},
+            {"ident":"EPICK","type":"wpt","stage":"DSC","is_sid_star":"1","via_airway":"SERFR4","altitude_feet":"10000","pos_lat":"37.05","pos_long":"-122.00"}]}}"#;
+        let fp = from_simbrief(&parse_json(body).unwrap(), 3.0).unwrap();
+        for w in &fp.wpts {
+            println!("{:6} {:6} {:5} proc {} alt {:.0}", w.ident, w.via, w.phase, w.proc, w.alt_ft);
+        }
+        assert_eq!((fp.sid.as_str(), fp.star.as_str(), fp.dep_rwy.as_str(), fp.arr_rwy.as_str()), ("ORCKA5", "SERFR4", "25R", "28L"));
+        assert_eq!(fp.wpts.iter().filter(|w| w.proc == 1).count(), 2);
+        assert_eq!(fp.wpts[4].alt_ft, 19_000.0);
+        let star_d = dist_brg(36.60, -121.70, 37.05, -122.00).0 + dist_brg(37.05, -122.00, 37.62, -122.37).0;
+        assert!(fp.tod() > star_d);
     }
 }

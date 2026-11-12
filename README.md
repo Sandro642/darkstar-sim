@@ -596,3 +596,11 @@ Le SR-72 est un avion de reconnaissance : sa charge utile est simulée.
 - v1.36.1 : SimBrief — la page de génération s'ouvrait avec un type d'avion inconnu (« CONC ») et
   demandait de choisir un avion : type long-courrier valide par défaut (B77W), modifiable dans le
   MCDU (INIT, ligne 4 à droite) ; nouvelle adresse de dispatch SimBrief.
+- v1.37.0 : SimBrief IFR.
+  - Import : le Pilot ID numérique est envoyé comme « userid » (il était envoyé comme nom
+    d'utilisateur : « Unknown UserID »). Nom d'utilisateur ou Pilot ID acceptés.
+  - Procédures : tous les points de l'OFP sont gardés ; SID et STAR reconnues (nom de procédure,
+    pistes de départ / d'arrivée affichées dans le F-PLN, voie ou procédure de chaque point).
+  - VNAV IFR : SID volée aux altitudes prévues par SimBrief (250 kt sous le FL100), profil
+    Darkstar en route, descente hypersonique terminée à l'entrée de STAR, STAR volée aux
+    altitudes prévues, puis autoland.
