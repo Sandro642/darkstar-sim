@@ -632,3 +632,5 @@ Le SR-72 est un avion de reconnaissance : sa charge utile est simulée.
     35 kPa en croisière) au lieu de paliers fixes ; en FL MAX, le niveau monte avec le Mach.
   - Distance de descente allongée au-delà de Mach 6 ; prévision H2 selon le Mach.
   - Essai KPMD → EGLL (4686 NM) en MAX/11 : Mach 11,0 au FL1215, posé à Londres en 82 min.
+- v1.40.1 : FMS — croisière par défaut MAX / Mach 11 ; l'import SimBrief reprend le réglage
+  CRZ FL/MACH du MCDU (il forçait FL950) ; DISPATCH sans niveau = MAX / Mach 11.

@@ -1773,8 +1773,10 @@ impl Game {
             }
             "DISPATCH" => {
                 let (o, d) = (arg(1).to_string(), arg(2).to_string());
-                let fl = num(3).unwrap_or(950.0);
-                let m = num(4).unwrap_or(6.0);
+                // Par défaut : croisière au plafond, Mach 11 (DISPATCH KPMD PHNL 950 6 pour un niveau fixe)
+                let m = num(4).unwrap_or(if num(3).is_some() { 6.0 } else { 11.0 });
+                let fl = num(3).unwrap_or(fms::ceiling_fl(m));
+                self.fms.crz_max = num(3).is_none();
                 reply = self.fms.dispatch_now(&o, &d, fl, m);
                 if reply.is_ok() {
                     if let Some(i) = AIRPORTS.iter().position(|a| a.icao == d) {

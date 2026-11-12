@@ -394,7 +394,7 @@ pub fn dispatch(from: &str, to: &str, crz_fl: f64, crz_mach: f64) -> Result<Fpln
 }
 
 /// Plan depuis un OFP SimBrief (JSON).
-pub fn from_simbrief(j: &Json, crz_mach: f64) -> Result<Fpln, String> {
+pub fn from_simbrief(j: &Json, crz_fl: f64, crz_mach: f64, crz_max: bool) -> Result<Fpln, String> {
     if let Some(e) = j.path(&["fetch", "status"]) {
         let st = e.s();
         if !st.eq_ignore_ascii_case("success") {
@@ -436,7 +436,7 @@ pub fn from_simbrief(j: &Json, crz_mach: f64) -> Result<Fpln, String> {
     wpts.push(Wpt { ident: di.clone(), lat: dla, lon: dlo, alt_ft: 0.0, mach: 0.0, phase: "ARR", ..Default::default() });
     let flt = j.path(&["atc", "callsign"]).map(|x| x.s()).filter(|s| !s.is_empty()).unwrap_or("DKS01".into());
     // Le niveau de croisière SimBrief (avion de ligne) est remplacé par le profil Darkstar
-    let mut fp = Fpln { origin: oi, dest: di, wpts, active: 1, source: "SIMBRIEF", flt, crz_fl: if crz_mach > 4.8 { 950.0 } else { 650.0 }, crz_mach, jp7_req: 0.0, h2_req: 0.0, ete: 0.0, dep_rwy, arr_rwy, sid, star, crz_max: false };
+    let mut fp = Fpln { origin: oi, dest: di, wpts, active: 1, source: "SIMBRIEF", flt, crz_fl, crz_mach, jp7_req: 0.0, h2_req: 0.0, ete: 0.0, dep_rwy, arr_rwy, sid, star, crz_max };
     fp.compute();
     Ok(fp)
 }
@@ -839,7 +839,7 @@ impl Fms {
 
     pub fn new() -> Fms {
         let user = std::fs::read_to_string(config_path()).map(|s| s.trim().to_string()).unwrap_or_default();
-        Fms { fpln: None, temp: None, page: Page::Init, scroll: 0, scratch: String::new(), msg: String::new(), user, from_to: (String::new(), String::new()), crz: (950.0, 6.0), crz_max: false, fetch: Arc::new(Mutex::new(Fetch::Idle)), focus: true, acft: "B77W".into(), vnav: true, desc_started: false, land_sent: false, phase: "", dep: ProcSel::default(), arr: ProcSel::default(), ils: None }
+        Fms { fpln: None, temp: None, page: Page::Init, scroll: 0, scratch: String::new(), msg: String::new(), user, from_to: (String::new(), String::new()), crz: (ceiling_fl(11.0), 11.0), crz_max: true, fetch: Arc::new(Mutex::new(Fetch::Idle)), focus: true, acft: "B77W".into(), vnav: true, desc_started: false, land_sent: false, phase: "", dep: ProcSel::default(), arr: ProcSel::default(), ils: None }
     }
 
     /// Plan affiché / modifié : temporaire s'il existe, sinon actif.
@@ -888,7 +888,7 @@ impl Fms {
         let st = self.fetch.lock().unwrap().clone();
         if let Fetch::Done(r) = st {
             *self.fetch.lock().unwrap() = Fetch::Idle;
-            let res = r.and_then(|body| parse_json(&body)).and_then(|j| from_simbrief(&j, self.crz.1));
+            let res = r.and_then(|body| parse_json(&body)).and_then(|j| from_simbrief(&j, self.crz.0, self.crz.1, self.crz_max));
             return Some(match res {
                 Ok(fp) => {
                     self.msg = format!("OFP {}-{} : {} PTS", fp.origin, fp.dest, fp.wpts.len());
@@ -1538,7 +1538,7 @@ mod tests {
             {"ident":"BEBOP","type":"wpt","pos_lat":"30.0","pos_long":"-130.0"},
             {"ident":"PHNL","type":"apt","pos_lat":"21.32","pos_long":"-157.92"}]}}"#;
         let j = parse_json(body).unwrap();
-        let fp = from_simbrief(&j, 6.0).unwrap();
+        let fp = from_simbrief(&j, 950.0, 6.0, false).unwrap();
         let ids: Vec<_> = fp.wpts.iter().map(|w| w.ident.as_str()).collect();
         println!("{ids:?} {:.0} NM jp7 {:.0} h2 {:.0}", fp.total() / NM, fp.jp7_req, fp.h2_req);
         assert_eq!(ids, vec!["KLAX", "SLI", "BEBOP", "PHNL"]);
@@ -1659,7 +1659,7 @@ mod tests {
     fn real_ofp_file() {
         let Ok(path) = std::env::var("DARKSTAR_OFP") else { return };
         let body = std::fs::read_to_string(path).unwrap();
-        let fp = from_simbrief(&parse_json(&body).unwrap(), 6.0).unwrap();
+        let fp = from_simbrief(&parse_json(&body).unwrap(), 950.0, 6.0, false).unwrap();
         println!("{}-{} RWY {} / {} SID {} STAR {} : {} points", fp.origin, fp.dest, fp.dep_rwy, fp.arr_rwy, fp.sid, fp.star, fp.wpts.len());
     }
 
@@ -1674,7 +1674,7 @@ mod tests {
             {"ident":"AVE","type":"vor","stage":"CRZ","is_sid_star":"0","via_airway":"J1","altitude_feet":"37000","pos_lat":"35.65","pos_long":"-119.98"},
             {"ident":"SERFR","type":"wpt","stage":"DSC","is_sid_star":"1","via_airway":"SERFR4","altitude_feet":"19000","pos_lat":"36.60","pos_long":"-121.70"},
             {"ident":"EPICK","type":"wpt","stage":"DSC","is_sid_star":"1","via_airway":"SERFR4","altitude_feet":"10000","pos_lat":"37.05","pos_long":"-122.00"}]}}"#;
-        let fp = from_simbrief(&parse_json(body).unwrap(), 3.0).unwrap();
+        let fp = from_simbrief(&parse_json(body).unwrap(), 650.0, 3.0, false).unwrap();
         for w in &fp.wpts {
             println!("{:6} {:6} {:5} proc {} alt {:.0}", w.ident, w.via, w.phase, w.proc, w.alt_ft);
         }
