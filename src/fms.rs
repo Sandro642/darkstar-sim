@@ -237,6 +237,37 @@ pub fn ceiling_fl(m: f64) -> f64 {
     (alt_for_q(m, 35_000.0) / 100.0 / 10.0).floor() * 10.0
 }
 
+/// JP-7 d'une remise des gaz avec nouveau circuit (turbines, ~10 min) et de l'approche finale (kg).
+pub const GA_JP7: f64 = 1_800.0;
+pub const APPR_JP7: f64 = 1_500.0;
+
+/// Débits de croisière scram mesurés en vol simulé (q = 35 kPa) : (Mach, H2 kg/s, JP-7 kg/s —
+/// le stato brûle encore du JP-7 sous Mach 7).
+const CRZ_RATES: [(f64, f64, f64); 7] = [(5.0, 2.32, 6.27), (6.0, 3.32, 3.59), (7.0, 4.78, 0.0), (8.0, 4.46, 0.0), (9.0, 4.20, 0.0), (10.0, 4.00, 0.0), (11.0, 3.60, 0.0)];
+
+fn interp(m: f64, k: usize) -> f64 {
+    let t = &CRZ_RATES;
+    let m = m.clamp(t[0].0, t[t.len() - 1].0);
+    for w in t.windows(2) {
+        if m <= w[1].0 {
+            let f = (m - w[0].0) / (w[1].0 - w[0].0);
+            let (a, b) = if k == 1 { (w[0].1, w[1].1) } else { (w[0].2, w[1].2) };
+            return a + (b - a) * f;
+        }
+    }
+    if k == 1 { t[t.len() - 1].1 } else { t[t.len() - 1].2 }
+}
+
+/// Débit d'hydrogène en croisière scram à Mach `m` (kg/s).
+pub fn h2_rate(m: f64) -> f64 {
+    interp(m, 1)
+}
+
+/// Débit de JP-7 en croisière scram à Mach `m` (kg/s).
+pub fn jp7_rate_scram(m: f64) -> f64 {
+    interp(m, 2)
+}
+
 /// Allongement de la descente au-delà de Mach 6 (énergie cinétique, décélération lente à q constant).
 fn hyper_k(m: f64) -> f64 {
     (m / 6.0).max(1.0)
@@ -303,7 +334,10 @@ impl Fpln {
                 match self.wpts[i - 1].phase {
                     "CLB TURB" | "CRZ TURB" => jp += 3.2 * dt,
                     "ACC RAM" | "CLB RAM" | "CRZ RAM" => jp += 5.5 * dt,
-                    "CRZ SCRAM" => h2 += 1.6 * (m / 6.0).powf(1.5) * dt,
+                    "CRZ SCRAM" => {
+                        h2 += h2_rate(m) * dt;
+                        jp += jp7_rate_scram(m) * dt;
+                    }
                     _ => jp += 0.6 * dt,
                 }
                 acc += seg;
@@ -330,7 +364,8 @@ impl Fpln {
         }
         self.ete = t;
         // Réserves : 15 % + 3 t JP-7 (approche, dégagement), 10 % H2
-        self.jp7_req = jp * 1.15 + 3_000.0;
+        // Réserve finale : approche + deux remises des gaz complètes (circuit aux turbines)
+        self.jp7_req = jp * 1.10 + APPR_JP7 + 2.0 * GA_JP7;
         self.h2_req = h2 * 1.10;
     }
 
@@ -555,6 +590,13 @@ pub struct Fms {
     pub arr: ProcSel,
     /// ILS calé automatiquement (départ, puis destination à l'approche)
     pub ils: Option<IlsTune>,
+    /// Mach de croisière réduit par l'ordinateur de bord pour garder la réserve d'hydrogène
+    pub eco_mach: Option<f64>,
+    /// Réserve « deux remises des gaz » garantie à l'arrivée (JP-7 prévu à destination)
+    pub ga_ok: bool,
+    pub jp7_at_dest: f64,
+    fuel_warned: bool,
+    eco_decided: bool,
 }
 
 pub enum McduOut {
@@ -578,6 +620,9 @@ impl Fms {
     }
 
     fn arm_vnav(&mut self) {
+        self.eco_mach = None;
+        self.fuel_warned = false;
+        self.eco_decided = false;
         self.vnav = true;
         self.desc_started = false;
         self.land_sent = false;
@@ -625,6 +670,43 @@ impl Fms {
             ac.ap.at_on = true;
             ac.ap.spd_keas = None;
             ac.ap.spd_managed = false;
+            // Ordinateur de bord : à l'allumage du scram, Mach de croisière qui permet d'arriver avec
+            // l'hydrogène nécessaire. Le scram consomme MOINS par kilomètre à haut Mach : on garde
+            // le Mach demandé s'il passe, sinon le Mach qui minimise la consommation totale
+            // (accélération ~0,95 t par Mach au-delà de l'allumage + croisière).
+            let d_crz = (rem - tod).max(0.0);
+            let need = |m: f64| 950.0 * (m - mach).max(0.0).powf(1.15) + h2_rate(m) * d_crz / (m * 297.0) * 1.10;
+            if crz_m > 4.8 && e.scram == ScramState::Lit && !self.eco_decided {
+                self.eco_decided = true;
+                if ac.h2 < need(crz_m) {
+                    let mut best = (crz_m, need(crz_m));
+                    let mut m = 5.0;
+                    while m <= crz_m {
+                        if need(m) < best.1 {
+                            best = (m, need(m));
+                        }
+                        m += 0.2;
+                    }
+                    if best.1 <= ac.h2 {
+                        self.eco_mach = Some(best.0);
+                        out.push(McduOut::Msg(Level::Caution, format!("FMS : CROISIERE A M{:.1} AU LIEU DE M{crz_m:.1} — HYDROGENE AU PLUS JUSTE", best.0)));
+                    } else if !self.fuel_warned {
+                        self.fuel_warned = true;
+                        let near = AIRPORTS.iter().min_by(|a, b| dist_brg(ac.lat, ac.lon, a.lat, a.lon).0.partial_cmp(&dist_brg(ac.lat, ac.lon, b.lat, b.lon).0).unwrap()).map(|a| a.icao).unwrap_or("");
+                        out.push(McduOut::Msg(Level::Warning, format!("FMS : {dest} HORS D'ATTEINTE (H2 {:.1} t, BESOIN {:.1} t) — DEROUTEMENT CONSEILLE ({near} LE PLUS PROCHE)", ac.h2 / 1000.0, best.1 / 1000.0)));
+                    }
+                }
+            }
+            let crz_m = self.eco_mach.map(|e| e.min(crz_m)).unwrap_or(crz_m);
+            // JP-7 : montée stato restante + descente / approche + deux remises des gaz
+            let jp_need = APPR_JP7 + 2.0 * GA_JP7 + if e.scram == ScramState::Lit { 600.0 } else { 3_000.0 };
+            self.jp7_at_dest = ac.fuel - (APPR_JP7 + if e.scram == ScramState::Lit { 600.0 } else { 3_000.0 });
+            self.ga_ok = ac.fuel >= jp_need;
+            if !self.ga_ok && !self.fuel_warned {
+                self.fuel_warned = true;
+                let near = AIRPORTS.iter().min_by(|a, b| dist_brg(ac.lat, ac.lon, a.lat, a.lon).0.partial_cmp(&dist_brg(ac.lat, ac.lon, b.lat, b.lon).0).unwrap()).map(|a| a.icao).unwrap_or("");
+                out.push(McduOut::Msg(Level::Warning, format!("FMS : JP-7 INSUFFISANT POUR DEUX REMISES DES GAZ A {dest} — DEROUTEMENT CONSEILLE ({near} LE PLUS PROCHE)")));
+            }
             ac.ap.mach_tgt = crz_m;
             let sched = if crz_m <= 2.5 {
                 crz_ft
@@ -839,7 +921,7 @@ impl Fms {
 
     pub fn new() -> Fms {
         let user = std::fs::read_to_string(config_path()).map(|s| s.trim().to_string()).unwrap_or_default();
-        Fms { fpln: None, temp: None, page: Page::Init, scroll: 0, scratch: String::new(), msg: String::new(), user, from_to: (String::new(), String::new()), crz: (ceiling_fl(11.0), 11.0), crz_max: true, fetch: Arc::new(Mutex::new(Fetch::Idle)), focus: true, acft: "B77W".into(), vnav: true, desc_started: false, land_sent: false, phase: "", dep: ProcSel::default(), arr: ProcSel::default(), ils: None }
+        Fms { fpln: None, temp: None, page: Page::Init, scroll: 0, scratch: String::new(), msg: String::new(), user, from_to: (String::new(), String::new()), crz: (ceiling_fl(11.0), 11.0), crz_max: true, fetch: Arc::new(Mutex::new(Fetch::Idle)), focus: true, acft: "B77W".into(), vnav: true, desc_started: false, land_sent: false, phase: "", dep: ProcSel::default(), arr: ProcSel::default(), ils: None, eco_mach: None, ga_ok: true, jp7_at_dest: 0.0, fuel_warned: false, eco_decided: false }
     }
 
     /// Plan affiché / modifié : temporaire s'il existe, sinon actif.
@@ -1406,6 +1488,7 @@ fn page_lines(f: &Fms, ac: &Aircraft) -> (String, Color, Vec<(Line, Line)>) {
                     let ej = ac.fuel - p.jp7_req;
                     let eh = ac.h2 - p.h2_req;
                     rows.push((ln(" EXTRA JP-7", LBL_M, "EXTRA H2 ", LBL_M), ln(format!("{:+.1}T", ej / 1000.0), if ej < 0.0 { AMB_M } else { GREEN_M }, format!("{:+.1}T", eh / 1000.0), if eh < 0.0 { AMB_M } else { GREEN_M })));
+                    rows.push((ln(" RESERVE 2 REMISES GAZ", LBL_M, "MACH ECO ", LBL_M), ln(format!("{:.1}T {}", 2.0 * GA_JP7 / 1000.0, if f.ga_ok { "OK" } else { "NON GARANTIE" }), if f.ga_ok { GREEN_M } else { AMB_M }, f.eco_mach.map(|m| format!("M{m:.1}")).unwrap_or("---".into()), if f.eco_mach.is_some() { AMB_M } else { LBL_M })));
                     rows.push((ln(" TEMPS PLAN", LBL_M, "", LBL_M), ln(fmt_eta(p.ete), GREEN_M, "", WHITE_M)));
                     if ej < 0.0 || eh < 0.0 {
                         rows.push((blank(), ln("CARBURANT INSUFFISANT", AMB_M, "", WHITE_M)));
@@ -1827,5 +1910,94 @@ mod tests {
         println!("crash {:?} sol {} M max {mmax:.2} FL max {:.0} t {t:.0}", ac.crashed, ac.on_ground, altmax / 100.0);
         assert!(mmax > 10.8 && altmax > 115_000.0);
         assert!(ac.crashed.is_none() && ac.on_ground);
+    }
+
+    /// Hydrogène insuffisant (7,5 t) pour KPMD → EGLL : l'ordinateur de bord le détecte à l'allumage
+    /// du scram et demande un déroutement.
+    #[test]
+    fn eco_mach_low_h2() {
+        let mut f = Fms::new();
+        f.dispatch_now("KPMD", "EGLL", ceiling_fl(11.0), 11.0).unwrap();
+        let mut ac = Aircraft::new_on_runway(0);
+        ac.on_ground = false;
+        ac.gear_down = false;
+        ac.gear_pos = 0.0;
+        ac.brakes = false;
+        ac.alt = 15_000.0 * FT;
+        ac.tas = 0.7 * crate::atmosphere::isa(ac.alt).a;
+        ac.h2 = 7_500.0;
+        ac.set_turbines(TurbState::Running, 0.8);
+        ac.throttle = 0.8;
+        ac.ap.on = true;
+        ac.ap.lat = LatMode::Nav;
+        let dt = 1.0 / 60.0;
+        let (mut t, mut mmax) = (0.0, 0.0f64);
+        let mut msgs = Vec::new();
+        while t < 3600.0 && ac.crashed.is_none() && !msgs.iter().any(|m: &String| m.contains("ATTEINTE")) {
+            if (t * 10.0f64).fract() < dt * 10.0 {
+                if let Some((b, _)) = f.guidance(&ac) {
+                    if ac.autoland.is_none() {
+                        ac.ap.hdg_tgt = b;
+                    }
+                }
+                for o in f.vnav_update(&mut ac) {
+                    match o {
+                        McduOut::Cmd(c) => {
+                            if let Some(code) = c.strip_prefix("ATTERRIR ") {
+                                let i = AIRPORTS.iter().position(|a| a.icao == code).unwrap();
+                                let _ = ac.engage_autoland(i);
+                            }
+                        }
+                        McduOut::Msg(_, m) => msgs.push(format!("{t:.0}s {m}")),
+                    }
+                }
+            }
+            let c = ac.autoflight().unwrap_or((0.0, 0.0));
+            ac.step(dt, c.0, c.1);
+            ac.events.clear();
+            mmax = mmax.max(ac.d.mach);
+            t += dt;
+        }
+        for m in msgs.iter().filter(|m| m.contains("CROISIERE A") || m.contains("ATTEINTE") || m.contains("INSUFFISANT")) {
+            println!("{m}");
+        }
+        println!("eco {:?} M max {mmax:.2} H2 restant {:.0} JP7 restant {:.0} sol {} crash {:?} t {t:.0}", f.eco_mach, ac.h2, ac.fuel, ac.on_ground, ac.crashed);
+        assert!(msgs.iter().any(|m| m.contains("HORS D'ATTEINTE")), "deroutement demande");
+    }
+
+    #[test]
+    #[ignore]
+    fn probe_h2_rates() {
+        for m in [5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0] {
+            let mut ac = Aircraft::new_on_runway(0);
+            ac.on_ground = false;
+            ac.gear_down = false;
+            ac.gear_pos = 0.0;
+            ac.brakes = false;
+            ac.alt = alt_for_q(m, 35_000.0) * FT;
+            ac.tas = m * crate::atmosphere::isa(ac.alt).a;
+            ac.set_turbines(TurbState::Off, 0.0);
+            ac.eng.inlet_open = false;
+            ac.eng.ram = RamState::Lit;
+            ac.eng.scram = ScramState::Lit;
+            ac.ap.on = true;
+            ac.ap.vert = VertMode::Alt;
+            ac.ap.alt_tgt_ft = ac.alt / FT;
+            ac.ap.at_on = true;
+            ac.ap.mach_tgt = m;
+            ac.throttle = 0.6;
+            let h0 = ac.h2;
+            let j0 = ac.fuel;
+            for _ in 0..(300 * 60) {
+                ac.step(1.0 / 60.0, 0.0, 0.0);
+            }
+            let h1 = ac.h2;
+            let j1 = ac.fuel;
+            for _ in 0..(300 * 60) {
+                ac.step(1.0 / 60.0, 0.0, 0.0);
+            }
+            println!("M{m:.0} (M{:.2}) FL{:.0} : H2 {:.2} kg/s  JP7 {:.2} kg/s thr {:.2} mode {}", ac.d.mach, ac.alt / FT / 100.0, (h1 - ac.h2) / 300.0, (j1 - ac.fuel) / 300.0, ac.throttle, ac.mode_name());
+            let _ = (h0, j0);
+        }
     }
 }

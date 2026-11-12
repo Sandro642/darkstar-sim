@@ -634,3 +634,12 @@ Le SR-72 est un avion de reconnaissance : sa charge utile est simulée.
   - Essai KPMD → EGLL (4686 NM) en MAX/11 : Mach 11,0 au FL1215, posé à Londres en 82 min.
 - v1.40.1 : FMS — croisière par défaut MAX / Mach 11 ; l'import SimBrief reprend le réglage
   CRZ FL/MACH du MCDU (il forçait FL950) ; DISPATCH sans niveau = MAX / Mach 11.
+- v1.41.0 : ordinateur de bord — carburant et remises des gaz.
+  - Réserve d'arrivée : JP-7 de l'approche + deux remises des gaz complètes (1,8 t chacune),
+    incluse dans le besoin du plan ; FUEL PRED : « RESERVE 2 REMISES GAZ OK / NON GARANTIE ».
+  - Consommations de croisière scram mesurées par Mach (le scram consomme moins par kilomètre à
+    haut Mach ; le stato brûle encore du JP-7 sous Mach 7).
+  - À l'allumage du scram, le FMS vérifie l'hydrogène : Mach demandé gardé s'il permet
+    d'arriver, sinon Mach minimisant la consommation totale (accélération + croisière), sinon
+    « DESTINATION HORS D'ATTEINTE — DEROUTEMENT CONSEILLE » ; JP-7 insuffisant pour deux
+    remises des gaz : alerte et aéroport le plus proche.
