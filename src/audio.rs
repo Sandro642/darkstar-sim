@@ -106,6 +106,22 @@ pub struct Sfx {
     thump: Sound,
     blip: Sound,
     buzz: Sound,
+    click: Sound,
+    key: Sound,
+    switch: Sound,
+    ap_on: Sound,
+    athr_off: Sound,
+    alt_alert: Sound,
+    mins: Sound,
+    seq: Sound,
+    whoosh: Sound,
+    link_lost: Sound,
+    link_ok: Sound,
+    fire_bell: Sound,
+    gcas: Sound,
+    gear_hum: Sound,
+    config: Sound,
+    modem: Sound,
     pub muted: bool,
     prev: Prev,
 }
@@ -118,12 +134,29 @@ struct Prev {
     unstart: bool,
     crashed: bool,
     started: bool,
+    at: bool,
+    sb: bool,
+    scram_lit: bool,
+    ram_lit: bool,
+    alt_err: f64,
 }
 
 /// Événements sonores ponctuels émis par la logique de jeu.
 pub enum Cue {
     Ack,
     Refused,
+    /// Clic d'interface (bouton, onglet, touche de ligne)
+    Click,
+    /// Frappe clavier (terminal, MCDU)
+    Key,
+    /// Interrupteur de console (levier)
+    Switch,
+    /// Minimums (carillon deux tons)
+    Minimums,
+    /// Séquencement d'un point du plan de vol
+    Seq,
+    /// Liaison rétablie
+    LinkOk,
 }
 
 async fn load(bytes: Vec<u8>) -> Sound {
@@ -248,10 +281,93 @@ impl Sfx {
             .await;
         let blip = load(synth(0.16, false, |t, _| sine(if t < 0.07 { 1500.0 } else { 2000.0 }, t) * 0.6)).await;
         let buzz = load(synth(0.3, false, |t, _| sine(180.0, t).signum() * 0.4)).await;
+        // --- Interface de la station sol ---
+        let mut lpc = Lp::new(3500.0);
+        let click = load(synth(0.035, false, move |t, r| lpc.run(r.next()) * (-t * 160.0).exp() + sine(3200.0, t) * (-t * 220.0).exp() * 0.4)).await;
+        let mut lpk = Lp::new(2500.0);
+        let key = load(synth(0.03, false, move |t, r| lpk.run(r.next()) * (-t * 200.0).exp() * 0.8)).await;
+        // Levier de console : deux claquements secs
+        let mut lps = Lp::new(1800.0);
+        let switch = load(synth(0.12, false, move |t, r| {
+            let a = (-t * 90.0).exp();
+            let b = if t > 0.045 { (-(t - 0.045) * 120.0).exp() * 0.7 } else { 0.0 };
+            lps.run(r.next()) * (a + b) + sine(900.0, t) * a * 0.3
+        }))
+        .await;
+        // AP engagé : tonalité douce montante ; A/THR déconnecté : double tic
+        let ap_on = load(synth(0.35, false, |t, _| {
+            let f = if t < 0.15 { 880.0 } else { 1320.0 };
+            sine(f, t) * (-(t % 0.15) * 7.0).exp() * 0.5
+        }))
+        .await;
+        let athr_off = load(synth(0.3, false, |t, _| {
+            let ph = t % 0.12;
+            sine(2400.0, t) * (-ph * 60.0).exp() * if t < 0.24 { 0.6 } else { 0.0 }
+        }))
+        .await;
+        // Alerte d'altitude (1000 ft avant la consigne) : accord bref
+        let alt_alert = load(synth(0.9, false, |t, _| (sine(523.0, t) + sine(659.0, t) * 0.8 + sine(784.0, t) * 0.6) * (-t * 3.0).exp() * 0.35)).await;
+        // Minimums : carillon deux tons
+        let mins = load(synth(1.0, false, |t, _| {
+            let (f, ph) = if t < 0.4 { (988.0, t) } else { (784.0, t - 0.4) };
+            (sine(f, t) + sine(f * 2.0, t) * 0.3) * (-ph * 4.0).exp() * 0.5
+        }))
+        .await;
+        // Séquencement FMS : tic léger
+        let seq = load(synth(0.08, false, |t, _| sine(1800.0, t) * (-t * 50.0).exp() * 0.5)).await;
+        // Aérofreins : souffle filtré
+        let mut lpw = Lp::new(600.0);
+        let whoosh = load(synth(0.8, false, move |t, r| lpw.run(r.next()) * (t * 6.0).min(1.0) * (-t * 3.0).exp() * 2.5)).await;
+        // Liaison perdue : salve de parasites puis tonalité descendante ; rétablie : trois notes montantes
+        let mut lpl = Lp::new(4000.0);
+        let mut ph_l = 0.0f32;
+        let link_lost = load(synth(1.0, false, move |t, r| {
+            let noise = if t < 0.35 { lpl.run(r.next()) * 0.9 } else { 0.0 };
+            ph_l += (900.0 - 500.0 * t) / SR;
+            let tone = if t > 0.3 { (std::f32::consts::TAU * ph_l).sin() * 0.45 * (-(t - 0.3) * 2.5).exp() } else { 0.0 };
+            noise + tone
+        }))
+        .await;
+        let link_ok = load(synth(0.6, false, |t, _| {
+            let i = ((t / 0.18) as usize).min(2);
+            let f = [660.0, 880.0, 1320.0][i];
+            sine(f, t) * (-(t - i as f32 * 0.18) * 8.0).exp() * 0.5
+        }))
+        .await;
+
+        // --- Boucles d'événements ---
+        // Sonnerie d'incendie (cloche modulée)
+        let fire_bell = load(synth(1.0, true, |t, _| {
+            let ph = t % 0.125;
+            (sine(1400.0, t) + sine(2780.0, t) * 0.5 + sine(4150.0, t) * 0.25) * (-ph * 25.0).exp() * 0.5
+        }))
+        .await;
+        // Auto-GCAS : tonalité pulsée aiguë (« FLY UP »)
+        let gcas = load(synth(1.0, true, |t, _| {
+            let gate = if t % 0.25 < 0.16 { 1.0 } else { 0.0 };
+            (sine(2000.0, t) * 0.5 + sine(2500.0, t) * 0.3) * gate
+        }))
+        .await;
+        // Train en mouvement : moteur hydraulique
+        let mut lpg = Lp::new(250.0);
+        let gear_hum = load(synth(1.0, true, move |t, r| lpg.run(r.next()) * 1.5 + sine(120.0, t) * 0.25 + sine(240.0, t) * 0.1)).await;
+        // Demande de configuration (GEAR DOWN / SPEED BRAKE) : carillon doux répété
+        let config = load(synth(2.0, true, |t, _| {
+            let ph = t % 1.0;
+            sine(1175.0, t) * (-ph * 5.0).exp() * if ph < 0.6 { 0.35 } else { 0.0 }
+        }))
+        .await;
+        // Reconnexion Iridium : gazouillis de modem
+        let modem = load(synth(2.0, true, |t, r| {
+            let slot = (t * 12.0) as u32;
+            let f = [1200.0, 2200.0, 1800.0, 2400.0, 1300.0, 2100.0][(slot % 6) as usize];
+            sine(f, t) * 0.25 + r.next() * 0.04
+        }))
+        .await;
 
         let sfx = Sfx {
             turb_lo, turb_hi, roar, ab, ram, scram, wind, rumble, warn, siren, shaker, clacker, horn,
-            caution, ap_disc, bang, thump, blip, buzz,
+            caution, ap_disc, bang, thump, blip, buzz, click, key, switch, ap_on, athr_off, alt_alert, mins, seq, whoosh, link_lost, link_ok, fire_bell, gcas, gear_hum, config, modem,
             muted: false,
             prev: Prev::default(),
         };
@@ -261,8 +377,8 @@ impl Sfx {
         sfx
     }
 
-    fn loops(&self) -> [&Sound; 13] {
-        [&self.turb_lo, &self.turb_hi, &self.roar, &self.ab, &self.ram, &self.scram, &self.wind, &self.rumble, &self.warn, &self.siren, &self.shaker, &self.clacker, &self.horn]
+    fn loops(&self) -> [&Sound; 18] {
+        [&self.turb_lo, &self.turb_hi, &self.roar, &self.ab, &self.ram, &self.scram, &self.wind, &self.rumble, &self.warn, &self.siren, &self.shaker, &self.clacker, &self.horn, &self.fire_bell, &self.gcas, &self.gear_hum, &self.config, &self.modem]
     }
 
     fn once(&self, s: &Sound, vol: f32) {
@@ -275,6 +391,12 @@ impl Sfx {
         match c {
             Cue::Ack => self.once(&self.blip, 0.35),
             Cue::Refused => self.once(&self.buzz, 0.35),
+            Cue::Click => self.once(&self.click, 0.25),
+            Cue::Key => self.once(&self.key, 0.18),
+            Cue::Switch => self.once(&self.switch, 0.45),
+            Cue::Minimums => self.once(&self.mins, 0.5),
+            Cue::Seq => self.once(&self.seq, 0.3),
+            Cue::LinkOk => self.once(&self.link_ok, 0.45),
         }
     }
 
@@ -306,6 +428,13 @@ impl Sfx {
         set_sound_volume(&self.shaker, k * if has("STALL") { 0.6 } else { 0.0 });
         set_sound_volume(&self.clacker, k * if has("OVERSPEED — q LIMIT") { 0.4 } else { 0.0 });
         set_sound_volume(&self.horn, k * if has("TOO LOW — GEAR") { 0.4 } else { 0.0 });
+        set_sound_volume(&self.fire_bell, k * if ac.fire.any() { 0.4 } else { 0.0 });
+        let gcas_tone = ac.gcas_active || ac.osr_active || (ac.gcas_on && ac.gcas_t < 2.5);
+        set_sound_volume(&self.gcas, k * if gcas_tone { 0.35 } else { 0.0 });
+        let gear_moving = ac.gear_pos > 0.01 && ac.gear_pos < 0.99;
+        set_sound_volume(&self.gear_hum, k * if gear_moving { 0.35 } else { 0.0 });
+        let config_cue = (ac.cue_gear && !ac.gear_down) || ac.cue_sb.is_some();
+        set_sound_volume(&self.config, k * if config_cue { 0.3 } else { 0.0 });
 
         // --- Événements ponctuels (sur transition) ---
         let p = &self.prev;
@@ -328,6 +457,28 @@ impl Sfx {
             if !alive && !p.crashed {
                 play.push((&self.bang, 1.0));
             }
+            if !p.ap && ac.ap.on && alive {
+                play.push((&self.ap_on, 0.35));
+            }
+            if p.at && !ac.ap.at_on && alive && ac.autoland.is_none() {
+                play.push((&self.athr_off, 0.35));
+            }
+            if p.sb != ac.speedbrake && alive {
+                play.push((&self.whoosh, 0.4));
+            }
+            let lit = e.scram == ScramState::Lit;
+            if lit && !p.scram_lit {
+                play.push((&self.thump, 0.6));
+            }
+            let ram = e.ram == RamState::Lit;
+            if ram && !p.ram_lit {
+                play.push((&self.thump, 0.5));
+            }
+            // Alerte d'altitude : passage à 1000 ft de la consigne en s'en approchant
+            let err = (ac.ap.alt_tgt_ft - ac.alt / crate::geo::FT).abs();
+            if ac.ap.on && ac.ap.vert == VertMode::Alt && p.alt_err > 1_000.0 && err <= 1_000.0 {
+                play.push((&self.alt_alert, 0.4));
+            }
         }
         for (s, v) in play {
             self.once(s, v);
@@ -339,6 +490,11 @@ impl Sfx {
             unstart: e.scram == ScramState::Unstart,
             crashed: !alive,
             started: true,
+            at: ac.ap.at_on,
+            sb: ac.speedbrake,
+            scram_lit: e.scram == ScramState::Lit,
+            ram_lit: e.ram == RamState::Lit,
+            alt_err: (ac.ap.alt_tgt_ft - ac.alt / crate::geo::FT).abs(),
         };
     }
 
@@ -358,6 +514,15 @@ impl Sfx {
             set_sound_volume(&self.warn, m * 0.5);
             set_sound_volume(&self.siren, m * 0.25);
         }
+    }
+
+    /// Liaison : perte (parasites + tonalité), gazouillis de modem pendant la reconnexion.
+    pub fn link(&self, lost_now: bool, reconnecting: bool) {
+        let m = if self.muted { 0.0 } else { 1.0 };
+        if lost_now {
+            self.once(&self.link_lost, 0.5);
+        }
+        set_sound_volume(&self.modem, m * if reconnecting { 0.25 } else { 0.0 });
     }
 
     /// Réinitialise le suivi des transitions (nouvel essai).

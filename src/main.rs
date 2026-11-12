@@ -531,7 +531,7 @@ impl Game {
             }
             fms::McduKey::Focus => self.fms.focus = true,
         }
-        self.cues.push(audio::Cue::Ack);
+        self.cues.push(audio::Cue::Click);
     }
 
     fn set_gcas(&mut self, on: bool) {
@@ -604,7 +604,7 @@ impl Game {
                 self.push(Level::Info, if h { "NWS HI : ROULETTE AVANT 30 DEG (MANOEUVRES AU SOL)" } else { "NWS LO : ROULETTE AVANT 12 DEG (ALIGNEMENT, COURSE AU DECOLLAGE)" });
             }
         }
-        self.cues.push(audio::Cue::Ack);
+        self.cues.push(audio::Cue::Switch);
     }
 
     fn apply_switch(&mut self, sw: gcs::Switch) {
@@ -635,7 +635,7 @@ impl Game {
                 ac.cmd_fuel_dump(on);
             }
         }
-        self.cues.push(audio::Cue::Ack);
+        self.cues.push(audio::Cue::Switch);
     }
 
     fn link(&self) -> (String, f64) {
@@ -1180,6 +1180,7 @@ impl Game {
                     self.ac.ap.hdg_tgt = b;
                     if let Some(m) = seq {
                         self.push(Level::Info, m);
+                        self.cues.push(audio::Cue::Seq);
                     }
                 }
                 None => self.ac.ap.hdg_tgt = brg,
@@ -1350,7 +1351,7 @@ impl Game {
                 } else if !dead && self.mins == 1 && h < da {
                     self.mins = 2;
                     self.flash("MINIMUMS", ui::AMBER);
-                    self.cues.push(audio::Cue::Ack);
+                    self.cues.push(audio::Cue::Minimums);
                     self.push(Level::Caution, "MINIMUMS — DECISION : CONTINUE OU GO AROUND");
                 } else if self.mins == 2 && h < (da * 0.3).min(60.0) {
                     // Sans décision avant 60 ft : l'approche continue
@@ -2500,6 +2501,8 @@ async fn main() {
     let mut perf_t0 = get_time();
     let mut perf_frames = 0u32;
     let mut sfx = audio::Sfx::new().await;
+    // Suivi de la liaison pour les sons (perte / rétablissement)
+    let mut snd_link_down = false;
     let upd = updater::Updater::new();
     upd.check();
     let mut last_check = get_time();
@@ -2589,6 +2592,7 @@ async fn main() {
             while let Some(ch) = get_char_pressed() {
                 if !ch.is_control() && line.len() < 60 {
                     line.extend(ch.to_uppercase());
+                    g.cues.push(audio::Cue::Key);
                 }
             }
             if is_key_pressed(KeyCode::Backspace) {
@@ -2612,6 +2616,7 @@ async fn main() {
                     }
                     g.fms.scratch.push(c);
                     g.fms.msg.clear();
+                    g.cues.push(audio::Cue::Key);
                 }
             }
             if is_key_pressed(KeyCode::Backspace) {
@@ -2664,6 +2669,17 @@ async fn main() {
         g.feel.update(&g.ac, get_frame_time());
         sfx.feel(g.feel.rumble, std::mem::take(&mut g.feel.boom));
         sfx.mishap(g.mishap.as_ref().is_some_and(|m| m.cascading()));
+        // Liaison : perte (incident ou liaison coupée), gazouillis de modem pendant la reconnexion
+        let link_down = g.mishap.is_some() || g.link.state == link::State::Lost;
+        let reconnecting = g.mishap.as_ref().is_some_and(|m| matches!(m.second, mishap::Second::Trying(_))) || g.connect.is_some();
+        sfx.link(link_down && !snd_link_down, reconnecting);
+        if snd_link_down && !link_down && g.ac.crashed.is_none() {
+            g.cues.push(audio::Cue::LinkOk);
+        }
+        snd_link_down = link_down;
+        if is_mouse_button_pressed(MouseButton::Left) {
+            g.cues.push(audio::Cue::Click);
+        }
         for c in g.cues.drain(..) {
             sfx.cue(c);
         }

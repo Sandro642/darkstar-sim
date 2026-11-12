@@ -669,3 +669,13 @@ Le SR-72 est un avion de reconnaissance : sa charge utile est simulée.
   avant (souvent déjà en pleine manœuvre : nouvelle rupture aussitôt), vitesses de rotation
   annulées et incidence ramenée ; effet girouette au sol fortement réduit (sortie de piste au
   décollage manuel sans correction).
+- v1.45.0 : effets sonores de la station sol et du Darkstar (synthétisés).
+  - Interactions : clic sur tout bouton / onglet / touche de ligne, frappe au clavier (terminal
+    et MCDU), claquement des interrupteurs de console.
+  - Vol : AP engagé (tonalité montante), A/THR déconnecté (double tic), alerte d'altitude à
+    1000 ft de la consigne, carillon MINIMUMS, tic de séquencement FMS, souffle des aérofreins,
+    moteur hydraulique du train en mouvement, allumage stato / scram, carillon doux répété tant
+    qu'un GEAR DOWN / SPEED BRAKE est demandé.
+  - Alertes : sonnerie d'incendie, tonalité pulsée Auto-GCAS / récupération survitesse.
+  - Liaison : parasites et tonalité descendante à la perte, gazouillis de modem pendant la
+    reconnexion (Iridium, poignée de main), trois notes montantes au rétablissement.
