@@ -143,10 +143,9 @@ pub fn draw_pfd(ac: &Aircraft, v: &View, r: Rect, info: &PfdInfo) {
                 txt_c("FLT CTL — COMMANDES DE VOL SANS REPONSE", b.x + b.w / 2.0, b.y + 20.0, 15.0, WHITE);
             }
         } else {
-            // Perte du signal : neige qui s'éteint, écran barré
+            // Perte du signal : écran noir (la reconnexion s'affiche par-dessus)
             draw_rectangle(r.x, r.y, r.w, r.h, BLACK);
-            crate::mishap::static_noise(r, (0.55 * (1.0 - since / 2.5)).max(0.0) as f32, info.time);
-            crate::mishap::red_x(r, false);
+            crate::mishap::static_noise(r, (0.4 * (1.0 - since / 0.6)).max(0.0) as f32, info.time);
         }
     } else if ac.crashed.is_some() {
         let (cx, cy) = (r.x + r.w / 2.0, r.y + r.h / 2.0);
@@ -381,7 +380,11 @@ fn draw_svs_overlay(ac: &Aircraft, v: &View, s: Rect, info: &PfdInfo) {
     let park = ac.on_ground && ac.brakes && gs < 3.0;
     let park_col = if ac.throttle > 0.5 { AMBER } else { GREEN_S };
     let braking = ac.on_ground && ac.brakes && gs >= 3.0;
-    let memos: [(bool, &str, Color, bool); 6] = [
+    let memos: [(bool, &str, Color, bool); 10] = [
+        (!ac.gcas_on && !ac.on_ground, "GCAS OFF", AMBER, false),
+        (ac.pitot_iced(), "PITOT ICE", AMBER, true),
+        (ac.g_lim_high, "G LIM HIGH", AMBER, false),
+        (ac.fuel_cool == 2, "FUEL COOL OFF", AMBER, false),
         (ac.ovr_engine, "ENG OVRD", AMBER, true),
         (ac.ovr_fbw, "FBW OVRD", AMBER, true),
         (!ac.ovr_engine && ac.fadec_limit < 0.995, "FADEC LIMIT", AMBER, false),
@@ -671,6 +674,16 @@ fn draw_speed(ac: &Aircraft, g: &Geo, time: f64) {
     txt(&format!("G {nz:+.2}"), t.x + 2.0, y + 49.0, 13.0, gc);
     let mc = if ac.g_max > 3.0 || ac.g_min < -1.0 { AMBER } else { DIM };
     txt(&format!("MAX {:+.1}  MIN {:+.1}", ac.g_max, ac.g_min), t.x + 2.0, y + 64.0, 11.0, mc);
+    // Colonne droite façon HUD de chasse : vitesse vraie, pente, limite de g de la loi, énergie
+    let xr = t.x + t.w + 48.0;
+    txt_r(&format!("TAS {:.0}", ac.tas / KT), xr, y - 4.0, 12.0, LABEL);
+    txt_r(&format!("FPA {:+.1}", ac.gamma.to_degrees()), xr, y + 17.0, 12.0, LABEL);
+    let lim = ac.fcs.nz_max;
+    let lc = if ac.gcas_ovr || ac.ovr_fbw { AMBER } else { LABEL };
+    txt_r(&format!("LIM {lim:+.1}"), xr, y + 33.0, 12.0, lc);
+    // Hauteur d'énergie spécifique (h + V²/2g), en milliers de pieds
+    let es = (ac.alt + ac.tas * ac.tas / (2.0 * 9.81)) / FT / 1000.0;
+    txt_r(&format!("Es {es:.0}k"), xr, y + 49.0, 12.0, LABEL);
 }
 
 fn draw_altitude(ac: &Aircraft, g: &Geo, da_ft: Option<f64>) {

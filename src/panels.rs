@@ -195,6 +195,93 @@ fn nacelle(r: Rect, side: &str, ac: &Aircraft, i: usize, egt_off: f64, time: f64
     deg_txt(&format!("{door_deg:02.0}"), p(82.0, 0.0).x, p(0.0, 196.0).y, fs * 1.05, dc, "");
 }
 
+/// Paramètres détaillés : turbines G/D (N1, N2, EGT, débit, huile, vibrations, tuyère), statoréacteur,
+/// scramjet et entrée d'air (température d'arrêt, rendement de prise d'air, rampe), performances.
+/// Renvoie la hauteur utilisée.
+fn engine_table(ac: &Aircraft, r: Rect) -> f32 {
+    let e = &ac.eng;
+    let d = &ac.d;
+    let row = 15.0;
+    let lab = Color::new(0.55, 0.6, 0.65, 1.0);
+    let grid = Color::new(0.18, 0.2, 0.22, 1.0);
+    rrect(r, 5.0, Color::new(0.035, 0.04, 0.045, 1.0));
+    rrect_lines(r, 5.0, 1.0, grid);
+    // --- Turbines ---
+    let w1 = r.w * 0.46;
+    let (c0, c1, c2) = (r.x + 8.0, r.x + w1 * 0.62, r.x + w1 - 6.0);
+    let mut y = r.y + 14.0;
+    txt("TURBINES", c0, y, 11.0, CYAN_S);
+    txt_r("L", c1, y, 11.0, CYAN_S);
+    txt_r("R", c2, y, 11.0, CYAN_S);
+    y += row;
+    let thrust_sum = (e.t_turb + e.t_ram).max(1.0);
+    let ff_turb = e.fuel_flow * (e.t_turb / thrust_sum);
+    let tside = (e.t_side[0] + e.t_side[1]).max(1.0);
+    let run = |k: usize| e.side[k] == TurbState::Running;
+    let n2 = |k: usize| e.n2s[k];
+    let stag = (d.oat + 273.15) * (1.0 + 0.2 * d.mach * d.mach) - 273.15;
+    type Cell = (String, Color);
+    let col_val = |v: f64, warn: f64, lim: f64| if v > lim { RED } else if v > warn { AMBER } else { WHITE };
+    let rows: Vec<(&str, [Cell; 2])> = vec![
+        ("N1 %", std::array::from_fn(|k| (format!("{:.0}", n2(k).powf(1.6) * 100.0), WHITE))),
+        ("N2 %", std::array::from_fn(|k| {
+            let v = n2(k) * 104.0;
+            (format!("{v:.0}"), col_val(v, 102.0, 106.0))
+        })),
+        ("EGT C", std::array::from_fn(|k| {
+            let v = if run(k) || n2(k) > 0.05 { e.egt + if k == 0 { 8.0 } else { -6.0 } } else { d.oat.max(e.egt) };
+            (format!("{v:.0}"), col_val(v, 900.0, 1000.0))
+        })),
+        ("FF PPH", std::array::from_fn(|k| (format!("{:.0}", ff_turb * (e.t_side[k] / tside) * 7_936.6), WHITE))),
+        ("OIL PSI", std::array::from_fn(|k| {
+            let v = if run(k) { 28.0 + 32.0 * n2(k) } else { 30.0 * n2(k) };
+            (format!("{v:.0}"), if run(k) && v < 25.0 { AMBER } else { WHITE })
+        })),
+        ("OIL C", std::array::from_fn(|k| {
+            let v = if run(k) { 60.0 + 55.0 * n2(k) + stag.max(0.0) * 0.08 } else { d.oat.max(15.0) };
+            (format!("{v:.0}"), col_val(v, 140.0, 160.0))
+        })),
+        ("VIB IPS", std::array::from_fn(|k| {
+            let v = if run(k) { 0.25 + 0.6 * n2(k) + (1.0 - e.health) * 1.5 } else { 0.0 };
+            (format!("{v:.1}"), col_val(v, 1.5, 2.5))
+        })),
+        ("NOZ %", std::array::from_fn(|k| (format!("{:.0}", if run(k) { 25.0 + 45.0 * e.th_eff.min(1.0) + 30.0 * e.ab_frac } else { 0.0 }), WHITE))),
+    ];
+    for (l, cells) in &rows {
+        txt(l, c0, y, 11.0, lab);
+        txt_r(&cells[0].0, c1, y, 12.0, cells[0].1);
+        txt_r(&cells[1].0, c2, y, 12.0, cells[1].1);
+        y += row;
+    }
+    let h = y - r.y;
+    draw_line(r.x + w1, r.y + 6.0, r.x + w1, r.y + h - 6.0, 1.0, grid);
+    // --- Statoréacteur, scramjet, entrée d'air, performances ---
+    let (k0, k1) = (r.x + w1 + 10.0, r.x + r.w - 8.0);
+    let mut y = r.y + 14.0;
+    let mut kv = |l: &str, v: String, c: Color| {
+        txt(l, k0, y, 11.0, lab);
+        txt_r(&v, k1, y, 12.0, c);
+        y += row;
+    };
+    let ff_ram = e.fuel_flow * (e.t_ram / thrust_sum);
+    kv("STATO  POUSSEE / DEBIT", format!("{:.0} kN  {:.2} kg/s", e.t_ram / 1000.0, ff_ram), if e.ram == RamState::Lit { CYAN_S } else { DIM });
+    kv("STATO  PAROI", format!("{:.0} C", e.ram_wall), col_val(e.ram_wall, crate::systems::RAM_WALL_CAUTION, crate::systems::RAM_WALL_BURST));
+    kv("SCRAM  POUSSEE / H2", format!("{:.0} kN  {:.2} kg/s", e.t_scram / 1000.0, e.h2_flow), if e.scram == ScramState::Lit { MAGENTA_S } else { DIM });
+    kv("SCRAM  PAROI", format!("{:.0} C", e.scram_wall), col_val(e.scram_wall, crate::systems::SCRAM_WALL_CAUTION, crate::systems::SCRAM_WALL_BURST));
+    let pr = if d.mach < 1.0 { 1.0 } else { (1.0 - 0.075 * (d.mach - 1.0).powf(1.35)).max(0.15) };
+    let ramp = ((d.mach - 0.8) / 5.5).clamp(0.0, 1.0) * 100.0;
+    kv("ENTREE  T ARRET / PR", format!("{stag:.0} C  {pr:.2}"), if stag > 900.0 { AMBER } else { WHITE });
+    kv("ENTREE  RAMPE / PORTES", format!("{ramp:.0} %  {:.0} %", e.doors * 100.0), WHITE);
+    let fl = e.fuel_flow + e.h2_flow;
+    let isp = if fl > 0.01 { d.thrust / (fl * 9.81) } else { 0.0 };
+    let tsfc = if d.thrust > 100.0 { fl * 1000.0 / (d.thrust / 1000.0) } else { 0.0 };
+    kv("ISP / TSFC", format!("{isp:.0} s  {tsfc:.1} g/kN.s"), WHITE);
+    kv("RESTANT  JP-7 / H2", format!("{:.1} t  {:.1} t", ac.fuel / 1000.0, ac.h2 / 1000.0), WHITE);
+    let h = h.max(y - r.y);
+    rrect_lines(Rect::new(r.x, r.y, r.w, h), 5.0, 1.0, grid);
+    h
+}
+
 pub fn draw_engines(ac: &Aircraft, mon: &crate::health::ChamberMon, r: Rect, time: f64) {
     panel(r, "MOTEURS - TBCC DARKSTAR");
     let e = &ac.eng;
@@ -261,8 +348,10 @@ pub fn draw_engines(ac: &Aircraft, mon: &crate::health::ChamberMon, r: Rect, tim
     // Ligne basse
     let by = r.y + r.h - 28.0;
     txt(&format!("CHAMBRES {}", mon.state.label()), x, by, 13.0, mon.state.color());
-    // Courbes de surveillance entre les nacelles et la ligne basse
-    let gtop = top + 2.0 * (nh + 6.0) + 10.0;
+    // Tableau des paramètres moteur (style page ENG d'avion de chasse), puis courbes de surveillance
+    let ttop = top + 2.0 * (nh + 6.0) + 6.0;
+    let th = engine_table(ac, Rect::new(x, ttop, w, 150.0));
+    let gtop = ttop + th + 8.0;
     if by - 18.0 - gtop > 90.0 {
         mon.draw(Rect::new(x, gtop, w, by - 18.0 - gtop));
     }

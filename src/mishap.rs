@@ -48,10 +48,12 @@ impl Snapshot {
 /// Deuxième chance : une tentative de reconnexion par le canal de secours après la perte du signal.
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub enum Second {
-    Available,
     Trying(f64),
     Failed,
 }
+
+/// Durée de la reconnexion par le canal d'urgence (s).
+pub const RECO_S: f64 = 7.0;
 
 pub struct Mishap {
     pub second: Second,
@@ -64,6 +66,9 @@ pub struct Mishap {
     /// Instant d'allumage (s) et niveau de chaque voyant du panneau d'alarmes.
     lights: [(f64, u8); 32],
     pub snap: Snapshot,
+    /// Tirage de la reconnexion (0..1) et nombre de tentatives faites
+    roll: f64,
+    pub tries: u8,
 }
 
 fn kind_of(cause: &str) -> Kind {
@@ -97,7 +102,9 @@ impl Rng {
 impl Mishap {
     pub fn new(cause: &str, snap: Snapshot) -> Mishap {
         let kind = kind_of(cause);
-        let t_los = match kind {
+        // Durée de la cascade d'alarmes d'origine (s), ramenée à une fraction de seconde : l'écran
+        // devient noir presque aussitôt, les messages arrivent dans les dernières trames
+        let t_script = match kind {
             Kind::Impact => 1.6,
             Kind::SelfDestruct => 2.6,
             Kind::Electrical => 3.0,
@@ -105,6 +112,8 @@ impl Mishap {
             Kind::Explosion => 4.6,
             Kind::Structural => 5.2,
         };
+        let t_los = 0.5;
+        let ks = t_los * 0.9 / t_script;
         use Level::{Caution as C, Warning as W};
         let script: Vec<(f64, Level, &str)> = match kind {
             Kind::Structural => vec![
@@ -157,8 +166,9 @@ impl Mishap {
                 (1.8, C, "TELEMETRIE : TRAMES PERDUES"),
             ],
         };
-        let mut msgs: Vec<(f64, Level, String)> = script.into_iter().map(|(t, l, s)| (t, l, s.to_string())).collect();
+        let mut msgs: Vec<(f64, Level, String)> = script.into_iter().map(|(t, l, s)| (t * ks, l, s.to_string())).collect();
         msgs.push((t_los, Level::Warning, "LOS — PERTE DU SIGNAL TELEMETRIE".into()));
+        msgs.push((t_los + 0.1, Level::Info, "RECONNEXION AUTOMATIQUE EN COURS PAR CANAL D'URGENCE (IRIDIUM)".into()));
         // Panneau d'alarmes : voyants touchés par l'incident, puis ceux des systèmes raccordés
         // (dépendances : moteurs → génératrices et hydraulique, électricité → calculateurs...)
         let c = cause.to_uppercase();
@@ -217,30 +227,39 @@ impl Mishap {
                 l.0 *= t_los * 0.9 / tmax;
             }
         }
-        Mishap { second: Second::Available, start: now_s(), cause: cause.to_string(), kind, t_los, msgs, next: 0, lights, snap }
+        let roll = rng.f();
+        let start = now_s();
+        Mishap { second: Second::Trying(start + t_los), start, cause: cause.to_string(), kind, t_los, msgs, next: 0, lights, snap, roll, tries: 1 }
     }
 
-    /// Le véhicule répond toujours à la deuxième chance, sauf s'il a percuté le sol (ou s'est
-    /// autodétruit après éjection) : la cellule existe encore et le secours Iridium a sa batterie.
+    /// Probabilité que le véhicule réponde sur le canal d'urgence (Iridium, batterie dédiée) :
+    /// la plupart du temps, sauf impact au sol ou autodestruction ; moins bien après une perte
+    /// électrique ou un missile. Chaque nouvel essai manuel divise la chance par deux.
     pub fn chance(&self) -> f64 {
-        match self.kind {
+        let base = match self.kind {
             Kind::Impact | Kind::SelfDestruct => 0.0,
-            _ => 1.0,
-        }
+            Kind::Structural => 0.9,
+            Kind::Explosion => 0.85,
+            Kind::Missile => 0.75,
+            Kind::Electrical => 0.7,
+        };
+        base / 2f64.powi(self.tries.saturating_sub(1) as i32)
     }
 
-    /// Lance la tentative de deuxième chance.
+    /// Nouvel essai manuel après un échec (deux au plus).
     pub fn try_second(&mut self) {
-        if self.second == Second::Available {
+        if self.second == Second::Failed && self.tries < 3 && self.chance() > 0.0 {
+            self.tries += 1;
+            self.roll = (self.roll * 7.13 + 0.37).fract();
             self.second = Second::Trying(now_s());
         }
     }
 
-    /// Résultat de la tentative (Some(vrai) : le véhicule répond) une fois la poignée de main finie.
+    /// Résultat de la tentative en cours (Some(vrai) : le véhicule répond).
     pub fn second_result(&mut self) -> Option<bool> {
         if let Second::Trying(t0) = self.second {
-            if now_s() - t0 >= 8.0 {
-                let ok = self.chance() > 0.5;
+            if now_s() - t0 >= RECO_S {
+                let ok = self.roll < self.chance();
                 if !ok {
                     self.second = Second::Failed;
                 }
@@ -294,73 +313,52 @@ impl Mishap {
         (self.elapsed() / self.t_los).clamp(0.0, 1.0) as f32
     }
 
-    /// Écran de perte du signal par-dessus l'horizon (`r` : zone centrale du PFD). Renvoie vrai si
-    /// la deuxième chance est demandée.
+    /// Écran noir de perte du signal : reconnexion automatique par le canal d'urgence, puis
+    /// résultat. Renvoie vrai si un nouvel essai est demandé après un échec.
     pub fn draw_los(&self, r: Rect) -> bool {
         let e = self.elapsed() - self.t_los;
         if e < 0.0 {
             return false;
         }
+        let (cx, cy) = (r.x + r.w / 2.0, r.y + r.h * 0.40);
         let blink = (e * 1.6).fract() < 0.7;
         let s = &self.snap;
-        let lines: Vec<(String, Color, f32)> = vec![
-            ("LOS — PERTE DU SIGNAL TELEMETRIE".into(), RED, 22.0),
-            (
-                match self.kind {
-                    Kind::Structural => "RUPTURE EN VOL — VEHICULE PERDU",
-                    Kind::Explosion => "FEU / EXPLOSION EN VOL — VEHICULE PERDU",
-                    Kind::Impact => "IMPACT — VEHICULE DETRUIT",
-                    Kind::Missile => "ABATTU — VEHICULE PERDU",
-                    Kind::Electrical => "PERTE ELECTRIQUE TOTALE — VEHICULE PERDU",
-                    Kind::SelfDestruct => "TERMINAISON DE VOL (FTS) — VEHICULE DETRUIT",
-                }
-                .into(),
-                Color::new(1.0, 0.35, 0.3, 1.0),
-                15.0,
-            ),
-            (format!("AUCUNE TRAME DEPUIS T+{}", crate::mission::fmt_time(e)), AMBER, 14.0),
-            (String::new(), WHITE, 8.0),
-            ("DERNIERE TRAME VALIDE".into(), Color::new(0.75, 0.8, 0.85, 1.0), 12.0),
-            (format!("POS  {}  {}", dms(s.lat, 'N', 'S'), dms(s.lon, 'E', 'W')), WHITE, 14.0),
-            (format!("FL{:03.0}   KEAS {:.0}   M {:.2}   CAP {:03.0}", s.alt_ft / 100.0, s.keas, s.mach, s.hdg), WHITE, 14.0),
-            (format!("V/S {:+.0} FT/MIN   NZ {:+.1} G   T SIM {}", s.vs_fpm, s.nz, crate::mission::fmt_time(s.sim_t)), WHITE, 14.0),
-            (String::new(), WHITE, 8.0),
-            (format!("CAUSE PROBABLE : {}", self.cause), Color::new(1.0, 0.55, 0.45, 1.0), 13.0),
-            ("ENTREE : NOUVEL ESSAI".into(), Color::new(0.6, 0.65, 0.7, 1.0), 12.0),
-        ];
-        let w = lines.iter().map(|(l, _, sz)| txt_w(l, *sz)).fold(0.0f32, f32::max) + 36.0;
-        let h: f32 = lines.iter().map(|(_, _, sz)| sz + 6.0).sum::<f32>() + 22.0;
-        let b = Rect::new(r.x + (r.w - w) / 2.0, r.y + r.h * 0.12, w, h);
-        rrect(b, 8.0, Color::new(0.0, 0.0, 0.0, 0.88));
-        rrect_lines(b, 8.0, 1.5, if blink { RED } else { Color::new(0.5, 0.08, 0.06, 1.0) });
-        let mut y = b.y + 14.0;
-        for (l, c, sz) in &lines {
-            y += sz + 6.0;
-            if l.starts_with("LOS") && !blink {
-                continue;
-            }
-            txt_c(l, b.x + b.w / 2.0, y - 4.0, *sz, *c);
+        if blink {
+            txt_c("PERTE DU SIGNAL", cx, cy - 70.0, 24.0, RED);
         }
-        // Deuxième chance : une tentative de reconnexion par le secours Iridium
-        let bt = Rect::new(b.x + b.w / 2.0 - 170.0, b.y + b.h + 8.0, 340.0, 26.0);
+        txt_c(&format!("CAUSE PROBABLE : {}", self.cause), cx, cy - 44.0, 13.0, Color::new(1.0, 0.55, 0.45, 1.0));
+        let grey = Color::new(0.65, 0.7, 0.75, 1.0);
+        txt_c(&format!("DERNIERE TRAME T+{}  {} {}  FL{:03.0}  KEAS {:.0}  M{:.2}  CAP {:03.0}  V/S {:+.0}  NZ {:+.1}", crate::mission::fmt_time(s.sim_t), dms(s.lat, 'N', 'S'), dms(s.lon, 'E', 'W'), s.alt_ft / 100.0, s.keas, s.mach, s.hdg, s.vs_fpm, s.nz), cx, cy - 22.0, 11.0, grey);
+        let bar = Rect::new(cx - 190.0, cy + 26.0, 380.0, 6.0);
         match self.second {
-            Second::Available => {
-                let hov = hovered(bt);
-                rrect(bt, 6.0, if hov { Color::new(0.08, 0.3, 0.36, 1.0) } else { Color::new(0.04, 0.18, 0.22, 0.95) });
-                rrect_lines(bt, 6.0, 1.5, CYAN_S);
-                txt_c("RECONNEXION IMMEDIATE", bt.x + bt.w / 2.0, bt.y + 17.0, 12.0, WHITE);
-                return clicked(bt);
-            }
             Second::Trying(t0) => {
-                let k = ((now_s() - t0) / 8.0).clamp(0.0, 1.0) as f32;
-                rrect(bt, 6.0, Color::new(0.0, 0.0, 0.0, 0.85));
-                draw_rectangle(bt.x + 2.0, bt.y + bt.h - 5.0, (bt.w - 4.0) * k, 3.0, CYAN_S);
+                let k = ((now_s() - t0) / RECO_S).clamp(0.0, 1.0) as f32;
+                txt_c("RECONNEXION EN COURS PAR CANAL D'URGENCE (IRIDIUM)", cx, cy + 10.0, 15.0, CYAN_S);
+                draw_rectangle_lines(bar.x, bar.y, bar.w, bar.h, 1.0, Color::new(0.3, 0.6, 0.7, 1.0));
+                draw_rectangle(bar.x + 1.0, bar.y + 1.0, (bar.w - 2.0) * k, bar.h - 2.0, CYAN_S);
                 let step = crate::link::STEPS[((k * 5.0) as usize).min(4)];
-                txt_c(&format!("RECONNEXION : {step}..."), bt.x + bt.w / 2.0, bt.y + 16.0, 12.0, CYAN_S);
+                let dots = ".".repeat(((e * 3.0) as usize) % 4);
+                txt_c(&format!("{step}{dots}"), cx, cy + 50.0, 12.0, WHITE);
+                if self.tries > 1 {
+                    txt_c(&format!("ESSAI {} / 3", self.tries), cx, cy + 68.0, 11.0, grey);
+                }
             }
             Second::Failed => {
-                rrect(bt, 6.0, Color::new(0.0, 0.0, 0.0, 0.85));
-                txt_c("AUCUNE REPONSE DU VEHICULE — PERTE CONFIRMEE", bt.x + bt.w / 2.0, bt.y + 17.0, 12.0, RED);
+                txt_c("AUCUNE REPONSE DU VEHICULE SUR LE CANAL D'URGENCE", cx, cy + 10.0, 15.0, RED);
+                let lost = match self.kind {
+                    Kind::Impact => "IMPACT — VEHICULE DETRUIT",
+                    Kind::SelfDestruct => "TERMINAISON DE VOL (FTS) — VEHICULE DETRUIT",
+                    _ => "VEHICULE PRESUME PERDU",
+                };
+                txt_c(lost, cx, cy + 32.0, 13.0, AMBER);
+                if self.tries < 3 && self.chance() > 0.0 {
+                    let bt = Rect::new(cx - 150.0, cy + 46.0, 300.0, 26.0);
+                    rrect(bt, 6.0, if hovered(bt) { Color::new(0.08, 0.3, 0.36, 1.0) } else { Color::new(0.04, 0.18, 0.22, 0.95) });
+                    rrect_lines(bt, 6.0, 1.5, CYAN_S);
+                    txt_c(&format!("NOUVEL ESSAI ({:.0} %)", self.chance() / 2.0 * 100.0), cx, bt.y + 17.0, 12.0, WHITE);
+                    return clicked(bt);
+                }
+                txt_c("ENTREE : NOUVEL ESSAI DE VOL", cx, cy + 56.0, 12.0, grey);
             }
         }
         false

@@ -537,3 +537,18 @@ Le SR-72 est un avion de reconnaissance : sa charge utile est simulée.
     givrage des sondes s'il est coupé par air froid, NWS GAIN HI/LO) ; instructions GLIM, PITOT, NWS.
   - Horizon façon F/A-18 / Rafale : repères critiques en grosses lettres (FLY UP, PULL UP, OVER G,
     AOA, OVERSPEED, SPEED), fenêtre « ALARME » rouge clignotante et ligne « PANNE » ambre.
+- v1.33.0 : reconnexion, moteurs, console, horizon.
+  - Incident : l'écran devient noir presque aussitôt, « RECONNEXION EN COURS PAR CANAL D'URGENCE
+    (IRIDIUM) » démarre seule (7 s). Réussite la plupart du temps (90 % rupture structurelle, 85 %
+    explosion, 75 % missile, 70 % perte électrique, 0 % impact / autodestruction) ; après un échec,
+    deux nouveaux essais possibles à chance réduite. Reconnecté : état d'avant l'incident, mode
+    dégradé (télémesure, caméra allumée, terminal, manche indisponible) et dégâts selon la cause :
+    gouvernes / structure → plus de FCS ; explosion → deux moteurs perdus, FCS disponible ;
+    missile → moteurs + hydraulique ; électrique → génératrices, capteurs (caméra) hors tension.
+  - Page MOTEURS : tableau turbines G/D (N1, N2, EGT, débit PPH, pression / température d'huile,
+    vibrations, tuyère), statoréacteur et scramjet (poussée, débit, parois), entrée d'air
+    (température d'arrêt, rendement, rampe, portes), Isp / TSFC, carburant restant.
+  - Console FLT CNTRL : SPD BRK (EXT/RET), AUTO TRIM (compensation de la dissymétrie de poussée),
+    AP ENGD/DISC.
+  - Horizon : colonne TAS / FPA / limite de g / hauteur d'énergie, mémos GCAS OFF, PITOT ICE,
+    G LIM HIGH, FUEL COOL OFF.

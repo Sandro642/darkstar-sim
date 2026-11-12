@@ -532,6 +532,22 @@ impl Game {
             SystemReset => self.system_reset(),
             YawTrim(v) => self.ac.yaw_trim = v,
             Gcas(on) => self.set_gcas(on),
+            SpeedBrake(on) => {
+                self.ac.speedbrake = on;
+                self.push(Level::Info, if on { "AEROFREINS SORTIS" } else { "AEROFREINS RENTRES" });
+            }
+            AutoTrim(on) => {
+                self.ac.auto_trim = on;
+                self.push(Level::Info, if on { "AUTO TRIM ON : DISSYMETRIE DE POUSSEE COMPENSEE AU LACET" } else { "AUTO TRIM OFF : YAW TRIM MANUEL" });
+            }
+            ApDisc => {
+                if self.ac.ap.on {
+                    self.ac.ap.on = false;
+                    self.push(Level::Caution, "AP DISCONNECT — PILOTE AUTOMATIQUE DECONNECTE");
+                } else {
+                    self.push(Level::Info, "AP DEJA DECONNECTE (instruction AP pour l'engager)");
+                }
+            }
             FuelCool(m) => self.set_fuel_cool(m),
             GLim(h) => self.set_glim(h),
             PitotHeat(on) => self.set_pitot(on),
@@ -591,17 +607,77 @@ impl Game {
         let mut ac = self.last_ac.clone().unwrap_or_else(|| self.ac.clone());
         ac.crashed = None;
         let kind = self.mishap.as_ref().map(|m| m.kind);
-        // Aucune panne ajoutée : seules les pannes réellement présentes à la déconnexion demeurent
-        // (le panneau de l'écran de perte du signal n'est qu'une indication, pas une injection)
+        let cause = self.mishap.as_ref().map(|m| m.cause.to_uppercase()).unwrap_or_default();
         self.ac = ac;
+        // Dégâts de l'incident, déterminés par sa cause (pas de pannes au hasard)
+        let summary = self.incident_damage(kind, &cause);
         self.degraded = kind;
         self.mishap = None;
         self.crash_report.clear();
         self.stale = None;
         self.tree = None;
         self.link.state = link::State::Connected;
-        self.push(Level::Warning, format!("RECONNEXION IMMEDIATE : LIAISON RETABLIE VIA {} — MODE DEGRADE (TELEMESURE + TERMINAL, MANCHE INDISPONIBLE)", self.link.path.name()));
-        self.push(Level::Warning, "ETAT ET PANNES DE LA DECONNEXION CONSERVES : CERTAINES INSTRUCTIONS SONT REFUSEES — EMERGENCY OVERRIDE / EJECTION TOUJOURS POSSIBLES");
+        self.link.path = link::Path::Emerg;
+        self.push(Level::Warning, "RECONNEXION REUSSIE PAR CANAL D'URGENCE (IRIDIUM) — MODE DEGRADE : TELEMESURE, CAMERA, TERMINAL ; MANCHE INDISPONIBLE");
+        self.push(Level::Warning, format!("DEGATS : {summary}"));
+        // Caméra allumée pour évaluer les dégâts (si le bus électrique le permet)
+        let elec = self.ac.fails.has(systems::Fail::GenL) && self.ac.fails.has(systems::Fail::GenR);
+        if !elec {
+            self.recon.cam_on = true;
+            self.push(Level::Info, "CAMERA ON — EVALUATION DES DEGATS");
+        }
+        self.push(Level::Caution, "INSTRUCTIONS SELON LES DEGATS — EMERGENCY OVERRIDE / EJECTION TOUJOURS POSSIBLES");
+    }
+
+    /// Dégâts conservés après la reconnexion, selon l'incident. Renvoie leur résumé.
+    fn incident_damage(&mut self, kind: Option<mishap::Kind>, cause: &str) -> String {
+        use mishap::Kind;
+        use systems::Fail;
+        let ac = &mut self.ac;
+        let kill_engines = |ac: &mut Aircraft| {
+            for k in 0..2 {
+                ac.eng.side[k] = TurbState::Failed;
+                ac.eng.n2s[k] = 0.0;
+            }
+            ac.eng.turb = TurbState::Failed;
+            ac.eng.ram = RamState::Off;
+            ac.eng.scram = ScramState::Off;
+            ac.throttle = 0.0;
+        };
+        let fcs_lost = |ac: &mut Aircraft| {
+            ac.fails.set(Fail::FcsDirect, true);
+            ac.fails.set(Fail::Hyd, true);
+            ac.ap.on = false;
+        };
+        match kind {
+            Some(Kind::Structural) if cause.contains("THERMIQUE") => {
+                ac.fails.set(Fail::Adc, true);
+                ac.fails.set(Fail::FcsDirect, true);
+                "STRUCTURE CHAUFFEE, SONDES DETRUITES — FCS EN LOI DIRECTE, PILOTAGE PAR INSTRUCTIONS".into()
+            }
+            Some(Kind::Structural) => {
+                fcs_lost(ac);
+                "GOUVERNES / HYDRAULIQUE — PLUS DE FCS : AUCUNE INSTRUCTION DE PILOTAGE, MOTEURS DISPONIBLES".into()
+            }
+            Some(Kind::Explosion) => {
+                kill_engines(ac);
+                ac.eng.combustor_failed = true;
+                ac.fails.set(Fail::H2Leak, true);
+                "CHAMBRE DETRUITE, DEUX MOTEURS PERDUS, FUITE H2 — FCS DISPONIBLE (VOL PLANE)".into()
+            }
+            Some(Kind::Missile) => {
+                kill_engines(ac);
+                ac.fails.set(Fail::FuelPump, true);
+                fcs_lost(ac);
+                "MOTEURS, CIRCUIT CARBURANT ET HYDRAULIQUE — PLUS DE FCS NI DE POUSSEE".into()
+            }
+            Some(Kind::Electrical) => {
+                ac.fails.set(Fail::GenL, true);
+                ac.fails.set(Fail::GenR, true);
+                "GENERATRICES PERDUES — CAPTEURS HORS TENSION (PAS DE CAMERA), FCS SUR BATTERIE".into()
+            }
+            _ => "AUCUN".into(),
+        }
     }
 
     /// Instructions impossibles en mode dégradé, selon les dégâts.
@@ -1264,7 +1340,7 @@ impl Game {
         }
         match second {
             Some(true) => self.recover_vehicle(),
-            Some(false) => self.push(Level::Warning, "RECONNEXION : AUCUNE REPONSE DU VEHICULE — PERTE CONFIRMEE"),
+            Some(false) => self.push(Level::Warning, "RECONNEXION : AUCUNE REPONSE DU VEHICULE SUR LE CANAL D'URGENCE"),
             None => {}
         }
         if self.ac.crashed.is_some() {
@@ -1463,11 +1539,11 @@ impl Game {
                 self.tab = gcs::Tab::Armement;
                 reply = Ok("PAGE ARMEMENT".into());
             }
-            "RECONNEXION" | "RECONNECT" | "RELAIS" | "LIAISON" if self.mishap.as_ref().is_some_and(|m| m.lost()) => {
+            "RECONNEXION" | "RECONNECT" | "RELAIS" | "LIAISON" if self.mishap.as_ref().is_some_and(|m| m.second == mishap::Second::Failed) => {
                 if let Some(m) = &mut self.mishap {
                     m.try_second();
                 }
-                reply = Ok("RECONNEXION IMMEDIATE EN COURS".into());
+                reply = Ok("NOUVEL ESSAI DE RECONNEXION (CANAL D'URGENCE)".into());
             }
             // Injection d'incident grave (essais) : perte du véhicule de la cause choisie
             "INCIDENT" if airborne => {
@@ -2317,18 +2393,18 @@ async fn main() {
             let lay = mfd::layout(mfd_r).1;
             let svs_r = lay.inner;
             draw_console(&g, svs_r);
-            // Essai automatique de la reconnexion immédiate (DARKSTAR_AUTO2=1)
-            let auto2 = std::env::var("DARKSTAR_AUTO2").is_ok() && g.mishap.as_ref().is_some_and(|m| m.lost() && m.second == mishap::Second::Available);
-            if g.mishap.as_ref().is_some_and(|m| m.draw_los(svs_r)) || auto2 {
+            // Écran noir : reconnexion automatique par le canal d'urgence ; nouvel essai après échec
+            if g.mishap.as_ref().is_some_and(|m| m.draw_los(svs_r)) {
                 if let Some(m) = &mut g.mishap {
                     m.try_second();
                 }
-                g.push(Level::Info, "GCS > RECONNEXION IMMEDIATE");
+                g.push(Level::Info, "GCS > NOUVEL ESSAI DE RECONNEXION (CANAL D'URGENCE)");
             }
             if let Some(m) = &g.mishap {
-                // Analyse de l'enregistreur après quelques secondes de perte du signal
-                if (m.second == mishap::Second::Failed || (m.second == mishap::Second::Available && m.elapsed() > m.t_los + 20.0)) && !g.crash_report.is_empty() {
-                    draw_crash_report(&g.crash_report, svs_r);
+                // Analyse de l'enregistreur une fois la perte confirmée
+                if m.second == mishap::Second::Failed && !g.crash_report.is_empty() {
+                    let lr = Rect::new(svs_r.x, svs_r.y + svs_r.h * 0.55, svs_r.w, svs_r.h * 0.45);
+                    draw_crash_report(&g.crash_report, lr);
                 }
             } else if g.ac.crashed.is_some() && !g.crash_report.is_empty() {
                 draw_crash_report(&g.crash_report, svs_r);
@@ -2340,9 +2416,12 @@ async fn main() {
             emergency::draw_hud(&g.emerg, &g.ac, svs_r, time);
             // Mode dégradé après reconnexion
             if g.degraded.is_some() && g.mishap.is_none() {
-                let b = Rect::new(svs_r.x + svs_r.w / 2.0 - 230.0, svs_r.y + 4.0, 460.0, 20.0);
+                let fcs = g.ac.fails.has(systems::Fail::FcsDirect) && g.ac.fails.has(systems::Fail::Hyd);
+                let m = if fcs { "CANAL D'URGENCE IRIDIUM — TELEMESURE, CAMERA, TERMINAL — FCS PERDU" } else { "CANAL D'URGENCE IRIDIUM — TELEMESURE, CAMERA, TERMINAL — MANCHE INDISPONIBLE" };
+                let w = ui::txt_w(m, 12.0) + 30.0;
+                let b = Rect::new(svs_r.x + svs_r.w / 2.0 - w / 2.0, svs_r.y + 4.0, w, 20.0);
                 ui::rrect(b, 5.0, Color::new(0.35, 0.18, 0.0, 0.85));
-                ui::txt_c("LIAISON DEGRADEE — TELEMESURE + TERMINAL, MANCHE INDISPONIBLE", b.x + b.w / 2.0, b.y + 14.0, 12.0, ui::AMBER);
+                ui::txt_c(m, b.x + b.w / 2.0, b.y + 14.0, 12.0, if fcs { Color::new(1.0, 0.3, 0.25, 1.0) } else { ui::AMBER });
             }
             // Décision aux minimums : CONTINUE ou GO AROUND
             if g.mins == 2 {
@@ -2366,7 +2445,8 @@ async fn main() {
                 }
             }
             // Liaison perdue ou réduite au secours : bandeau et choix du relais
-            if g.connect.is_none() && g.ac.crashed.is_none() && !g.link.full() {
+            // (en mode dégradé après reconnexion, le canal d'urgence est voulu : pas de panneau)
+            if g.connect.is_none() && g.ac.crashed.is_none() && !g.link.full() && g.degraded.is_none() {
                 let last = g.stale.as_ref().unwrap_or(&g.ac);
                 if let Some(p) = link::draw_lost(&g.link, last, svs_r, time) {
                     g.link.connect(p);

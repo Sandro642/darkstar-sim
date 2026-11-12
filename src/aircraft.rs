@@ -220,6 +220,8 @@ pub struct Aircraft {
     pub nws_hi: bool,
     /// Compensateur de lacet (-1 gauche .. +1 droite).
     pub yaw_trim: f64,
+    /// Compensation automatique de la dissymétrie de poussée par le trim de lacet
+    pub auto_trim: bool,
     pub throttle: f64,
     pub gear_down: bool,
     pub gear_pos: f64,
@@ -378,6 +380,7 @@ impl Aircraft {
             pitot_ice: 0.0,
             nws_hi: false,
             yaw_trim: 0.0,
+            auto_trim: true,
             throttle: 0.0,
             gear_down: true,
             gear_pos: 1.0,
@@ -1327,6 +1330,10 @@ impl Aircraft {
         self.fcs = fcs;
         // Lacet : poussée dissymétrique des turbines et compensateur YAW TRIM
         let asym = (self.eng.t_side[0] - self.eng.t_side[1]) / 240_000.0;
+        if self.auto_trim && !self.on_ground {
+            let want = (-asym * 2.5).clamp(-1.0, 1.0);
+            self.yaw_trim += (want - self.yaw_trim).clamp(-0.2 * dt, 0.2 * dt);
+        }
         let yaw_rate = (asym * 2.5 + self.yaw_trim * 1.0).to_radians() / (1.0 + mach);
         if self.tas > 5.0 {
             self.psi += yaw_rate * dt;

@@ -21,6 +21,9 @@ pub enum MenuAction {
     SystemReset,
     YawTrim(f64),
     Gcas(bool),
+    SpeedBrake(bool),
+    AutoTrim(bool),
+    ApDisc,
     FuelCool(u8),
     GLim(bool),
     PitotHeat(bool),
@@ -220,6 +223,22 @@ pub fn draw_menu(ac: &Aircraft, bit: &BitState, r: Rect, time: f64) -> Option<Me
     txt_c("RESET", col(0.82), y_top + 21.0, 13.0, LEGEND);
     if pushbutton(Rect::new(col(0.82) - bw / 2.0, y_top + 30.0, bw, bh), "", None, "RESET", None) {
         out = Some(MenuAction::SystemReset);
+    }
+    // Rangée centrale : aérofreins, auto-trim de lacet, déconnexion AP
+    let y_mid = y_top + 104.0;
+    let sb = 54.0;
+    for (k, lbl) in [(0.18f32, "SPD BRK"), (0.50, "AUTO TRIM"), (0.82, "AP")] {
+        txt_c(lbl, col(k), y_mid - 6.0, 12.0, LEGEND);
+    }
+    let amber = Color::new(1.0, 0.68, 0.15, 1.0);
+    if pushbutton(Rect::new(col(0.18) - sb / 2.0, y_mid, sb, 40.0), "EXT", ac.speedbrake.then_some(amber), "RET", (!ac.speedbrake).then_some(LEGEND)) {
+        out = Some(MenuAction::SpeedBrake(!ac.speedbrake));
+    }
+    if pushbutton(Rect::new(col(0.50) - sb / 2.0, y_mid, sb, 40.0), "ON", ac.auto_trim.then_some(GREEN_S), "OFF", (!ac.auto_trim).then_some(amber)) {
+        out = Some(MenuAction::AutoTrim(!ac.auto_trim));
+    }
+    if pushbutton(Rect::new(col(0.82) - sb / 2.0, y_mid, sb, 40.0), "ENGD", ac.ap.on.then_some(GREEN_S), "DISC", (!ac.ap.on).then_some(amber)) {
+        out = Some(MenuAction::ApDisc);
     }
     // YAW TRIM (bouton rotatif) : clic à gauche / à droite, ou molette
     let kc = vec2(col(0.45), p2.y + p2.h - 52.0);
