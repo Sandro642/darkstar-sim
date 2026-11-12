@@ -2503,6 +2503,7 @@ async fn main() {
     let mut sfx = audio::Sfx::new().await;
     // Suivi de la liaison pour les sons (perte / rétablissement)
     let mut snd_link_down = false;
+    let mut snd_threats = 0usize;
     let upd = updater::Updater::new();
     upd.check();
     let mut last_check = get_time();
@@ -2669,6 +2670,15 @@ async fn main() {
         g.feel.update(&g.ac, get_frame_time());
         sfx.feel(g.feel.rumble, std::mem::take(&mut g.feel.boom));
         sfx.mishap(g.mishap.as_ref().is_some_and(|m| m.cascading()));
+        // Voix d'alerte : chargement des phrases générées ; RWR (niveau de menace, nouvel émetteur)
+        sfx.voice.poll().await;
+        {
+            let cues = g.recon.threat_cues(&g.ac);
+            let lvl = cues.iter().map(|c| c.state).max().unwrap_or(0).max(if g.combat.missiles.is_empty() { 0 } else { 4 });
+            let heard = cues.len();
+            sfx.threat(lvl, heard > snd_threats);
+            snd_threats = heard;
+        }
         // Liaison : perte (incident ou liaison coupée), gazouillis de modem pendant la reconnexion
         let link_down = g.mishap.is_some() || g.link.state == link::State::Lost;
         let reconnecting = g.mishap.as_ref().is_some_and(|m| matches!(m.second, mishap::Second::Trying(_))) || g.connect.is_some();

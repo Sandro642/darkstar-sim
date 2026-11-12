@@ -679,3 +679,11 @@ Le SR-72 est un avion de reconnaissance : sa charge utile est simulée.
   - Alertes : sonnerie d'incendie, tonalité pulsée Auto-GCAS / récupération survitesse.
   - Liaison : parasites et tonalité descendante à la perte, gazouillis de modem pendant la
     reconnexion (Iridium, poignée de main), trois notes montantes au rétablissement.
+- v1.46.0 : effets F-16 / F-35.
+  - Voix d'alerte féminine façon « Bitching Betty » (synthèse vocale macOS générée au premier
+    lancement puis en cache, rendu radio de cockpit : passe-bande, saturation, clic d'alternat) :
+    PULL UP, FLY UP (Auto-GCAS), WARNING, CAUTION, ENGINE FIRE, BINGO, FUEL LOW, OVER G, STALL,
+    GEAR / GEAR DOWN, OVERSPEED, ALTITUDE (basse altitude train rentré), MINIMUMS, DATA LINK LOST /
+    DATA LINK, LOCK, MISSILE ; file d'attente sans chevauchement, répétition limitée.
+  - RWR façon F-16 : « deedle » à chaque nouvel émetteur, tonalité continue d'accrochage,
+    warble de tir de missile.

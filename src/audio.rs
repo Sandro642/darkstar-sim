@@ -122,6 +122,10 @@ pub struct Sfx {
     gear_hum: Sound,
     config: Sound,
     modem: Sound,
+    rwr_new: Sound,
+    rwr_lock: Sound,
+    rwr_launch: Sound,
+    pub voice: Voice,
     pub muted: bool,
     prev: Prev,
 }
@@ -139,6 +143,15 @@ struct Prev {
     scram_lit: bool,
     ram_lit: bool,
     alt_err: f64,
+    gcas: bool,
+    fire: bool,
+    osr: bool,
+    warns: usize,
+    over_g: bool,
+    bingo: bool,
+    fuel_low: bool,
+    gear_cue: bool,
+    threat: u8,
 }
 
 /// Événements sonores ponctuels émis par la logique de jeu.
@@ -357,6 +370,18 @@ impl Sfx {
             sine(1175.0, t) * (-ph * 5.0).exp() * if ph < 0.6 { 0.35 } else { 0.0 }
         }))
         .await;
+        // RWR façon F-16 : nouvel émetteur (« deedle »), accrochage (tonalité continue), tir (warble)
+        let rwr_new = load(synth(0.5, false, |t, _| {
+            let f = if (t * 16.0) as u32 % 2 == 0 { 1300.0 } else { 1700.0 };
+            sine(f, t) * if t < 0.4 { 0.45 } else { 0.0 }
+        }))
+        .await;
+        let rwr_lock = load(synth(1.0, true, |t, _| sine(1000.0, t) * 0.35)).await;
+        let rwr_launch = load(synth(1.0, true, |t, _| {
+            let f = if (t * 20.0) as u32 % 2 == 0 { 1450.0 } else { 2900.0 };
+            sine(f, t) * 0.4
+        }))
+        .await;
         // Reconnexion Iridium : gazouillis de modem
         let modem = load(synth(2.0, true, |t, r| {
             let slot = (t * 12.0) as u32;
@@ -367,7 +392,8 @@ impl Sfx {
 
         let sfx = Sfx {
             turb_lo, turb_hi, roar, ab, ram, scram, wind, rumble, warn, siren, shaker, clacker, horn,
-            caution, ap_disc, bang, thump, blip, buzz, click, key, switch, ap_on, athr_off, alt_alert, mins, seq, whoosh, link_lost, link_ok, fire_bell, gcas, gear_hum, config, modem,
+            caution, ap_disc, bang, thump, blip, buzz, click, key, switch, ap_on, athr_off, alt_alert, mins, seq, whoosh, link_lost, link_ok, fire_bell, gcas, gear_hum, config, modem, rwr_new, rwr_lock, rwr_launch,
+            voice: Voice::new(),
             muted: false,
             prev: Prev::default(),
         };
@@ -377,8 +403,28 @@ impl Sfx {
         sfx
     }
 
-    fn loops(&self) -> [&Sound; 18] {
-        [&self.turb_lo, &self.turb_hi, &self.roar, &self.ab, &self.ram, &self.scram, &self.wind, &self.rumble, &self.warn, &self.siren, &self.shaker, &self.clacker, &self.horn, &self.fire_bell, &self.gcas, &self.gear_hum, &self.config, &self.modem]
+    fn loops(&self) -> [&Sound; 20] {
+        [&self.turb_lo, &self.turb_hi, &self.roar, &self.ab, &self.ram, &self.scram, &self.wind, &self.rumble, &self.warn, &self.siren, &self.shaker, &self.clacker, &self.horn, &self.fire_bell, &self.gcas, &self.gear_hum, &self.config, &self.modem, &self.rwr_lock, &self.rwr_launch]
+    }
+
+    /// RWR et voix de menace : `level` 0 rien, 1 veille, 2 poursuite, 3 accrochage, 4 tir ;
+    /// `new` : nouvel émetteur entendu.
+    pub fn threat(&mut self, level: u8, new: bool) {
+        let m = if self.muted { 0.0 } else { 1.0 };
+        if new {
+            self.once(&self.rwr_new, 0.4);
+        }
+        set_sound_volume(&self.rwr_lock, m * if level == 3 { 0.25 } else { 0.0 });
+        set_sound_volume(&self.rwr_launch, m * if level >= 4 { 0.35 } else { 0.0 });
+        if level >= 4 && self.prev.threat < 4 {
+            self.voice.say("missile", 3.0);
+        } else if level == 3 && self.prev.threat < 3 {
+            self.voice.say("lock", 4.0);
+        }
+        if level >= 4 {
+            self.voice.say("missile", 4.0);
+        }
+        self.prev.threat = level;
     }
 
     fn once(&self, s: &Sound, vol: f32) {
@@ -387,16 +433,22 @@ impl Sfx {
         }
     }
 
-    pub fn cue(&self, c: Cue) {
+    pub fn cue(&mut self, c: Cue) {
         match c {
             Cue::Ack => self.once(&self.blip, 0.35),
             Cue::Refused => self.once(&self.buzz, 0.35),
             Cue::Click => self.once(&self.click, 0.25),
             Cue::Key => self.once(&self.key, 0.18),
             Cue::Switch => self.once(&self.switch, 0.45),
-            Cue::Minimums => self.once(&self.mins, 0.5),
+            Cue::Minimums => {
+                self.once(&self.mins, 0.5);
+                self.voice.say("minimums", 3.0);
+            }
             Cue::Seq => self.once(&self.seq, 0.3),
-            Cue::LinkOk => self.once(&self.link_ok, 0.45),
+            Cue::LinkOk => {
+                self.once(&self.link_ok, 0.45);
+                self.voice.say("link_ok", 3.0);
+            }
         }
     }
 
@@ -440,6 +492,7 @@ impl Sfx {
         let p = &self.prev;
         let cautions = alerts.iter().filter(|(l, s)| *l == Level::Caution && !acked.contains(s)).count();
         let mut play: Vec<(&Sound, f32)> = Vec::new();
+        let mut vq: Vec<(&'static str, f64)> = Vec::new();
         if p.started {
             if cautions > p.cautions {
                 play.push((&self.caution, 0.4));
@@ -474,6 +527,52 @@ impl Sfx {
             if ram && !p.ram_lit {
                 play.push((&self.thump, 0.5));
             }
+            // --- Voix d'alerte (F-16 / F-35) ---
+            let gcas_imminent = ac.gcas_on && ac.gcas_t < 2.5 && !ac.gcas_active;
+            if ac.gcas_active && !p.gcas {
+                vq.push(("fly_up", 2.0));
+            }
+            if gcas_imminent || has("PULL UP") {
+                vq.push(("pull_up", 2.5));
+            }
+            if ac.fire.any() && !p.fire {
+                vq.push(("fire", 3.0));
+            }
+            if ac.osr_active && !p.osr {
+                vq.push(("overspeed", 3.0));
+            }
+            let warns = alerts.iter().filter(|(l, s)| *l == Level::Warning && !acked.contains(s)).count();
+            if warns > p.warns && !ac.fire.any() && !gcas_imminent && !ac.gcas_active {
+                vq.push(("warning", 4.0));
+            } else if cautions > p.cautions {
+                vq.push(("caution", 4.0));
+            }
+            let over_g = ac.d.nz > ac.fcs.nz_max.max(1.5) * 0.95;
+            if over_g && !p.over_g {
+                vq.push(("over_g", 3.0));
+            }
+            if has("STALL") {
+                vq.push(("stall", 2.5));
+            }
+            if has("TOO LOW — GEAR") {
+                vq.push(("gear", 2.5));
+            }
+            let gear_cue = ac.cue_gear && !ac.gear_down;
+            if gear_cue && !p.gear_cue {
+                vq.push(("gear_down", 6.0));
+            }
+            let bingo = has("BINGO FUEL") || has("MIN FUEL") || has("EMERGENCY FUEL");
+            if bingo && !p.bingo {
+                vq.push(("bingo", 10.0));
+            }
+            let fuel_low = has("FUEL LOW");
+            if fuel_low && !p.fuel_low {
+                vq.push(("fuel_low", 10.0));
+            }
+            // Basse altitude (ALOW F-16) : moins de 1000 ft sol, train rentré, en descente, hors autoland
+            if !ac.on_ground && ac.d.agl < 1_000.0 * crate::geo::FT && !ac.gear_down && ac.d.vs < -5.0 && ac.autoland.is_none() && !gcas_imminent {
+                vq.push(("altitude", 4.0));
+            }
             // Alerte d'altitude : passage à 1000 ft de la consigne en s'en approchant
             let err = (ac.ap.alt_tgt_ft - ac.alt / crate::geo::FT).abs();
             if ac.ap.on && ac.ap.vert == VertMode::Alt && p.alt_err > 1_000.0 && err <= 1_000.0 {
@@ -482,6 +581,9 @@ impl Sfx {
         }
         for (s, v) in play {
             self.once(s, v);
+        }
+        for (id, g) in vq {
+            self.voice.say(id, g);
         }
         self.prev = Prev {
             cautions,
@@ -495,7 +597,17 @@ impl Sfx {
             scram_lit: e.scram == ScramState::Lit,
             ram_lit: e.ram == RamState::Lit,
             alt_err: (ac.ap.alt_tgt_ft - ac.alt / crate::geo::FT).abs(),
+            gcas: ac.gcas_active,
+            fire: ac.fire.any(),
+            osr: ac.osr_active,
+            warns: alerts.iter().filter(|(l, s)| *l == Level::Warning && !acked.contains(s)).count(),
+            over_g: ac.d.nz > ac.fcs.nz_max.max(1.5) * 0.95,
+            bingo: has("BINGO FUEL") || has("MIN FUEL") || has("EMERGENCY FUEL"),
+            fuel_low: has("FUEL LOW"),
+            gear_cue: ac.cue_gear && !ac.gear_down,
+            threat: self.prev.threat,
         };
+        self.voice.update(self.muted);
     }
 
     /// Ressenti de vol : grondement de structure et bang supersonique.
@@ -517,10 +629,11 @@ impl Sfx {
     }
 
     /// Liaison : perte (parasites + tonalité), gazouillis de modem pendant la reconnexion.
-    pub fn link(&self, lost_now: bool, reconnecting: bool) {
+    pub fn link(&mut self, lost_now: bool, reconnecting: bool) {
         let m = if self.muted { 0.0 } else { 1.0 };
         if lost_now {
             self.once(&self.link_lost, 0.5);
+            self.voice.say("link_lost", 3.0);
         }
         set_sound_volume(&self.modem, m * if reconnecting { 0.25 } else { 0.0 });
     }
@@ -528,5 +641,154 @@ impl Sfx {
     /// Réinitialise le suivi des transitions (nouvel essai).
     pub fn reset(&mut self) {
         self.prev = Prev::default();
+    }
+}
+
+
+// ---------- Voix d'alerte (façon « Bitching Betty » F-16 / F-35) ----------
+
+/// Phrases de la voix d'alerte : (identifiant, texte prononcé).
+const PHRASES: [(&str, &str); 18] = [
+    ("pull_up", "Pull up. Pull up."),
+    ("fly_up", "Fly up."),
+    ("warning", "Warning. Warning."),
+    ("caution", "Caution."),
+    ("fire", "Engine fire. Engine fire."),
+    ("bingo", "Bingo. Bingo."),
+    ("over_g", "Over G."),
+    ("stall", "Stall. Stall."),
+    ("gear", "Gear. Gear."),
+    ("gear_down", "Gear down."),
+    ("overspeed", "Overspeed."),
+    ("altitude", "Altitude. Altitude."),
+    ("link_lost", "Data link lost."),
+    ("link_ok", "Data link."),
+    ("minimums", "Minimums."),
+    ("missile", "Missile. Missile."),
+    ("lock", "Lock."),
+    ("fuel_low", "Fuel low."),
+];
+
+fn voice_dir() -> std::path::PathBuf {
+    let home = std::env::var("HOME").unwrap_or_else(|_| ".".into());
+    std::path::Path::new(&home).join("Library/Application Support/Darkstar/voice/v1")
+}
+
+/// Génère (une fois) les phrases avec la synthèse vocale de macOS, en tâche de fond.
+pub fn generate_voices() -> std::sync::Arc<std::sync::atomic::AtomicBool> {
+    let done = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let d2 = done.clone();
+    std::thread::spawn(move || {
+        let dir = voice_dir();
+        let _ = std::fs::create_dir_all(&dir);
+        for (id, text) in PHRASES {
+            let f = dir.join(format!("{id}.wav"));
+            if !f.exists() {
+                // Fichier temporaire puis renommage : pas de phrase tronquée si le jeu est quitté
+                let tmp = dir.join(format!("{id}.tmp.wav"));
+                let ok = std::process::Command::new("/usr/bin/say")
+                    .args(["-v", "Samantha", "-r", "205", "--data-format=LEI16@22050", "-o"])
+                    .arg(&tmp)
+                    .arg(text)
+                    .status()
+                    .is_ok_and(|st| st.success());
+                if ok {
+                    let _ = std::fs::rename(&tmp, &f);
+                }
+            }
+        }
+        d2.store(true, std::sync::atomic::Ordering::SeqCst);
+    });
+    done
+}
+
+/// Rendu « radio de cockpit » : passe-bande 350-3200 Hz, légère saturation, clic de micro.
+fn radio_voice(bytes: &[u8]) -> Option<(Vec<u8>, f32)> {
+    // Lecture du WAV PCM 16 bits mono (chunks « fmt » et « data »)
+    let mut i = 12;
+    let mut data: Option<&[u8]> = None;
+    while i + 8 <= bytes.len() {
+        let id = &bytes[i..i + 4];
+        let len = u32::from_le_bytes([bytes[i + 4], bytes[i + 5], bytes[i + 6], bytes[i + 7]]) as usize;
+        if id == b"data" {
+            data = bytes.get(i + 8..(i + 8 + len).min(bytes.len()));
+            break;
+        }
+        i += 8 + len + (len & 1);
+    }
+    let data = data?;
+    let x: Vec<f32> = data.chunks_exact(2).map(|c| i16::from_le_bytes([c[0], c[1]]) as f32 / 32768.0).collect();
+    let mut hp = Lp::new(350.0);
+    let mut lp = Lp::new(3200.0);
+    let mut out: Vec<f32> = Vec::with_capacity(x.len() + 600);
+    // Clic d'alternat avant la phrase
+    for k in 0..300 {
+        out.push(((k as f32 * 1.7).sin()) * (-(k as f32) / 40.0).exp() * 0.3);
+    }
+    for v in x {
+        let b = lp.run(v - hp.run(v));
+        out.push((b * 2.2).tanh() * 0.9);
+    }
+    let dur = out.len() as f32 / SR;
+    Some((wav(&out), dur))
+}
+
+pub struct Voice {
+    sounds: Vec<(&'static str, Sound, f32)>,
+    ready: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    loaded: bool,
+    queue: std::collections::VecDeque<&'static str>,
+    busy_until: f64,
+    last: std::collections::HashMap<&'static str, f64>,
+}
+
+impl Voice {
+    pub fn new() -> Voice {
+        Voice { sounds: Vec::new(), ready: generate_voices(), loaded: false, queue: Default::default(), busy_until: 0.0, last: Default::default() }
+    }
+
+    /// Charge les phrases une fois la génération terminée (à appeler dans la boucle principale).
+    pub async fn poll(&mut self) {
+        if self.loaded || !self.ready.load(std::sync::atomic::Ordering::SeqCst) {
+            return;
+        }
+        self.loaded = true;
+        for (id, _) in PHRASES {
+            if let Ok(b) = std::fs::read(voice_dir().join(format!("{id}.wav"))) {
+                if let Some((w, dur)) = radio_voice(&b) {
+                    if let Ok(snd) = load_sound_from_bytes(&w).await {
+                        self.sounds.push((id, snd, dur));
+                    }
+                }
+            }
+        }
+    }
+
+    /// Annonce `id` (sans doublon en file ; pas plus d'une fois toutes les `min_gap` secondes).
+    pub fn say(&mut self, id: &'static str, min_gap: f64) {
+        let now = macroquad::time::get_time();
+        if self.last.get(id).is_some_and(|t| now - t < min_gap) || self.queue.contains(&id) {
+            return;
+        }
+        self.last.insert(id, now);
+        if self.queue.len() < 4 {
+            self.queue.push_back(id);
+        }
+    }
+
+    /// Joue la phrase suivante quand la précédente est terminée.
+    pub fn update(&mut self, muted: bool) {
+        let now = macroquad::time::get_time();
+        if now < self.busy_until {
+            return;
+        }
+        if let Some(id) = self.queue.pop_front() {
+            if let Some((_, s, dur)) = self.sounds.iter().find(|(i, _, _)| *i == id) {
+                if !muted {
+                    play_sound(s, PlaySoundParams { looped: false, volume: 0.75 });
+                }
+                self.busy_until = now + *dur as f64 + 0.15;
+            }
+        }
     }
 }
