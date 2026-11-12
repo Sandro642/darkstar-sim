@@ -609,3 +609,5 @@ Le SR-72 est un avion de reconnaissance : sa charge utile est simulée.
   piste » sur chacune. Autoland : piste du plan de vol (SimBrief, numérotation magnétique, L/C/R)
   en priorité, sinon face au vent (> 10 kt), sinon trajet le plus court ; désignation L/C/R
   calculée parmi les parallèles ; plané sans moteur et décollage auto sur n'importe quelle piste.
+- v1.38.1 : horizon — tunnel vert d'aide à l'atterrissage retiré. MCDU : l'avion SimBrief accepte
+  l'identifiant d'un avion personnalisé (ex. un « Darkstar » créé dans SimBrief).

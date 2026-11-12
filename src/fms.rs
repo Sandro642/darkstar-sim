@@ -825,7 +825,8 @@ impl Fms {
             (Page::Init, false, 1) => self.start_fetch(),
             (Page::Init, false, 2) => self.open_simbrief(),
             (Page::Init, false, 3) => {
-                if (3..=5).contains(&sp.len()) && sp.chars().all(|c| c.is_ascii_alphanumeric()) {
+                // Code de type (B77W) ou identifiant d'un avion personnalisé SimBrief (ex. 793553_1731...)
+                if (3..=30).contains(&sp.len()) && sp.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') {
                     self.acft = sp.clone();
                     self.scratch.clear();
                 } else {

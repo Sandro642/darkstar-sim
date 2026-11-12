@@ -2545,7 +2545,7 @@ async fn main() {
             // Saisie MCDU : les touches alphanumériques vont dans la ligne de saisie
             while let Some(ch) = get_char_pressed() {
                 let c = ch.to_ascii_uppercase();
-                if (c.is_ascii_alphanumeric() || "/.-+ ".contains(c)) && g.fms.scratch.len() < 22 {
+                if (c.is_ascii_alphanumeric() || "/.-+_ ".contains(c)) && g.fms.scratch.len() < 30 {
                     if g.fms.scratch == "CLR" {
                         g.fms.scratch.clear();
                     }
