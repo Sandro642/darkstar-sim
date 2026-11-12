@@ -2040,6 +2040,37 @@ mod tests {
         }
     }
 
+    /// Essai : Mach 11 en croisière scram, plafond selon le couloir de q.
+    #[test]
+    #[ignore]
+    fn probe_mach11() {
+        let mut ac = Aircraft::new_on_runway(0);
+        ac.on_ground = false;
+        ac.gear_down = false;
+        ac.gear_pos = 0.0;
+        ac.brakes = false;
+        ac.alt = 98_000.0 * FT;
+        ac.tas = 8.0 * isa(ac.alt).a;
+        ac.set_turbines(TurbState::Off, 0.0);
+        ac.eng.inlet_open = false;
+        ac.eng.ram = RamState::Lit;
+        ac.eng.scram = ScramState::Lit;
+        ac.ap.on = true;
+        ac.ap.vert = VertMode::Alt;
+        ac.ap.alt_tgt_ft = 98_000.0;
+        ac.ap.at_on = true;
+        ac.ap.mach_tgt = 11.0;
+        for k in 0..(1_500 * 120) {
+            let m = ac.d.mach;
+            ac.ap.alt_tgt_ft = std::env::var("ALT").ok().and_then(|x| x.parse().ok()).unwrap_or(if m < 8.0 { 98_000.0 } else if m < 9.5 { 108_000.0 } else { 118_000.0 });
+            ac.step(1.0 / 120.0, 0.0, 0.0);
+            if ac.crashed.is_some() { println!("CRASH {:?}", ac.crashed); break; }
+            if k % (60 * 120) == 0 {
+                println!("t={:4}s M{:.2} FL{:.0} q {:.0} kPa peau {:.0}C T {:.0} D {:.0} kN H2 {:.0} kg thr {:.2} scram {:?} wall {:.0}", k / 120, ac.d.mach, ac.alt / FT / 100.0, ac.d.q / 1000.0, ac.skin_temp - 273.15, ac.d.thrust / 1000.0, ac.d.drag / 1000.0, ac.h2, ac.throttle, ac.eng.scram, ac.eng.scram_wall);
+            }
+        }
+    }
+
     #[test]
     fn autoland_runway_choice() {
         use crate::airports::AIRPORTS;

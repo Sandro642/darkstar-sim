@@ -211,12 +211,41 @@ pub struct Fpln {
     pub arr_rwy: String,
     pub sid: String,
     pub star: String,
+    /// Croisière au plafond (FL MAX) : le niveau monte avec le Mach (couloir de q)
+    pub crz_max: bool,
+}
+
+/// Altitude (ft) où la pression dynamique vaut `q` (Pa) à Mach `m` (atmosphère standard).
+pub fn alt_for_q(m: f64, q: f64) -> f64 {
+    let (mut lo, mut hi) = (5_000.0f64, 60_000.0f64);
+    for _ in 0..40 {
+        let mid = (lo + hi) / 2.0;
+        let a = crate::atmosphere::isa(mid);
+        let qm = 0.5 * a.rho * (m * a.a).powi(2);
+        if qm > q {
+            lo = mid;
+        } else {
+            hi = mid;
+        }
+    }
+    (lo + hi) / 2.0 / FT
+}
+
+/// Plafond de croisière scramjet (FL) à Mach `m` : q = 35 kPa (marge au-dessus du minimum de
+/// 25 kPa du couloir scram).
+pub fn ceiling_fl(m: f64) -> f64 {
+    (alt_for_q(m, 35_000.0) / 100.0 / 10.0).floor() * 10.0
+}
+
+/// Allongement de la descente au-delà de Mach 6 (énergie cinétique, décélération lente à q constant).
+fn hyper_k(m: f64) -> f64 {
+    (m / 6.0).max(1.0)
 }
 
 /// Distance de descente (m) : descente à q constant (~(1 + M/2) NM par 1000 ft, mesuré en vol
 /// simulé) puis descente finale subsonique (~80 NM).
 pub fn tod_dist(crz_fl: f64, crz_mach: f64) -> f64 {
-    ((crz_fl / 10.0) * (1.0 + 0.5 * crz_mach) + 80.0) * NM
+    ((crz_fl / 10.0) * (1.0 + 0.5 * crz_mach) * hyper_k(crz_mach) + 80.0) * NM
 }
 
 /// Profil hypersonique du Darkstar : (phase, Mach, FL) en fonction de la distance parcourue et
@@ -274,7 +303,7 @@ impl Fpln {
                 match self.wpts[i - 1].phase {
                     "CLB TURB" | "CRZ TURB" => jp += 3.2 * dt,
                     "ACC RAM" | "CLB RAM" | "CRZ RAM" => jp += 5.5 * dt,
-                    "CRZ SCRAM" => h2 += 1.6 * dt,
+                    "CRZ SCRAM" => h2 += 1.6 * (m / 6.0).powf(1.5) * dt,
                     _ => jp += 0.6 * dt,
                 }
                 acc += seg;
@@ -312,7 +341,7 @@ impl Fpln {
         match self.wpts.iter().position(|w| w.proc >= 2) {
             Some(k) => {
                 let star: f64 = self.wpts[k..].windows(2).map(|w| dist_brg(w[0].lat, w[0].lon, w[1].lat, w[1].lon).0).sum();
-                star + ((self.crz_fl / 10.0) * (1.0 + 0.5 * self.crz_mach) + 30.0) * NM
+                star + ((self.crz_fl / 10.0) * (1.0 + 0.5 * self.crz_mach) * hyper_k(self.crz_mach) + 30.0) * NM
             }
             None => tod_dist(self.crz_fl, self.crz_mach),
         }
@@ -407,7 +436,7 @@ pub fn from_simbrief(j: &Json, crz_mach: f64) -> Result<Fpln, String> {
     wpts.push(Wpt { ident: di.clone(), lat: dla, lon: dlo, alt_ft: 0.0, mach: 0.0, phase: "ARR", ..Default::default() });
     let flt = j.path(&["atc", "callsign"]).map(|x| x.s()).filter(|s| !s.is_empty()).unwrap_or("DKS01".into());
     // Le niveau de croisière SimBrief (avion de ligne) est remplacé par le profil Darkstar
-    let mut fp = Fpln { origin: oi, dest: di, wpts, active: 1, source: "SIMBRIEF", flt, crz_fl: if crz_mach > 4.8 { 950.0 } else { 650.0 }, crz_mach, jp7_req: 0.0, h2_req: 0.0, ete: 0.0, dep_rwy, arr_rwy, sid, star };
+    let mut fp = Fpln { origin: oi, dest: di, wpts, active: 1, source: "SIMBRIEF", flt, crz_fl: if crz_mach > 4.8 { 950.0 } else { 650.0 }, crz_mach, jp7_req: 0.0, h2_req: 0.0, ete: 0.0, dep_rwy, arr_rwy, sid, star, crz_max: false };
     fp.compute();
     Ok(fp)
 }
@@ -509,6 +538,8 @@ pub struct Fms {
     pub user: String,
     pub from_to: (String, String),
     pub crz: (f64, f64),
+    /// Croisière au plafond (FL MAX)
+    pub crz_max: bool,
     fetch: Arc<Mutex<Fetch>>,
     /// Saisie clavier dirigée vers le MCDU
     pub focus: bool,
@@ -535,7 +566,8 @@ pub enum McduOut {
 impl Fms {
     /// Plan DARKSTAR DISPATCH calculé et activé directement (instruction DISPATCH).
     pub fn dispatch_now(&mut self, from: &str, to: &str, fl: f64, m: f64) -> Result<String, String> {
-        let fp = dispatch(from, to, fl, m)?;
+        let mut fp = dispatch(from, to, fl, m)?;
+        fp.crz_max = self.crz_max;
         let msg = format!("DISPATCH {from}-{to} : {} POINTS, {:.0} NM, {} — JP-7 {:.1} t, H2 {:.1} t", fp.wpts.len(), fp.total() / NM, fmt_eta(fp.ete), fp.jp7_req / 1000.0, fp.h2_req / 1000.0);
         self.from_to = (from.into(), to.into());
         self.crz = (fl, m);
@@ -566,6 +598,7 @@ impl Fms {
         let tot = fp.total();
         let tod = fp.tod().min(tot * 0.5);
         let (crz_ft, crz_m, dest) = (fp.crz_fl * 100.0, fp.crz_mach, fp.dest.clone());
+        let crz_max = fp.crz_max;
         // Procédures IFR : point actif dans une SID / STAR et altitudes prévues par SimBrief
         let act = fp.wpts.get(fp.active).cloned().unwrap_or_default();
         let star_first = fp.wpts.iter().find(|w| w.proc >= 2).map(|w| w.sb_alt).unwrap_or(0.0);
@@ -596,7 +629,9 @@ impl Fms {
             let sched = if crz_m <= 2.5 {
                 crz_ft
             } else if e.scram == ScramState::Lit {
-                if mach < 6.0 { 88_000.0 } else if mach < 8.0 { 98_000.0 } else { 108_000.0 }
+                // Couloir de pression dynamique : q élevée pour accélérer, 35 kPa en croisière
+                let q_t = if mach < crz_m - 0.15 { 42_000.0 } else { 35_000.0 };
+                (alt_for_q(mach.max(5.0), q_t) / 500.0).round() * 500.0
             } else if e.ram == RamState::Lit && !turb_on {
                 if mach < 3.5 { 58_000.0 } else if mach < 4.2 { 72_000.0 } else { 80_000.0 }
             } else if e.ram == RamState::Lit {
@@ -607,7 +642,7 @@ impl Fms {
                 50_000.0
             };
             ac.ap.vert = VertMode::Alt;
-            ac.ap.alt_tgt_ft = sched.min(crz_ft);
+            ac.ap.alt_tgt_ft = if crz_max { sched } else { sched.min(crz_ft) };
             if crz_m > 2.5 {
                 if mach > 2.05 && e.ram == RamState::Off {
                     ac.cmd_ram();
@@ -804,7 +839,7 @@ impl Fms {
 
     pub fn new() -> Fms {
         let user = std::fs::read_to_string(config_path()).map(|s| s.trim().to_string()).unwrap_or_default();
-        Fms { fpln: None, temp: None, page: Page::Init, scroll: 0, scratch: String::new(), msg: String::new(), user, from_to: (String::new(), String::new()), crz: (950.0, 6.0), fetch: Arc::new(Mutex::new(Fetch::Idle)), focus: true, acft: "B77W".into(), vnav: true, desc_started: false, land_sent: false, phase: "", dep: ProcSel::default(), arr: ProcSel::default(), ils: None }
+        Fms { fpln: None, temp: None, page: Page::Init, scroll: 0, scratch: String::new(), msg: String::new(), user, from_to: (String::new(), String::new()), crz: (950.0, 6.0), crz_max: false, fetch: Arc::new(Mutex::new(Fetch::Idle)), focus: true, acft: "B77W".into(), vnav: true, desc_started: false, land_sent: false, phase: "", dep: ProcSel::default(), arr: ProcSel::default(), ils: None }
     }
 
     /// Plan affiché / modifié : temporaire s'il existe, sinon actif.
@@ -937,24 +972,29 @@ impl Fms {
                 }
             }
             (Page::Init, true, 2) => {
-                // « 950/6.0 » ou « FL950/M6 »
-                let t = sp.replace("FL", "").replace('M', "");
+                // « 950/6.0 », « FL950/M6 » ou « MAX/11 » (plafond selon le Mach)
+                let t = sp.replace("FL", "").replace("MAX", "X").replace('M', "");
                 if let Some((a, b)) = t.split_once('/') {
-                    if let (Ok(fl), Ok(m)) = (a.parse::<f64>(), b.parse::<f64>()) {
-                        if (100.0..=1_100.0).contains(&fl) && (0.5..=9.5).contains(&m) {
+                    let max = a == "X";
+                    let m = b.parse::<f64>().ok();
+                    let fl = if max { m.map(ceiling_fl) } else { a.parse::<f64>().ok() };
+                    if let (Some(fl), Some(m)) = (fl, m) {
+                        if (100.0..=1_300.0).contains(&fl) && (0.5..=11.0).contains(&m) && (max || m <= 2.5 || fl <= ceiling_fl(m) + 50.0) {
                             self.crz = (fl, m);
+                            self.crz_max = max;
                             if let Some(p) = self.plan_mut() {
                                 p.crz_fl = fl;
                                 p.crz_mach = m;
+                                p.crz_max = max;
                                 p.compute();
                             }
                             self.scratch.clear();
                         } else {
-                            self.msg = "HORS DOMAINE".into();
+                            self.msg = format!("HORS DOMAINE (M11 MAX, FL{:.0} MAX)", ceiling_fl(m));
                         }
                     }
                 } else {
-                    self.msg = "FORMAT : 950/6.0".into();
+                    self.msg = "FORMAT : 950/6.0 OU MAX/11".into();
                 }
             }
             (Page::Init, false, 1) => self.start_fetch(),
@@ -971,7 +1011,8 @@ impl Fms {
             (Page::Init, true, 3) => {
                 let (o, d) = self.from_to.clone();
                 match dispatch(&o, &d, self.crz.0, self.crz.1) {
-                    Ok(fp) => {
+                    Ok(mut fp) => {
+                        fp.crz_max = self.crz_max;
                         self.msg = format!("PLAN {o}-{d} CALCULE");
                         self.temp = Some(fp);
                         self.page = Page::Fpln;
@@ -1265,7 +1306,7 @@ fn page_lines(f: &Fms, ac: &Aircraft) -> (String, Color, Vec<(Line, Line)>) {
             rows.push((ln(" CO RTE", LBL_M, "SIMBRIEF ID ", LBL_M), ln(ft, if o.is_empty() { AMB_M } else { CYAN_M }, user, if f.user.is_empty() { AMB_M } else { CYAN_M })));
             let st = if f.busy() { "EN COURS" } else { "IMPORT OFP>" };
             rows.push((ln(" FLT NBR", LBL_M, "", LBL_M), ln(f.plan().map(|p| p.flt.clone()).unwrap_or("DKS01".into()), CYAN_M, st, WHITE_M)));
-            rows.push((ln(" CRZ FL/MACH", LBL_M, "GENERER", LBL_M), ln(format!("FL{:.0}/M{:.1}", f.crz.0, f.crz.1), CYAN_M, "SIMBRIEF>", WHITE_M)));
+            rows.push((ln(" CRZ FL/MACH", LBL_M, "GENERER", LBL_M), ln(if f.crz_max { format!("MAX({:.0})/M{:.1}", f.crz.0, f.crz.1) } else { format!("FL{:.0}/M{:.1}", f.crz.0, f.crz.1) }, CYAN_M, "SIMBRIEF>", WHITE_M)));
             rows.push((ln(" CALCUL PLAN", LBL_M, "AVION SIMBRIEF ", LBL_M), ln("<DARKSTAR DISPATCH", WHITE_M, f.acft.clone(), CYAN_M)));
             let info = match f.plan() {
                 Some(p) => format!("{} {}-{} {:.0}NM", p.source, p.origin, p.dest, p.total() / NM),
@@ -1734,5 +1775,57 @@ mod tests {
         }
         println!("ILS destination cale {tuned_dest}, autoland piste {landed_rwy}, sol {} crash {:?} t {t:.0}", ac.on_ground, ac.crashed);
         assert!(tuned_dest && landed_rwy == arr_rwy && ac.on_ground && ac.crashed.is_none());
+    }
+
+    /// Croisière MAX / Mach 11 : KPMD → EGLL, plafond suivant le couloir de q, posé à Londres.
+    #[test]
+    fn vnav_mach11_max() {
+        let mut f = Fms::new();
+        f.crz_max = true;
+        f.dispatch_now("KPMD", "EGLL", ceiling_fl(11.0), 11.0).unwrap();
+        println!("plafond M11 : FL{:.0}", ceiling_fl(11.0));
+        let mut ac = Aircraft::new_on_runway(0);
+        ac.on_ground = false;
+        ac.gear_down = false;
+        ac.gear_pos = 0.0;
+        ac.brakes = false;
+        ac.alt = 15_000.0 * FT;
+        ac.tas = 0.7 * crate::atmosphere::isa(ac.alt).a;
+        ac.set_turbines(TurbState::Running, 0.8);
+        ac.throttle = 0.8;
+        ac.ap.on = true;
+        ac.ap.lat = LatMode::Nav;
+        let dt = 1.0 / 60.0;
+        let (mut t, mut mmax, mut altmax, mut lp) = (0.0, 0.0f64, 0.0f64, -1e9);
+        while t < 4.0 * 3600.0 && ac.crashed.is_none() && !(ac.on_ground && ac.tas < 3.0) {
+            if (t * 10.0f64).fract() < dt * 10.0 {
+                if let Some((b, _)) = f.guidance(&ac) {
+                    if ac.autoland.is_none() {
+                        ac.ap.hdg_tgt = b;
+                    }
+                }
+                for o in f.vnav_update(&mut ac) {
+                    if let McduOut::Cmd(c) = o {
+                        if let Some(code) = c.strip_prefix("ATTERRIR ") {
+                            let i = AIRPORTS.iter().position(|a| a.icao == code).unwrap();
+                            let _ = ac.engage_autoland(i);
+                        }
+                    }
+                }
+            }
+            let c = ac.autoflight().unwrap_or((0.0, 0.0));
+            ac.step(dt, c.0, c.1);
+            ac.events.clear();
+            mmax = mmax.max(ac.d.mach);
+            altmax = altmax.max(ac.alt / FT);
+            if t - lp > 600.0 {
+                lp = t;
+                println!("{t:5.0}s M{:.2} FL{:.0} q {:.0} kPa peau {:.0}C H2 {:.0} JP7 {:.0} reste {:.0} NM", ac.d.mach, ac.alt / FT / 100.0, ac.d.q / 1000.0, ac.skin_temp - 273.15, ac.h2, ac.fuel, f.fpln.as_ref().unwrap().remaining(ac.lat, ac.lon) / NM);
+            }
+            t += dt;
+        }
+        println!("crash {:?} sol {} M max {mmax:.2} FL max {:.0} t {t:.0}", ac.crashed, ac.on_ground, altmax / 100.0);
+        assert!(mmax > 10.8 && altmax > 115_000.0);
+        assert!(ac.crashed.is_none() && ac.on_ground);
     }
 }

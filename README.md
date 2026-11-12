@@ -625,3 +625,10 @@ Le SR-72 est un avion de reconnaissance : sa charge utile est simulée.
     GEAR DOWN (G) et SPEED BRAKE EXT / RET (S) ; train non sorti à 500 ft : remise des gaz.
     (Plané d'urgence EMERGENCY OVERRIDE : configuration toujours automatique.)
   - KXTA (Groom Lake) : piste recalée sur l'imagerie satellite (axe 158,7° vrai) + piste parallèle.
+- v1.40.0 : croisière jusqu'à Mach 11 et au plafond.
+  - MCDU INIT : CRZ FL/MACH jusqu'à Mach 11 ; « MAX/11 » = plafond automatique (FL1210 à Mach 11,
+    q = 35 kPa) ; niveau manuel limité au plafond du Mach choisi.
+  - VNAV scram : altitude suivant le couloir de pression dynamique (42 kPa en accélération,
+    35 kPa en croisière) au lieu de paliers fixes ; en FL MAX, le niveau monte avec le Mach.
+  - Distance de descente allongée au-delà de Mach 6 ; prévision H2 selon le Mach.
+  - Essai KPMD → EGLL (4686 NM) en MAX/11 : Mach 11,0 au FL1215, posé à Londres en 82 min.
