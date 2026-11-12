@@ -661,3 +661,6 @@ Le SR-72 est un avion de reconnaissance : sa charge utile est simulée.
   encadrées : vitesse KEAS à gauche (consigne au-dessus ; Mach, g, incidence, GS, TAS, g max
   dessous), altitude à droite (consigne ; vario, FL, q, peau, sonde radio R, DA dessous), textes à
   liseré sombre. Instruction HUD STYLE DARKSTAR pour revenir aux échelles, HUD STYLE F35.
+- v1.44.0 : horizon style HYBRIDE Darkstar / F-35 (par défaut) — échelles défilantes et blocs de
+  données Darkstar, langage visuel F-35 : symbologie et chiffres verts, valeurs encadrées en vert,
+  échelles allégées à filet vert discret. HUD STYLE HYBRIDE | F35 | DARKSTAR.

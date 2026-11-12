@@ -1760,9 +1760,13 @@ impl Game {
                 _ => reply = Err("PAS AU POINT D'ATTENTE".into()),
             },
             "HUD" if arg(1) == "STYLE" => {
-                let f = arg(2) != "DARKSTAR";
-                pfd::set_f35(f);
-                reply = Ok(if f { "HORIZON : STYLE F-35 (SYMBOLOGIE DE CASQUE, VALEURS ENCADREES)".into() } else { "HORIZON : STYLE DARKSTAR (ECHELLES DEFILANTES)".into() });
+                let (st, m) = match arg(2) {
+                    "DARKSTAR" => (0, "HORIZON : STYLE DARKSTAR (ECHELLES DEFILANTES, BLANC)"),
+                    "F35" | "F-35" => (1, "HORIZON : STYLE F-35 (SYMBOLOGIE DE CASQUE, VALEURS ENCADREES)"),
+                    _ => (2, "HORIZON : STYLE HYBRIDE DARKSTAR / F-35 (ECHELLES, SYMBOLOGIE VERTE)"),
+                };
+                pfd::set_style(st);
+                reply = Ok(m.into());
             }
             "LNAV" | "NAV" => {
                 if airborne {

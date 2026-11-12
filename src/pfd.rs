@@ -41,25 +41,36 @@ pub struct PfdInfo<'a> {
 
 
 thread_local! {
-    static F35: std::cell::Cell<bool> = const { std::cell::Cell::new(true) };
+    static STYLE: std::cell::Cell<u8> = const { std::cell::Cell::new(2) };
 }
 
-/// Style de l'horizon : F-35 (symbologie de casque verte, valeurs encadrées) ou Darkstar.
-pub fn set_f35(on: bool) {
-    F35.with(|c| c.set(on));
+/// Style de l'horizon : 0 Darkstar (échelles, blanc), 1 F-35 (casque : valeurs encadrées, vert),
+/// 2 hybride (échelles Darkstar, langage visuel F-35 : vert, valeurs encadrées, fonds allégés).
+pub fn set_style(s: u8) {
+    STYLE.with(|c| c.set(s.min(2)));
 }
 
 pub fn f35() -> bool {
-    F35.with(|c| c.get())
+    STYLE.with(|c| c.get()) == 1
+}
+
+/// Symbologie verte (F-35 et hybride).
+fn green() -> bool {
+    STYLE.with(|c| c.get()) != 0
 }
 
 /// Vert de symbologie F-35 (casque) ou blanc Darkstar.
 fn line() -> Color {
-    if f35() { Color::new(0.38, 1.0, 0.52, 1.0) } else { Color::new(0.92, 0.94, 0.95, 1.0) }
+    if green() { Color::new(0.38, 1.0, 0.52, 1.0) } else { Color::new(0.92, 0.94, 0.95, 1.0) }
 }
 
 fn label_c() -> Color {
-    if f35() { Color::new(0.30, 0.85, 0.45, 1.0) } else { Color::new(0.85, 0.88, 0.9, 1.0) }
+    if green() { Color::new(0.30, 0.85, 0.45, 1.0) } else { Color::new(0.85, 0.88, 0.9, 1.0) }
+}
+
+/// Couleur des valeurs principales (chiffres des échelles).
+fn val_c() -> Color {
+    if green() { Color::new(0.45, 1.0, 0.58, 1.0) } else { WHITE }
 }
 
 /// Texte de symbologie avec liseré sombre (lisible sur ciel clair comme sur relief).
@@ -209,7 +220,7 @@ fn drum(x_right: f32, cy: f32, w: f32, h: f32, value: f64, step: f64, modulo: f6
     for k in -2i32..=2 {
         let v = (base + k as f64 * step).rem_euclid(modulo);
         let y = cy + (frac - k as f32) * row + size * 0.36;
-        txt_r(&format!("{:0width$.0}", v, width = digits), x_right - 3.0, y, size, WHITE);
+        txt_r(&format!("{:0width$.0}", v, width = digits), x_right - 3.0, y, size, val_c());
     }
     scissor_pop();
 }
@@ -801,8 +812,15 @@ fn draw_fma_bar(ac: &Aircraft, r: Rect, g: &Geo, info: &PfdInfo) {
 
 /// Fond d'échelle translucide.
 fn tape_bg(t: Rect) {
-    rrect(t, 6.0, PANEL);
-    rrect_lines(t, 6.0, 1.0, EDGE);
+    if green() {
+        // Hybride : échelle allégée, filet vert discret
+        draw_rectangle(t.x, t.y, t.w, t.h, Color::new(0.0, 0.02, 0.01, 0.30));
+        let c = line();
+        draw_rectangle_lines(t.x, t.y, t.w, t.h, 1.0, Color::new(c.r, c.g, c.b, 0.45));
+    } else {
+        rrect(t, 6.0, PANEL);
+        rrect_lines(t, 6.0, 1.0, EDGE);
+    }
 }
 
 fn draw_speed(ac: &Aircraft, g: &Geo, time: f64) {
@@ -878,7 +896,7 @@ fn draw_speed(ac: &Aircraft, g: &Geo, time: f64) {
     draw_rectangle_lines(bx + bw - 20.0, cy - 24.0, 20.0, 48.0, 1.5, line());
     let s10 = (spd / 10.0).floor();
     if s10 > 0.0 {
-        txt_r(&format!("{s10:.0}"), bx + bw - 21.0, cy + 9.0, 24.0, WHITE);
+        txt_r(&format!("{s10:.0}"), bx + bw - 21.0, cy + 9.0, 24.0, val_c());
     }
     drum(bx + bw, cy, 20.0, 46.0, spd as f64, 1.0, 10.0, 1, 22.0);
     // Au-dessus : vitesse vraie et consigne
@@ -983,7 +1001,7 @@ fn draw_altitude(ac: &Aircraft, g: &Geo, da_ft: Option<f64>) {
     draw_rectangle(bx + bw - 30.0, cy - 24.0, 30.0, 48.0, BLACK);
     draw_rectangle_lines(bx + bw - 30.0, cy - 24.0, 30.0, 48.0, 1.5, line());
     let a100 = (alt / 100.0).floor();
-    txt_r(&format!("{a100:.0}"), bx + bw - 31.0, cy + 9.0, 22.0, WHITE);
+    txt_r(&format!("{a100:.0}"), bx + bw - 31.0, cy + 9.0, 22.0, val_c());
     drum(bx + bw, cy, 30.0, 46.0, alt as f64, 20.0, 100.0, 2, 18.0);
     // Au-dessus : consigne d'altitude
     rrect(Rect::new(t.x, t.y - 34.0, t.w, 32.0), 5.0, BLOCK);
