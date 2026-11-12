@@ -14,6 +14,8 @@ const G0: f64 = 9.80665;
 
 pub const SKIN_LIMIT_C: f64 = 1250.0;
 pub const Q_LIMIT: f64 = 100_000.0;
+/// Pression dynamique de rupture structurale (Pa).
+pub const Q_RUPTURE: f64 = 130_000.0;
 pub const GEAR_VLE: f64 = 270.0; // KEAS
 
 #[derive(Clone, Copy, PartialEq, Debug)]
@@ -209,6 +211,12 @@ pub struct Aircraft {
     pub gcas_t: f64,
     gcas_clear_t: f64,
     gcas_g_max: f64,
+    /// Auto recovery survitesse (q) : récupération active, prédiction de q (kPa) de 0 à 10 s,
+    /// braquage commandé et braquage de rupture des gouvernes (deg) pour le graphe de l'horizon
+    pub osr_active: bool,
+    pub osr_curve: [f32; 11],
+    pub osr_defl: (f64, f64),
+    osr_clear_t: f64,
     /// Refroidissement carburant (FTMS) : 0 AUTO (échangeur H2 + air dynamique), 1 RAM AIR, 2 OFF
     pub fuel_cool: u8,
     /// Limiteur de g : false NORM (3 g / 2 g au-delà de Mach 4), true HIGH (4 g / 2,5 g)
@@ -243,6 +251,8 @@ pub struct Aircraft {
     pub fails: systems::Failures,
     /// Dégâts réels d'un incident (distincts des pannes injectées pour l'essai)
     pub damage: systems::Failures,
+    /// Détection / extinction d'incendie
+    pub fire: crate::fire::Fire,
     pub elec: systems::Elec,
     /// Sortie de secours du train (gravité) engagée.
     pub gear_alt: bool,
@@ -376,6 +386,10 @@ impl Aircraft {
             gcas_t: f64::INFINITY,
             gcas_clear_t: 0.0,
             gcas_g_max: 0.0,
+            osr_active: false,
+            osr_curve: [0.0; 11],
+            osr_defl: (0.0, 0.0),
+            osr_clear_t: 0.0,
             fuel_cool: 0,
             g_lim_high: false,
             pitot_heat: true,
@@ -449,6 +463,7 @@ impl Aircraft {
             fcs: Fcs::default(),
             fails: systems::Failures::default(),
             damage: systems::Failures::default(),
+            fire: crate::fire::Fire::default(),
             elec: systems::Elec::new(),
             gear_alt: false,
             fcs_overload_t: 0.0,
@@ -1153,6 +1168,49 @@ impl Aircraft {
             self.gcas_ovr = false;
             self.gcas_t = f64::INFINITY;
         }
+        // --- Auto recovery survitesse : prédiction de q sur 10 s (accélération et descente dans un
+        // air plus dense) ; si la courbe atteint la rupture, ressource maximale sans dépasser la
+        // droite de rupture des gouvernes (braquage < 95 % de la limite de charnière)
+        {
+            let vs = v * self.gamma.sin();
+            let k = (2.0 * self.d.accel / v.max(30.0) - vs / 7_000.0).clamp(-0.5, 0.5);
+            let q_rupt = Q_RUPTURE;
+            let mut peak = 0.0f64;
+            for (i, c) in self.osr_curve.iter_mut().enumerate() {
+                let qi = (q * (k * i as f64).exp()).min(q_rupt * 1.6);
+                *c = (qi / 1000.0) as f32;
+                peak = peak.max(qi);
+            }
+            let enabled = self.gcas_on && !self.on_ground && self.autoland.is_none();
+            if enabled && !self.osr_active && peak > 0.97 * q_rupt && k > 0.0 {
+                self.osr_active = true;
+                self.osr_clear_t = 0.0;
+                self.ap.on = false;
+                self.msg(Level::Warning, "AUTO RECOVERY SURVITESSE : RESSOURCE MAX SANS RUPTURE DES GOUVERNES");
+            }
+            if self.osr_active {
+                if !enabled {
+                    self.osr_active = false;
+                } else {
+                    // Ailes à plat puis tirer au maximum ; le limiteur ci-dessous plafonne le braquage
+                    let pmax_r = (35.0f64).to_radians() / (1.0 + mach / 6.0) * hyd;
+                    roll_rate = (3.0 * wrap_pi(-self.phi)).clamp(-pmax_r, pmax_r);
+                    pitch_rate = if self.phi.abs() < 70f64.to_radians() { qmax * 4.0 } else { 0.0 };
+                    self.throttle = 0.0;
+                    self.speedbrake = true;
+                    if peak < 0.85 * q_rupt && k <= 0.0 {
+                        self.osr_clear_t += dt;
+                    } else {
+                        self.osr_clear_t = 0.0;
+                    }
+                    if self.osr_clear_t > 2.0 {
+                        self.osr_active = false;
+                        self.speedbrake = false;
+                        self.msg(Level::Info, format!("AUTO RECOVERY SURVITESSE TERMINEE — q {:.0} kPa, PILOTE A VOUS", q / 1000.0));
+                    }
+                }
+            }
+        }
         // Réchauffage sondes coupé par air froid : givrage progressif
         if !self.pitot_heat && !self.on_ground && self.d.oat < -5.0 {
             let was = self.pitot_iced();
@@ -1192,10 +1250,10 @@ impl Aircraft {
         {
             let q_kpa = q / 1000.0;
             let d_cmd = (pitch_rate / qmax.max(1e-6)).abs() * 18.0 + (roll_rate / pmax.max(1e-6)).abs() * 14.0;
-            fcs.defl_limit = systems::defl_limit_normal(q_kpa);
+            fcs.defl_limit = if self.osr_active { (0.95 * systems::defl_destroy(q_kpa)).min(systems::DEFL_MAX) } else { systems::defl_limit_normal(q_kpa) };
             fcs.defl_cmd = d_cmd.min(systems::DEFL_MAX);
             if !self.on_ground {
-                if !prot_off {
+                if !prot_off || self.osr_active {
                     if d_cmd > fcs.defl_limit {
                         let k = fcs.defl_limit / d_cmd;
                         pitch_rate *= k;
@@ -1204,6 +1262,7 @@ impl Aircraft {
                         fcs.defl_cmd = fcs.defl_limit;
                     }
                     self.fcs_overload_t = 0.0;
+                    self.osr_defl = (fcs.defl_cmd, systems::defl_destroy(q_kpa).min(90.0));
                 } else if q_kpa * d_cmd.min(systems::DEFL_MAX) > systems::HINGE_LIMIT {
                     self.fcs_overload_t += dt;
                 } else {
@@ -1300,11 +1359,15 @@ impl Aircraft {
             self.psi += roll_in * steer * dt;
         } else {
             self.theta += pitch_rate * dt;
-            let nmax = if self.gcas_ovr { 5.0 } else { self.nz_law_max() };
+            // Récupérations automatiques : 4,8 g au plus (marge sous la rupture à 5,5 g), même FBW OVRD
+            let recov = self.gcas_ovr || self.osr_active;
+            let nmax = if recov { 4.8 } else { self.nz_law_max() };
             let alpha_g = nmax * mass * g / (q.max(1.0) * S_WING * cla);
             let mut amax = alpha_g.min(20f64.to_radians());
-            if prot_off || self.gcas_ovr {
-                amax = amax.max(if prot_off { 25f64.to_radians() } else { 0.0 }).min(25f64.to_radians());
+            if recov {
+                // incidence bornée par le facteur de charge de la récupération
+            } else if prot_off {
+                amax = 25f64.to_radians();
             } else if self.eng.scram == ScramState::Lit {
                 // Loi FBW : protection d'incidence de l'entrée d'air (plus stricte sous AP)
                 let lim: f64 = if self.ap.on && !perf { 6.5 } else { 9.0 };
@@ -1489,7 +1552,7 @@ impl Aircraft {
         if !self.on_ground && self.alt <= elev {
             self.touchdown(elev);
         }
-        if q > 130_000.0 {
+        if q > Q_RUPTURE {
             self.crash("RUPTURE STRUCTURELLE — PRESSION DYNAMIQUE EXCESSIVE");
         }
         if self.d.nz > 5.5 || self.d.nz < -2.5 {
@@ -2074,6 +2137,42 @@ mod tests {
         assert!(ok && trig, "recuperation basse");
         let (ok, trig, ovr) = run(true, 1_500.0, -30.0, 20.0, 480.0);
         assert!(ok && trig && ovr, "recuperation tardive au-dela des protections");
+    }
+
+    /// Survitesse : piqué à -24° à Mach 3,5 (dernier vol de l'utilisateur) → auto recovery sans
+    /// rupture structurale ni des gouvernes ; désactivée → rupture.
+    #[test]
+    fn overspeed_recovery() {
+        let run = |on: bool| {
+            let mut ac = Aircraft::new_on_runway(0);
+            ac.on_ground = false;
+            ac.gear_down = false;
+            ac.gear_pos = 0.0;
+            ac.brakes = false;
+            ac.alt = 52_000.0 * FT;
+            ac.tas = 3.5 * isa(ac.alt).a;
+            ac.gamma = (-24f64).to_radians();
+            ac.theta = ac.gamma + 2f64.to_radians();
+            ac.gcas_on = on;
+            let (mut qmax, mut trig, mut dmax) = (0.0f64, false, 0.0f64);
+            for _ in 0..(60 * 120) {
+                ac.step(1.0 / 120.0, 0.0, 0.0);
+                if ac.crashed.is_some() {
+                    break;
+                }
+                qmax = qmax.max(ac.d.q);
+                trig |= ac.osr_active;
+                if ac.osr_active {
+                    dmax = dmax.max(ac.osr_defl.0 / ac.osr_defl.1.max(1e-3));
+                }
+            }
+            println!("osr={on} : declenche={trig} q max {:.0} kPa  braquage max {:.0} % de la rupture  g max {:.1}  crash {:?}", qmax / 1000.0, dmax * 100.0, ac.g_max, ac.crashed);
+            (ac.crashed.is_none(), trig, dmax)
+        };
+        let (ok, trig, dmax) = run(true);
+        assert!(ok && trig && dmax < 1.0);
+        let (ok, _, _) = run(false);
+        assert!(!ok);
     }
 
     /// Turbulence modérée : l'AP tient l'altitude et le cap, bosses de facteur de charge réalistes ;

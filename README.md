@@ -558,3 +558,17 @@ Le SR-72 est un avion de reconnaissance : sa charge utile est simulée.
   du FCS) ; reprise ~2 s avant l'incident (la dernière trame était déjà irrécupérable) ; autonomie
   de bord : l'AP s'engage (ailes à plat, assiette tenue ou remise en palier) si les gouvernes
   répondent. Instruction d'essai INCIDENT SURPRESSION.
+- v1.34.0 : survitesse, consignes pilote, incendie.
+  - AUTO RECOVERY SURVITESSE : prédiction de la pression dynamique sur 10 s ; si la courbe atteint
+    la rupture (130 kPa), ressource maximale (ailes à plat, 4,8 g au plus, plein réduit,
+    aérofreins) avec un braquage plafonné à 95 % de la droite de rupture des gouvernes. Graphe
+    sur l'horizon : courbe q(t) dynamique face aux droites LIMITE / RUPTURE (en kPa et KEAS) et
+    jauge de braquage face à la rupture. Interrupteur AUTO RECOV (console) commun avec l'Auto-GCAS.
+    Les récupérations automatiques plafonnent aussi le g en FBW OVERRIDE.
+  - Consignes façon avion de chasse : RELEASE STICK (braquage proche de la rupture des
+    charnières), ROLL LEFT / ROLL RIGHT, PULL avec flèches (rouge en alerte, cyan pendant une
+    récupération automatique).
+  - Incendie : quatre zones (moteurs G/D, baie des chambres, soute H2) avec risques
+    d'inflammation (EGT, moteur non confiné, parois / rupture de chambre, fuite H2 sur peau chaude),
+    propagation, destruction et explosion ; onglet INCENDIE avec poignées FEU, deux bouteilles,
+    boucles de détection, FIRE TEST ; repère FIRE sur l'horizon. Instructions FEU, BTL, INCENDIE.

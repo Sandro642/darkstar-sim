@@ -408,12 +408,133 @@ fn draw_svs_overlay(ac: &Aircraft, v: &View, s: Rect, info: &PfdInfo) {
         txt(&format!("DECEL {dec:.2} G"), s.x + 10.0, oy - 2.0, 11.0, WHITE);
     }
 
+    // Graphe de survitesse (prédiction de q, droite de rupture, braquage des gouvernes)
+    overspeed_graph(ac, Rect::new(s.x + s.w - 250.0, s.y + s.h * 0.40, 240.0, 132.0), info.time);
     // Alarmes façon F/A-18 / Rafale
     hud_cues(ac, cx, cy, bank_rad, info.time);
     // Au-dessus de la bannière d'approche / des barres ILS quand elles sont affichées
     let floor = if crate::appr::visible(ac) { s.y + s.h - crate::appr::BANNER_H - 64.0 } else { s.y + s.h - 60.0 };
     alarm_window(ac, info, cx, (cy + 118.0).min(floor - 10.0));
     scissor(None);
+}
+
+/// Prédiction de la pression dynamique sur 10 s (courbe dynamique) face aux droites LIMITE et
+/// RUPTURE (q et KEAS équivalents), et braquage des gouvernes face à leur limite de rupture pendant
+/// l'auto recovery. Visible dès que la courbe s'approche de la limite.
+fn overspeed_graph(ac: &Aircraft, r: Rect, time: f64) {
+    if ac.on_ground || ac.crashed.is_some() {
+        return;
+    }
+    let peak = ac.osr_curve.iter().copied().fold(0.0f32, f32::max);
+    let lim = (Q_LIMIT / 1000.0) as f32;
+    let rupt = (Q_RUPTURE / 1000.0) as f32;
+    if !ac.osr_active && peak < 0.85 * lim {
+        return;
+    }
+    let blink = (time * 2.5).fract() < 0.6;
+    rrect(r, 6.0, Color::new(0.0, 0.0, 0.0, 0.62));
+    rrect_lines(r, 6.0, 1.5, if ac.osr_active { RED } else { AMBER });
+    let title = if ac.osr_active { "AUTO RECOVERY SURVITESSE" } else { "RISQUE SURVITESSE" };
+    if !ac.osr_active || blink {
+        txt(title, r.x + 8.0, r.y + 14.0, 11.0, if ac.osr_active { RED } else { AMBER });
+    }
+    txt_r("q 10 s", r.x + r.w - 8.0, r.y + 14.0, 10.0, DIM);
+    // Zone de tracé : x = temps (0..10 s), y = q (kPa)
+    let g = Rect::new(r.x + 34.0, r.y + 22.0, r.w - 80.0, r.h - 52.0);
+    let (q0, q1) = (40.0f32, 150.0f32);
+    let py = |q: f32| g.y + g.h - ((q - q0) / (q1 - q0)).clamp(0.0, 1.0) * g.h;
+    let keas = |q: f32| ((2.0 * q as f64 * 1000.0 / crate::atmosphere::RHO0).sqrt() / KT) as f32;
+    for (q, c, l) in [(lim, AMBER, "LIM"), (rupt, RED, "RUPT")] {
+        let y = py(q);
+        draw_line(g.x, y, g.x + g.w, y, 1.5, c);
+        txt_r(&format!("{q:.0}"), g.x - 4.0, y + 4.0, 10.0, c);
+        txt(&format!("{l} {:.0}KT", keas(q)), g.x + g.w + 4.0, y + 4.0, 9.0, c);
+    }
+    draw_line(g.x, g.y + g.h, g.x + g.w, g.y + g.h, 1.0, Color::new(0.35, 0.38, 0.4, 1.0));
+    let n = ac.osr_curve.len();
+    let mut prev: Option<Vec2> = None;
+    for (i, q) in ac.osr_curve.iter().enumerate() {
+        let p = vec2(g.x + i as f32 / (n - 1) as f32 * g.w, py(*q));
+        let c = if *q > rupt { RED } else if *q > lim { AMBER } else { GREEN_S };
+        if let Some(a) = prev {
+            draw_line(a.x, a.y, p.x, p.y, 2.5, c);
+        }
+        prev = Some(p);
+    }
+    let q_now = (ac.d.q / 1000.0) as f32;
+    draw_circle(g.x, py(q_now), 4.0, WHITE);
+    txt(&format!("{q_now:.0} kPa  {:.0} KEAS", ac.d.keas), g.x + 8.0, g.y + 10.0, 10.0, WHITE);
+    // Gouvernes : braquage commandé face à la droite de rupture (plafond 95 %)
+    let (d, dr) = ac.osr_defl;
+    let by = r.y + r.h - 18.0;
+    let bw = r.w - 16.0;
+    let f = if dr > 0.0 { (d / dr).clamp(0.0, 1.2) as f32 / 1.2 } else { 0.0 };
+    txt(&format!("GOUVERNES {d:.0}/{dr:.0} DEG"), r.x + 8.0, by - 3.0, 10.0, if ac.osr_active { CYAN_S } else { DIM });
+    draw_rectangle_lines(r.x + 8.0, by + 2.0, bw, 8.0, 1.0, DIM);
+    draw_rectangle(r.x + 9.0, by + 3.0, (bw - 2.0) * f, 6.0, if f > 0.95 / 1.2 { AMBER } else { CYAN_S });
+    let xr = r.x + 8.0 + bw / 1.2;
+    draw_line(xr, by, xr, by + 12.0, 2.0, RED);
+}
+
+/// Consignes au pilote pour éviter la casse des gouvernes / la survitesse / l'impact :
+/// RELEASE STICK (braquage proche de la rupture des charnières), ROLL LEFT / ROLL RIGHT (ailes à
+/// plat d'abord), PULL (ressource), avec flèches ; en cyan pendant une récupération automatique.
+fn directives(ac: &Aircraft, cx: f32, y: f32, fast: bool) {
+    if ac.on_ground || ac.crashed.is_some() {
+        return;
+    }
+    let q_kpa = ac.d.q / 1000.0;
+    let hinge = q_kpa * ac.fcs.defl_cmd / crate::systems::HINGE_LIMIT;
+    let stick = ac.fcs.pitch_in.abs() + ac.fcs.roll_in.abs() > 0.15;
+    let release = hinge > 0.85 && stick && !ac.ap.on && !ac.osr_active && !ac.gcas_active;
+    let rupt = (Q_RUPTURE / 1000.0) as f32;
+    let peak = ac.osr_curve.iter().copied().fold(0.0f32, f32::max);
+    let over_risk = peak > 0.9 * rupt && ac.gamma < 0.0;
+    let gcas_risk = ac.gcas_on && ac.gcas_t < 6.0;
+    let auto = ac.osr_active || ac.gcas_active;
+    if !(release || over_risk || gcas_risk || auto) {
+        return;
+    }
+    let col = if auto { CYAN_S } else { RED };
+    if release {
+        if fast {
+            let m = "RELEASE STICK";
+            let w = txt_w(m, 22.0) + 22.0;
+            rrect_lines(Rect::new(cx - w / 2.0, y - 18.0, w, 28.0), 4.0, 2.0, RED);
+            txt_c(m, cx, y + 3.0, 22.0, RED);
+        }
+        return;
+    }
+    let phi = ac.phi.to_degrees();
+    let roll = if phi.abs() > 30.0 { if phi > 0.0 { -1 } else { 1 } } else { 0 };
+    let pull = phi.abs() < 70.0;
+    let mut parts = Vec::new();
+    if roll < 0 {
+        parts.push("ROLL LEFT");
+    } else if roll > 0 {
+        parts.push("ROLL RIGHT");
+    }
+    if pull {
+        parts.push("PULL");
+    }
+    let msg = parts.join("  ");
+    if msg.is_empty() || (!auto && !fast) {
+        return;
+    }
+    txt_c(&msg, cx, y + 3.0, 20.0, col);
+    let w = txt_w(&msg, 20.0);
+    // Flèches : roulis (latérale) et ressource (vers le haut)
+    if roll != 0 {
+        let sx = roll as f32;
+        let ax = cx + sx * (w / 2.0 + 20.0);
+        draw_triangle(vec2(ax + sx * 14.0, y - 4.0), vec2(ax, y - 14.0), vec2(ax, y + 6.0), col);
+        draw_line(ax - sx * 16.0, y - 4.0, ax, y - 4.0, 4.0, col);
+    }
+    if pull {
+        let ay = y - 22.0;
+        draw_triangle(vec2(cx, ay - 16.0), vec2(cx - 10.0, ay - 2.0), vec2(cx + 10.0, ay - 2.0), col);
+        draw_line(cx, ay - 2.0, cx, ay + 6.0, 4.0, col);
+    }
 }
 
 /// Repères de vol critiques en grosses lettres au-dessus de la maquette (style HUD F/A-18) :
@@ -425,6 +546,19 @@ fn hud_cues(ac: &Aircraft, cx: f32, cy: f32, bank_rad: f32, time: f64) {
     let d = &ac.d;
     let fast = (time * 3.0).fract() < 0.6;
     let y = cy - bank_rad * 0.42;
+    // Consignes de pilotage (style avion de chasse) : RELEASE STICK, ROLL LEFT/RIGHT, PULL
+    directives(ac, cx, y + 44.0, fast);
+    // Feu : priorité absolue
+    if ac.fire.any() {
+        if fast {
+            let names: Vec<&str> = ac.fire.zones.iter().enumerate().filter(|(_, z)| z.fire).map(|(i, _)| crate::fire::ZONES[i].0).collect();
+            let msg = format!("FIRE {}", names.join(" "));
+            let w = txt_w(&msg, 24.0) + 24.0;
+            rrect(Rect::new(cx - w / 2.0, y - 46.0, w, 30.0), 5.0, Color::new(0.45, 0.0, 0.0, 0.9));
+            txt_c(&msg, cx, y - 24.0, 24.0, WHITE);
+        }
+        return;
+    }
     // Auto-GCAS : chevrons qui se referment avant le déclenchement, puis FLY UP
     if ac.gcas_active {
         if fast {

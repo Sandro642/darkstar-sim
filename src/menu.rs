@@ -282,11 +282,11 @@ pub fn draw_menu(ac: &Aircraft, bit: &BitState, r: Rect, time: f64) -> Option<Me
     let yt = p3.y + p3.h * 0.52;
     let state = |k: f32, s: &str, c: Color| txt_c(s, cx(k), yt + 46.0, 11.0, c);
     // AUTO GCAS
-    txt_c("AUTO GCAS", cx(0.0), yl, 12.0, LEGEND);
+    txt_c("AUTO RECOV", cx(0.0), yl, 12.0, LEGEND);
     if let Some(np) = toggle(cx(0.0), yt, if ac.gcas_on { 0 } else { 1 }, 2) {
         out = Some(MenuAction::Gcas(np == 0));
     }
-    let (gs, gc) = if ac.gcas_active { ("FLY UP", RED) } else if ac.gcas_on { ("ARME", GREEN_S) } else { ("OFF", AMBER) };
+    let (gs, gc) = if ac.osr_active { ("SURVITESSE", RED) } else if ac.gcas_active { ("FLY UP", RED) } else if ac.gcas_on { ("ARME", GREEN_S) } else { ("OFF", AMBER) };
     state(0.0, gs, gc);
     // FUEL COOL (FTMS)
     txt_c("FUEL COOL", cx(1.0), yl, 12.0, LEGEND);

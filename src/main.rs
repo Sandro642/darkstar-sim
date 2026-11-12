@@ -2,6 +2,7 @@
 
 mod aircraft;
 mod alarms;
+mod fire;
 mod airports;
 mod atmosphere;
 mod elec;
@@ -770,6 +771,7 @@ impl Game {
         if ac.crashed.is_some() {
             return a;
         }
+        a.extend(ac.fire.alerts());
         let agl_ft = d.agl / FT;
         let fpm = d.vs / FT * 60.0;
         if !ac.on_ground && agl_ft < 2500.0 && -fpm > agl_ft * 1.4 + 800.0 {
@@ -1117,6 +1119,16 @@ impl Game {
             self.ac.landed = true;
         }
         self.sim_time += sim_dt;
+        // Incendie : risques d'inflammation, évolution des feux
+        let mut fs = std::mem::take(&mut self.ac.fire);
+        let fm = fs.update(&mut self.ac, sim_dt);
+        self.ac.fire = fs;
+        if !fm.is_empty() {
+            self.tab = gcs::Tab::Incendie;
+        }
+        for (l, m) in fm {
+            self.push(l, m);
+        }
         // Ravitaillement en vol : ravitailleur, rendez-vous, maintien de position sous la perche
         self.refuel.update(sim_dt, &mut self.ac);
         let rfe: Vec<_> = self.refuel.events.drain(..).collect();
@@ -1653,6 +1665,47 @@ impl Game {
                 }
                 _ => reply = Err("PAS AU POINT D'ATTENTE".into()),
             },
+            "FEU" => {
+                let z = match arg(1) {
+                    "L" | "G" | "GAUCHE" => Some(0),
+                    "R" | "D" | "DROIT" => Some(1),
+                    "CHAMB" | "CH" | "CHAMBRES" => Some(2),
+                    "H2" | "SOUTE" => Some(3),
+                    _ => None,
+                };
+                if arg(1) == "TEST" {
+                    self.ac.fire.test = 3.0;
+                    reply = Ok("FIRE TEST : VOYANTS ET BOUCLES DE DETECTION".into());
+                } else if let Some(z) = z {
+                    let mut f = std::mem::take(&mut self.ac.fire);
+                    let m = f.pull(&mut self.ac, z);
+                    self.ac.fire = f;
+                    reply = Ok(m);
+                } else {
+                    reply = Err("FEU L | R | CHAMB | H2 (poignee)  ou FEU TEST".into());
+                }
+            }
+            "BTL" | "BOUTEILLE" | "EXTINCTEUR" => match num(1) {
+                Some(b) if b == 1.0 || b == 2.0 => reply = self.ac.fire.discharge(b as usize - 1),
+                _ => reply = Err("BTL 1 | BTL 2".into()),
+            },
+            "INCENDIE" => {
+                let z = match arg(1) {
+                    "L" | "G" => Some(0),
+                    "R" | "D" => Some(1),
+                    "CHAMB" | "CH" => Some(2),
+                    "H2" => Some(3),
+                    _ => None,
+                };
+                match z {
+                    Some(z) if self.ac.fire.ignite(z) => {
+                        self.tab = gcs::Tab::Incendie;
+                        reply = Ok(format!("FEU INJECTE : {}", fire::ZONES[z].1));
+                    }
+                    Some(_) => reply = Err("ZONE DEJA EN FEU OU DETRUITE".into()),
+                    None => reply = Err("INCENDIE L | R | CHAMB | H2 (essai)".into()),
+                }
+            }
             "GCAS" | "AUTOGCAS" => match arg(1) {
                 "ON" => {
                     self.set_gcas(true);
@@ -2196,6 +2249,7 @@ impl Game {
                     "METEO REEL (defaut) | CALME|BEAU|NUAGEUX|COUVERT|ORAGEUX  METEO 3D ON/OFF  HUD (infos 10 s)",
                     "WXR ON/OFF  WXR TILT -3 | WXR AUTO  WXR TURB ON/OFF  WXR HORIZON ON/OFF  WXR RANGE 160 (radar meteo)",
                     "GCAS ON/OFF (auto recovery)  FUELCOOL AUTO/RAM/OFF  GLIM NORM/HIGH  PITOT ON/OFF  NWS HI/LO",
+                    "FEU L/R/CHAMB/H2 (poignee feu)  BTL 1/2 (extincteur)  FEU TEST  INCENDIE L/R/CHAMB/H2 (essai)",
                     "TANKER [OACI|OFF]  RAVITAILLEMENT (autonome)  DECROCHER  BINGO [AUTO|t]",
                     "CHAFF  FLARE  ECM ON|OFF  CMDS AUTO|MAN  TIR [I|J|K] (HACM)  ARMEMENT (page)",
                     "EMERGENCY [OFF] (ravitaillement > terrain proche > ejection)  EJECTION CONFIRME",
@@ -2545,6 +2599,16 @@ async fn main() {
                     }
                 }
                 gcs::Tab::Moteurs => panels::draw_engines(&g.ac, &g.chambers, cr, time),
+                gcs::Tab::Incendie => {
+                    if let Some(a) = fire::draw_fire(&g.ac, cr, time) {
+                        let cmd = match a {
+                            fire::FireAction::Handle(z) => format!("FEU {}", ["L", "R", "CHAMB", "H2"][z]),
+                            fire::FireAction::Bottle(b) => format!("BTL {}", b + 1),
+                            fire::FireAction::Test => "FEU TEST".into(),
+                        };
+                        g.exec_command(&cmd);
+                    }
+                }
                 gcs::Tab::Alarmes => match alarms::draw_alarms(&g.ac, &alerts, cr, time, g.mishap.as_ref().map(|m| m.lights()).or(g.tree)) {
                     Some(alarms::AlarmAction::Toggle(f)) => {
                         let on = !g.ac.fails.has(f);
