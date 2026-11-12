@@ -153,13 +153,3 @@ pub fn draw(wx: &Weather, ac: &Aircraft, v: &View, time: f64) {
     scissor(None);
 }
 
-/// Légende compacte de l'échelle de danger (bloc météo de l'horizon).
-pub fn legend(x: f32, y: f32, w: f32, a: f32) {
-    let n = 24;
-    let sw = w / n as f32;
-    for k in 0..n {
-        draw_rectangle(x + k as f32 * sw, y, sw + 0.5, 5.0, danger_color(k as f32 / (n - 1) as f32, 0.9 * a));
-    }
-    txt("CALME", x, y + 16.0, 10.0, Color::new(0.8, 0.85, 0.9, a));
-    txt_r("SEVERE", x + w, y + 16.0, 10.0, Color::new(0.8, 0.85, 0.9, a));
-}

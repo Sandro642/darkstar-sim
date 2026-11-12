@@ -647,3 +647,6 @@ Le SR-72 est un avion de reconnaissance : sa charge utile est simulée.
   couleur avec la catégorie (ALARME, PANNE, FEU, GCAS, LIMITE, MANCHE / AUTO, CONFIG, CARBURANT,
   RTB, AAR, TERRAIN, LIAISON, INFO) et message encadré ; mémos à repère de couleur ; cadres à
   angles nets sur tout l'horizon (fini les boîtes arrondies et translucides disparates).
+- v1.42.1 : horizon — blocs de données (vent, couloir TBCC, énergie, RWR) en panneaux sombres à
+  filet fin au lieu des coins décoratifs ; légende météo arc-en-ciel retirée ; les alertes qui
+  clignotent gardent leur texte (atténué) au lieu d'un cadre vide.

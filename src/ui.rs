@@ -94,9 +94,9 @@ pub fn tag(x: f32, y: f32, label: &str, body: &str, col: Color, size: f32, left:
         txt_c(label, x0 + lw / 2.0, top + h / 2.0 + ls * 0.36, ls, BLACK);
     }
     draw_rectangle_lines(x0, top, w, h, 1.5, col);
-    if show_body {
-        txt(body, x0 + lw + 8.0, top + h / 2.0 + size * 0.36, size, col);
-    }
+    // Clignotement : le message passe en atténué au lieu de disparaître (cadre jamais vide)
+    let bc = if show_body { col } else { Color::new(col.r, col.g, col.b, col.a * 0.35) };
+    txt(body, x0 + lw + 8.0, top + h / 2.0 + size * 0.36, size, bc);
     w
 }
 

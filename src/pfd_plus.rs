@@ -309,13 +309,10 @@ fn htxt_r(s: &str, x: f32, y: f32, size: f32, c: Color, a: f32) {
 }
 
 /// Cadre HUD : seulement des coins en équerre.
+/// Bloc de données : fond sombre opaque, filet gris fin (présentation d'afficheur de bord).
 fn hud_frame(r: Rect, a: f32) {
-    let c = Color::new(0.75, 1.0, 0.85, 0.55 * a);
-    let l = 10.0;
-    for (x, y, dx, dy) in [(r.x, r.y, 1.0, 1.0), (r.x + r.w, r.y, -1.0, 1.0), (r.x, r.y + r.h, 1.0, -1.0), (r.x + r.w, r.y + r.h, -1.0, -1.0)] {
-        draw_line(x, y, x + dx * l, y, 1.5, c);
-        draw_line(x, y, x, y + dy * l, 1.5, c);
-    }
+    draw_rectangle(r.x, r.y, r.w, r.h, Color::new(0.02, 0.03, 0.04, 0.72 * a));
+    draw_rectangle_lines(r.x, r.y, r.w, r.h, 1.0, Color::new(0.55, 0.58, 0.62, 0.8 * a));
 }
 
 /// Visibilité (0..1) des éléments éphémères : vent, RWR, couloir, énergie.
@@ -532,14 +529,12 @@ pub fn wind_block(ac: &Aircraft, wx: &crate::weather::WxInfo, r: Rect, time: f64
         let drift = wrap180(ac.track_deg() - ac.hdg_deg());
         htxt(&format!("DERIVE {}{:.0}", if drift >= 0.0 { "D" } else { "G" }, drift.abs()), x, r.y + 31.0, 11.0, WHITE, a);
         htxt(&format!("GS {:.0} kt", ac.ground_speed() / KT), x, r.y + 45.0, 11.0, WHITE, a);
-        // Source des données, température extérieure, danger local et légende
-        let src: String = wx.source.chars().take(22).collect();
-        let sc = if wx.source.starts_with("REEL") { GREEN_S } else { AMBER };
-        htxt(&src, r.x + 6.0, r.y + 60.0, 10.0, sc, a);
+        // Source des données et température extérieure (sans légende décorative)
+        let real = wx.source.starts_with("REEL");
+        htxt(if real { "WX REEL" } else { "WX SIMULE" }, r.x + 6.0, r.y + r.h - 7.0, 10.0, if real { GREEN_S } else { AMBER }, a);
         if let Some(t) = wx.oat {
-            htxt_r(&format!("OAT {t:.0}C"), r.x + r.w - 6.0, r.y + 60.0, 10.0, WHITE, a);
+            htxt_r(&format!("OAT {t:.0}C"), r.x + r.w - 6.0, r.y + r.h - 7.0, 10.0, WHITE, a);
         }
-        crate::wx3d::legend(r.x + 6.0, r.y + 66.0, r.w - 12.0, a);
     }
     // Annonces météo actives
     let mut y = r.y + r.h + 16.0;
