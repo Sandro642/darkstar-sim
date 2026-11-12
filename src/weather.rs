@@ -485,6 +485,9 @@ impl Weather {
         let gx = g * ((self.gust_t * 0.7).sin() + 0.5 * (self.gust_t * 1.9 + 1.3).sin());
         let gy = g * ((self.gust_t * 0.9 + 2.0).sin() + 0.5 * (self.gust_t * 2.3).sin());
         ac.wind = (we + gx, wn + gy);
+        // Au-dessus du FL600 : plus de météo ni de turbulence (air très raréfié)
+        let hf = ac.alt / FT;
+        let turb = turb * (1.0 - ((hf - 60_000.0) / 10_000.0).clamp(0.0, 1.0));
         ac.turb = turb;
         let real = self.grid().is_some_and(|g| g.contains(ac.lat, ac.lon));
         let source = if real {

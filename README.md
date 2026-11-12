@@ -650,3 +650,9 @@ Le SR-72 est un avion de reconnaissance : sa charge utile est simulée.
 - v1.42.1 : horizon — blocs de données (vent, couloir TBCC, énergie, RWR) en panneaux sombres à
   filet fin au lieu des coins décoratifs ; légende météo arc-en-ciel retirée ; les alertes qui
   clignotent gardent leur texte (atténué) au lieu d'un cadre vide.
+- v1.42.2 : FMS — corrections tirées du vol KEDW → LSZH (panne sèche) : rallumage automatique du
+  scram après désamorçage au lieu de redescendre au palier du stato ; plus de rallumages du stato
+  en boucle pendant la croisière scram ; avant la STAR, descente en pente de 3,5° vers l'altitude
+  d'entrée (plus de palier à 7000 ft / 250 kt à 1000 NM de l'arrivée) ; manette reprise à la
+  main respectée par le VNAV (plus de « A/THR OFF » en rafale) ; plus de turbulence au-dessus du
+  FL600. Rejeu de l'OFP : Mach 11 FL1220, posé à Zurich en 89 min, 21,5 t de JP-7 restantes.

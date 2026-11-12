@@ -986,6 +986,9 @@ impl Game {
         // Manette : R/F agissent toujours sur la manette ; l'A/THR se désengage (consignes via MACH / KEAS)
         let thr_up = is_key_down(KeyCode::R);
         let thr_dn = is_key_down(KeyCode::F);
+        if (thr_up || thr_dn) && ac.autoland.is_none() {
+            ac.thr_manual = true;
+        }
         if (thr_up || thr_dn) && ac.ap.at_on && ac.autoland.is_none() {
             ac.ap.at_on = false;
             msgs.push((Level::Caution, "A/THR OFF — MANETTE MANUELLE (consigne : instruction MACH ou KEAS)".into()));
@@ -1596,6 +1599,7 @@ impl Game {
             "MACH" | "M" => match num(1) {
                 Some(m) => {
                     ac.ap.at_on = true;
+                    ac.thr_manual = false;
                     ac.ap.spd_managed = false;
                     ac.ap.spd_keas = None;
                     ac.ap.mach_tgt = m.clamp(0.3, 12.0);
@@ -1769,6 +1773,9 @@ impl Game {
             }
             "VNAV" => {
                 self.fms.vnav = arg(1) != "OFF";
+                if self.fms.vnav {
+                    self.ac.thr_manual = false;
+                }
                 reply = Ok(if self.fms.vnav { "VNAV ON : ALTITUDE, MACH ET MOTEURS GERES PAR LE FMS".into() } else { "VNAV OFF".into() });
             }
             "DISPATCH" => {

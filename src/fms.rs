@@ -647,6 +647,20 @@ impl Fms {
         // Procédures IFR : point actif dans une SID / STAR et altitudes prévues par SimBrief
         let act = fp.wpts.get(fp.active).cloned().unwrap_or_default();
         let star_first = fp.wpts.iter().find(|w| w.proc >= 2).map(|w| w.sb_alt).unwrap_or(0.0);
+        // Distance par la route jusqu'à l'entrée de la STAR / de l'approche
+        let d_star = {
+            let mut d = 0.0;
+            let (mut pl, mut po) = (ac.lat, ac.lon);
+            for w in &fp.wpts[fp.active.min(fp.wpts.len())..] {
+                d += dist_brg(pl, po, w.lat, w.lon).0;
+                if w.proc >= 2 {
+                    break;
+                }
+                pl = w.lat;
+                po = w.lon;
+            }
+            d
+        };
         let mach = ac.d.mach;
         let e = ac.eng.clone();
         let turb_on = e.side.iter().any(|s| matches!(s, TurbState::Running | TurbState::Starting));
@@ -667,7 +681,10 @@ impl Fms {
             say(&mut out, &mut self.phase, "SID", format!("FMS : SID {} — ALTITUDES DE LA PROCEDURE", act.via));
         } else if rem > tod && !self.desc_started {
             // ----- Montée / accélération / croisière -----
-            ac.ap.at_on = true;
+            // Manette reprise à la main : le FMS ne réengage pas l'A/THR
+            if !ac.thr_manual {
+                ac.ap.at_on = true;
+            }
             ac.ap.spd_keas = None;
             ac.ap.spd_managed = false;
             // Ordinateur de bord : à l'allumage du scram, Mach de croisière qui permet d'arriver avec
@@ -708,9 +725,12 @@ impl Fms {
                 out.push(McduOut::Msg(Level::Warning, format!("FMS : JP-7 INSUFFISANT POUR DEUX REMISES DES GAZ A {dest} — DEROUTEMENT CONSEILLE ({near} LE PLUS PROCHE)")));
             }
             ac.ap.mach_tgt = crz_m;
+            // Phase scram : dès que le scram est armé / allumé / désamorcé, ou au-delà de Mach 4,8 (un
+            // désamorçage ne doit pas faire redescendre l'avion vers le palier du stato)
+            let scram_phase = crz_m > 4.8 && (e.scram != ScramState::Off || mach > 4.8);
             let sched = if crz_m <= 2.5 {
                 crz_ft
-            } else if e.scram == ScramState::Lit {
+            } else if scram_phase {
                 // Couloir de pression dynamique : q élevée pour accélérer, 35 kPa en croisière
                 let q_t = if mach < crz_m - 0.15 { 42_000.0 } else { 35_000.0 };
                 (alt_for_q(mach.max(5.0), q_t) / 500.0).round() * 500.0
@@ -725,7 +745,7 @@ impl Fms {
             };
             ac.ap.vert = VertMode::Alt;
             ac.ap.alt_tgt_ft = if crz_max { sched } else { sched.min(crz_ft) };
-            if crz_m > 2.5 {
+            if crz_m > 2.5 && e.scram == ScramState::Off {
                 if mach > 2.05 && e.ram == RamState::Off {
                     ac.cmd_ram();
                 }
@@ -745,6 +765,16 @@ impl Fms {
                 }
                 if ac.eng.scram == ScramState::Armed && ac.scram_ignition_check().is_ok() {
                     ac.cmd_scram();
+                }
+                // Désamorçage : rallumage direct dès que l'incidence et la pression dynamique le permettent
+                if ac.eng.scram == ScramState::Unstart {
+                    let ok = ac.d.alpha.to_degrees() < 5.5 && ac.d.q > 26_000.0 && ac.d.mach > 4.8;
+                    if ok {
+                        ac.cmd_scram();
+                        if ac.eng.scram == ScramState::Lit {
+                            out.push(McduOut::Msg(Level::Info, "FMS : SCRAM RALLUME APRES DESAMORCAGE".into()));
+                        }
+                    }
                 }
             }
             let at_crz = (ac.alt / FT - crz_ft).abs() < 2_000.0 && (mach - crz_m).abs() < 0.15;
@@ -784,13 +814,19 @@ impl Fms {
                 out.push(McduOut::Msg(Level::Info, "FMS : STATO OFF (MACH < 2,6) — RALLUMAGE TURBINES".into()));
             }
             if ac.ap.vert != VertMode::QHold && (act.proc >= 2 || star_first > 0.0) {
-                // STAR : altitudes prévues de la procédure (entrée de STAR avant d'y être)
-                let tgt = if act.proc >= 2 && act.sb_alt > 0.0 { act.sb_alt } else { star_first.max(3_000.0) };
+                // STAR : altitudes prévues de la procédure ; avant l'entrée, pente de 3,5° vers
+                // l'altitude d'entrée (pas de palier bas à des centaines de NM)
+                let tgt = if act.proc >= 2 && act.sb_alt > 0.0 {
+                    act.sb_alt
+                } else {
+                    let st = star_first.max(3_000.0);
+                    (st + d_star * 3.5f64.to_radians().tan() / FT).clamp(st, 35_000.0)
+                };
                 ac.ap.vert = VertMode::Alt;
                 ac.ap.alt_tgt_ft = (tgt / 500.0).round() * 500.0;
                 ac.ap.at_on = true;
                 ac.ap.spd_managed = false;
-                ac.ap.spd_keas = Some(if ac.alt / FT < 10_000.0 { 250.0 } else { 280.0 });
+                ac.ap.spd_keas = Some(if ac.alt / FT < 10_000.0 { 250.0 } else if act.proc >= 2 { 280.0 } else { 320.0 });
                 if act.proc == 2 {
                     say(&mut out, &mut self.phase, "STAR", format!("FMS : STAR {} — ALTITUDES DE LA PROCEDURE", act.via));
                 } else if act.proc == 3 {
@@ -1999,5 +2035,67 @@ mod tests {
             println!("M{m:.0} (M{:.2}) FL{:.0} : H2 {:.2} kg/s  JP7 {:.2} kg/s thr {:.2} mode {}", ac.d.mach, ac.alt / FT / 100.0, (h1 - ac.h2) / 300.0, (j1 - ac.fuel) / 300.0, ac.throttle, ac.mode_name());
             let _ = (h0, j0);
         }
+    }
+
+    /// Rejeu du vol de l'utilisateur : OFP SimBrief réel (DARKSTAR_OFP), MAX/11, LNAV + VNAV.
+    #[test]
+    #[ignore]
+    fn replay_ofp_flight() {
+        let Ok(path) = std::env::var("DARKSTAR_OFP") else { return };
+        let body = std::fs::read_to_string(path).unwrap();
+        let mut f = Fms::new();
+        let fp = from_simbrief(&parse_json(&body).unwrap(), ceiling_fl(11.0), 11.0, true).unwrap();
+        let dest = fp.dest.clone();
+        f.fpln = Some(fp);
+        f.arm_vnav();
+        let org = crate::procs::airport(&f.fpln.as_ref().unwrap().origin).unwrap();
+        let mut ac = Aircraft::new_on_runway(0);
+        ac.on_ground = false;
+        ac.gear_down = false;
+        ac.gear_pos = 0.0;
+        ac.brakes = false;
+        ac.lat = org.lat;
+        ac.lon = org.lon;
+        ac.alt = org.elev + 15_000.0 * FT;
+        ac.tas = 0.7 * crate::atmosphere::isa(ac.alt).a;
+        ac.set_turbines(TurbState::Running, 0.8);
+        ac.ap.on = true;
+        ac.ap.lat = LatMode::Nav;
+        let dt = 1.0 / 60.0;
+        let (mut t, mut lp) = (0.0, -1e9);
+        while t < 4.0 * 3600.0 && ac.crashed.is_none() && !(ac.on_ground && ac.tas < 3.0) {
+            if (t * 10.0f64).fract() < dt * 10.0 {
+                if let Some((b, _)) = f.guidance(&ac) {
+                    if ac.autoland.is_none() {
+                        ac.ap.hdg_tgt = b;
+                    }
+                }
+                for o in f.vnav_update(&mut ac) {
+                    match o {
+                        McduOut::Cmd(c) => {
+                            if let Some(code) = c.strip_prefix("ATTERRIR ") {
+                                if let Some(i) = AIRPORTS.iter().position(|a| a.icao == code) {
+                                    let _ = ac.engage_autoland(i);
+                                }
+                            }
+                        }
+                        McduOut::Msg(_, m) => println!("{t:5.0}s {m}"),
+                    }
+                }
+            }
+            let c = ac.autoflight().unwrap_or((0.0, 0.0));
+            ac.step(dt, c.0, c.1);
+            for (_, m) in ac.events.drain(..) {
+                if m.contains("UNSTART") || m.contains("FLAMEOUT") || m.contains("TOUCHER") {
+                    println!("{t:5.0}s {m}");
+                }
+            }
+            if t - lp > 600.0 {
+                lp = t;
+                println!("{t:5.0}s M{:.2} FL{:.0} {} H2 {:.0} JP7 {:.0} reste {:.0} NM", ac.d.mach, ac.alt / FT / 100.0, ac.mode_name(), ac.h2, ac.fuel, f.fpln.as_ref().unwrap().remaining(ac.lat, ac.lon) / NM);
+            }
+            t += dt;
+        }
+        println!("{dest} : crash {:?} sol {} JP7 {:.0} H2 {:.0} t {t:.0}", ac.crashed, ac.on_ground, ac.fuel, ac.h2);
     }
 }

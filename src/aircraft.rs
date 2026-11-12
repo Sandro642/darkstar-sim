@@ -228,6 +228,8 @@ pub struct Aircraft {
     pub nws_hi: bool,
     /// Piste d'arrivée demandée par le plan de vol (« 28L »), vide sinon
     pub rwy_pref: String,
+    /// Manette reprise à la main (R/F) : le FMS ne réengage pas l'A/THR
+    pub thr_manual: bool,
     /// Autoland : train et aérofreins actionnés par l'avion (essais automatiques, plané d'urgence) ;
     /// sinon l'horizon les demande à l'opérateur (`cue_gear`, `cue_sb` : sortir / rentrer)
     pub auto_config: bool,
@@ -403,6 +405,7 @@ impl Aircraft {
             pitot_ice: 0.0,
             nws_hi: false,
             rwy_pref: String::new(),
+            thr_manual: false,
             auto_config: cfg!(test),
             cue_gear: false,
             cue_sb: None,
