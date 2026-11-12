@@ -119,6 +119,16 @@ pub struct Takeoff {
 }
 
 impl Aircraft {
+    /// Aérofreins voulus par l'autoland : actionnés directement en configuration automatique,
+    /// sinon demandés à l'opérateur sur l'horizon.
+    fn want_sb(&mut self, on: bool) {
+        if self.auto_config || self.autoland.as_ref().is_some_and(|a| a.dead_stick) {
+            self.speedbrake = on;
+        } else {
+            self.cue_sb = if on != self.speedbrake { Some(on) } else { None };
+        }
+    }
+
     /// Engage l'atterrissage automatique ; renvoie une erreur lisible si impossible.
     pub fn engage_autoland(&mut self, apt: usize) -> Result<(), String> {
         if self.on_ground {
@@ -265,6 +275,8 @@ impl Aircraft {
     /// Exécuté à chaque pas avant step() : pilote les modes AP et renvoie
     /// éventuellement des ordres manche (au sol) qui remplacent ceux du pilote.
     pub fn autoflight(&mut self) -> Option<(f64, f64)> {
+        self.cue_gear = false;
+        self.cue_sb = None;
         if self.crashed.is_some() {
             self.autoland = None;
             self.autotakeoff = None;
@@ -518,7 +530,7 @@ impl Aircraft {
                 self.ap.spd_keas = Some(if d < 40.0 * NM { 230.0 } else { 300.0 });
                 // Prêt pour l'approche : altitude et vitesse d'IAF atteintes
                 let ready = self.alt / FT < iaf_alt_ft + 1_200.0 && self.d.keas < 255.0 && self.d.mach < 0.9;
-                self.speedbrake = !ready && (self.alt / FT > iaf_alt_ft + 3_000.0 || self.d.keas > 280.0);
+                self.want_sb(!ready && (self.alt / FT > iaf_alt_ft + 3_000.0 || self.d.keas > 280.0));
                 let holding = self.autoland.as_ref().unwrap().holding;
                 if d < 3.0 * NM && !ready && !holding {
                     self.autoland.as_mut().unwrap().holding = true;
@@ -565,27 +577,33 @@ impl Aircraft {
                 let va = vapp(self);
                 let tgt = if along > 9.0 * NM { va.max(220.0) } else { va };
                 self.ap.spd_keas = Some(tgt);
-                self.speedbrake = self.d.keas > tgt + 25.0 || self.alt > path_alt + 150.0;
+                self.want_sb(self.d.keas > tgt + 25.0 || self.alt > path_alt + 150.0);
                 if along < 9.0 * NM && !self.gear_down {
-                    self.cmd_gear();
+                    if self.auto_config {
+                        self.cmd_gear();
+                    } else {
+                        self.cue_gear = true;
+                    }
                 }
+                // Train toujours rentré à 500 ft : remise des gaz (l'opérateur doit le sortir)
+                let gear_missing = !self.gear_down && agl < 500.0 * FT && along < 3.0 * NM;
                 // Approche non stabilisée : remise des gaz
                 let too_high = along < 3.0 * NM && self.alt > path_alt + 180.0;
                 let off_axis = along < 3.0 * NM && cross.abs() > 250.0;
-                if too_high || off_axis {
+                if too_high || off_axis || gear_missing {
                     next = AlPhase::ToIaf;
                     let al = self.autoland.as_mut().unwrap();
                     al.go_arounds += 1;
                     al.gs_captured = false;
                     al.holding = false;
-                    self.speedbrake = false;
+                    self.want_sb(false);
                     self.throttle = self.thr_max().min(1.0);
                     self.ap.vert = VertMode::Alt;
-                    say = Some(format!("AUTOLAND : REMISE DES GAZ — APPROCHE NON STABILISÉE ({})", if too_high { "TROP HAUT" } else { "HORS AXE" }));
+                    say = Some(if gear_missing { "AUTOLAND : REMISE DES GAZ — TRAIN NON SORTI".to_string() } else { format!("AUTOLAND : REMISE DES GAZ — APPROCHE NON STABILISÉE ({})", if too_high { "TROP HAUT" } else { "HORS AXE" }) });
                 } else if agl < 18.0 && along < 2.0 * NM {
                     next = AlPhase::Flare;
                     say = Some("AUTOLAND : FLARE".into());
-                    self.speedbrake = false;
+                    self.want_sb(false);
                 }
             }
             AlPhase::Flare => {
@@ -615,7 +633,7 @@ impl Aircraft {
                 self.ap.on = false;
                 self.ap.at_on = false;
                 self.throttle = 0.0;
-                self.speedbrake = true;
+                self.want_sb(true);
                 // Autobrake MAX dès que la roulette de nez est posée
                 if self.theta < 2f64.to_radians() || self.d.keas < 200.0 {
                     self.brakes = true;
@@ -625,7 +643,7 @@ impl Aircraft {
                 out = Some((-1.0, steer));
                 if self.tas < 2.0 {
                     self.autoland = None;
-                    self.speedbrake = false;
+                    self.want_sb(false);
                     self.msg(Level::Info, "AUTOLAND TERMINÉ — AVION ARRÊTÉ SUR LA PISTE");
                     return out;
                 }

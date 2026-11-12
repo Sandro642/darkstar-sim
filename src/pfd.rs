@@ -335,7 +335,10 @@ fn draw_svs_overlay(ac: &Aircraft, v: &View, s: Rect, info: &PfdInfo) {
             draw_poly(gx, cy + (gs_dev as f32 / 0.35 * 36.0).clamp(-80.0, 80.0), 4, 8.0, 0.0, MAGENTA_S);
             let num = crate::airports::Airport::runway_number(thdg);
             if !banner {
-                let lbl = format!("ILS {:02} {}  {:.1} NM", num, a.icao, along / NM);
+                let lbl = match crate::pfd_plus::ils_label().filter(|l| l.contains(a.icao)) {
+                    Some(l) => format!("ILS {l}  {:.1} NM", along / NM),
+                    None => format!("ILS {:02} {}  {:.1} NM", num, a.icao, along / NM),
+                };
                 let w = txt_w(&lbl, 14.0) + 14.0;
                 rrect(Rect::new(cx - w / 2.0, ly + 10.0, w, 20.0), 5.0, BLOCK);
                 txt_c(&lbl, cx, ly + 25.0, 14.0, MAGENTA_S);
@@ -409,6 +412,8 @@ fn draw_svs_overlay(ac: &Aircraft, v: &View, s: Rect, info: &PfdInfo) {
 
     // Graphe de survitesse (prédiction de q, droite de rupture, braquage des gouvernes)
     overspeed_graph(ac, Rect::new(s.x + s.w - 250.0, s.y + s.h * 0.40, 240.0, 132.0), info.time);
+    // Demandes de configuration de l'autoland : c'est l'opérateur qui exécute
+    config_cues(ac, cx, s.y + s.h * 0.30, info.time);
     // Alarmes façon F/A-18 / Rafale
     hud_cues(ac, cx, cy, bank_rad, info.time);
     // Au-dessus de la bannière d'approche / des barres ILS quand elles sont affichées
@@ -533,6 +538,30 @@ fn directives(ac: &Aircraft, cx: f32, y: f32, fast: bool) {
         let ay = y - 22.0;
         draw_triangle(vec2(cx, ay - 16.0), vec2(cx - 10.0, ay - 2.0), vec2(cx + 10.0, ay - 2.0), col);
         draw_line(cx, ay - 2.0, cx, ay + 6.0, 4.0, col);
+    }
+}
+
+/// GEAR DOWN / SPEED BRAKE EXT|RET demandés par l'autoland (touches G et S).
+fn config_cues(ac: &Aircraft, cx: f32, y: f32, time: f64) {
+    let mut items: Vec<(String, Color)> = Vec::new();
+    if ac.cue_gear && !ac.gear_down {
+        items.push(("GEAR DOWN  (G)".into(), GREEN_S));
+    }
+    match ac.cue_sb {
+        Some(true) => items.push(("SPEED BRAKE EXT  (S)".into(), CYAN_S)),
+        Some(false) => items.push(("SPEED BRAKE RET  (S)".into(), CYAN_S)),
+        None => {}
+    }
+    let blink = (time * 2.0).fract() < 0.7;
+    for (k, (m, c)) in items.iter().enumerate() {
+        let yy = y + k as f32 * 32.0;
+        let w = txt_w(m, 18.0) + 28.0;
+        let b = Rect::new(cx - w / 2.0, yy - 20.0, w, 28.0);
+        rrect(b, 5.0, Color::new(0.0, 0.0, 0.0, 0.7));
+        rrect_lines(b, 5.0, 2.0, *c);
+        if blink {
+            txt_c(m, cx, yy, 18.0, *c);
+        }
     }
 }
 

@@ -228,6 +228,11 @@ pub struct Aircraft {
     pub nws_hi: bool,
     /// Piste d'arrivée demandée par le plan de vol (« 28L »), vide sinon
     pub rwy_pref: String,
+    /// Autoland : train et aérofreins actionnés par l'avion (essais automatiques, plané d'urgence) ;
+    /// sinon l'horizon les demande à l'opérateur (`cue_gear`, `cue_sb` : sortir / rentrer)
+    pub auto_config: bool,
+    pub cue_gear: bool,
+    pub cue_sb: Option<bool>,
     /// Compensateur de lacet (-1 gauche .. +1 droite).
     pub yaw_trim: f64,
     /// Compensation automatique de la dissymétrie de poussée par le trim de lacet
@@ -398,6 +403,9 @@ impl Aircraft {
             pitot_ice: 0.0,
             nws_hi: false,
             rwy_pref: String::new(),
+            auto_config: cfg!(test),
+            cue_gear: false,
+            cue_sb: None,
             yaw_trim: 0.0,
             auto_trim: true,
             throttle: 0.0,
@@ -1982,6 +1990,54 @@ mod tests {
             t += dt;
         }
         t
+    }
+
+    /// Autoland en configuration manuelle : l'horizon demande train et aérofreins ; opérateur qui
+    /// répond → posé ; opérateur absent → remise des gaz « TRAIN NON SORTI », sans crash.
+    #[test]
+    fn autoland_operator_config() {
+        use crate::airports::AIRPORTS;
+        let edw = AIRPORTS.iter().position(|a| a.icao == "KEDW").unwrap();
+        for respond in [true, false] {
+            let mut ac = Aircraft::new_on_runway(0);
+            ac.auto_config = false;
+            ac.on_ground = false;
+            ac.gear_down = false;
+            ac.gear_pos = 0.0;
+            ac.brakes = false;
+            ac.alt = 10_000.0 * FT;
+            ac.tas = 160.0;
+            ac.set_turbines(TurbState::Running, 0.6);
+            ac.engage_autoland(edw).unwrap();
+            let (mut cued_gear, mut cued_sb, mut ga) = (false, false, false);
+            let dt = 1.0 / 120.0;
+            let mut t = 0.0;
+            while t < 3_000.0 && ac.autoland.is_some() && ac.crashed.is_none() && !ga {
+                let c = ac.autoflight().unwrap_or((0.0, 0.0));
+                cued_gear |= ac.cue_gear;
+                cued_sb |= ac.cue_sb.is_some();
+                if respond {
+                    if ac.cue_gear && !ac.gear_down {
+                        ac.cmd_gear();
+                    }
+                    if let Some(x) = ac.cue_sb {
+                        ac.speedbrake = x;
+                    }
+                }
+                ac.step(dt, c.0, c.1);
+                for (_, m) in ac.events.drain(..) {
+                    ga |= m.contains("TRAIN NON SORTI");
+                }
+                t += dt;
+            }
+            println!("operateur={respond} : demande train {cued_gear}, aerofreins {cued_sb}, remise des gaz {ga}, sol {}, crash {:?}", ac.on_ground, ac.crashed);
+            assert!(cued_gear && ac.crashed.is_none());
+            if respond {
+                assert!(ac.on_ground);
+            } else {
+                assert!(ga && !ac.gear_down);
+            }
+        }
     }
 
     #[test]

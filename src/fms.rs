@@ -289,8 +289,8 @@ impl Fpln {
                 w.phase = "SID";
                 w.mach = 0.6;
                 w.alt_ft = if w.sb_alt > 0.0 { w.sb_alt.min(fl * 100.0) } else { fl * 100.0 };
-            } else if w.proc == 2 {
-                w.phase = "STAR";
+            } else if w.proc >= 2 {
+                w.phase = if w.proc == 3 { "APPR" } else { "STAR" };
                 w.mach = 0.7;
                 w.alt_ft = if w.sb_alt > 0.0 { w.sb_alt } else { fl * 100.0 };
             } else {
@@ -309,7 +309,7 @@ impl Fpln {
     pub fn tod(&self) -> f64 {
         // Avec une STAR : la descente hypersonique doit finir à son entrée (puis la STAR est volée
         // aux altitudes prévues)
-        match self.wpts.iter().position(|w| w.proc == 2) {
+        match self.wpts.iter().position(|w| w.proc >= 2) {
             Some(k) => {
                 let star: f64 = self.wpts[k..].windows(2).map(|w| dist_brg(w[0].lat, w[0].lon, w[1].lat, w[1].lon).0).sum();
                 star + ((self.crz_fl / 10.0) * (1.0 + 0.5 * self.crz_mach) + 30.0) * NM
@@ -472,6 +472,30 @@ pub enum Page {
     Prog,
     Fuel,
     Dir,
+    /// DEPARTURES : piste, SID, transition
+    Dep,
+    /// ARRIVAL : approche (ILS), STAR, transition
+    Arr,
+    RadNav,
+}
+
+/// Sélection en cours sur les pages DEPARTURES / ARRIVAL : piste (ou approche), procédure,
+/// transition (0 = aucune).
+#[derive(Clone, Default)]
+pub struct ProcSel {
+    pub rwy: Option<String>,
+    pub proc: Option<usize>,
+    pub trans: Option<usize>,
+}
+
+/// ILS calé : (OACI, piste, indicatif, MHz, course vraie).
+#[derive(Clone, PartialEq, Debug)]
+pub struct IlsTune {
+    pub apt: String,
+    pub rwy: String,
+    pub id: String,
+    pub mhz: f64,
+    pub crs: f64,
 }
 
 pub struct Fms {
@@ -496,6 +520,10 @@ pub struct Fms {
     land_sent: bool,
     /// Dernière phase annoncée
     phase: &'static str,
+    pub dep: ProcSel,
+    pub arr: ProcSel,
+    /// ILS calé automatiquement (départ, puis destination à l'approche)
+    pub ils: Option<IlsTune>,
 }
 
 pub enum McduOut {
@@ -540,7 +568,7 @@ impl Fms {
         let (crz_ft, crz_m, dest) = (fp.crz_fl * 100.0, fp.crz_mach, fp.dest.clone());
         // Procédures IFR : point actif dans une SID / STAR et altitudes prévues par SimBrief
         let act = fp.wpts.get(fp.active).cloned().unwrap_or_default();
-        let star_first = fp.wpts.iter().find(|w| w.proc == 2).map(|w| w.sb_alt).unwrap_or(0.0);
+        let star_first = fp.wpts.iter().find(|w| w.proc >= 2).map(|w| w.sb_alt).unwrap_or(0.0);
         let mach = ac.d.mach;
         let e = ac.eng.clone();
         let turb_on = e.side.iter().any(|s| matches!(s, TurbState::Running | TurbState::Starting));
@@ -638,9 +666,9 @@ impl Fms {
                 ac.eng.ram = RamState::Off;
                 out.push(McduOut::Msg(Level::Info, "FMS : STATO OFF (MACH < 2,6) — RALLUMAGE TURBINES".into()));
             }
-            if ac.ap.vert != VertMode::QHold && (act.proc == 2 || star_first > 0.0) {
+            if ac.ap.vert != VertMode::QHold && (act.proc >= 2 || star_first > 0.0) {
                 // STAR : altitudes prévues de la procédure (entrée de STAR avant d'y être)
-                let tgt = if act.proc == 2 && act.sb_alt > 0.0 { act.sb_alt } else { star_first.max(3_000.0) };
+                let tgt = if act.proc >= 2 && act.sb_alt > 0.0 { act.sb_alt } else { star_first.max(3_000.0) };
                 ac.ap.vert = VertMode::Alt;
                 ac.ap.alt_tgt_ft = (tgt / 500.0).round() * 500.0;
                 ac.ap.at_on = true;
@@ -648,6 +676,8 @@ impl Fms {
                 ac.ap.spd_keas = Some(if ac.alt / FT < 10_000.0 { 250.0 } else { 280.0 });
                 if act.proc == 2 {
                     say(&mut out, &mut self.phase, "STAR", format!("FMS : STAR {} — ALTITUDES DE LA PROCEDURE", act.via));
+                } else if act.proc == 3 {
+                    say(&mut out, &mut self.phase, "APPR", format!("FMS : APPROCHE {} — ILS CALE", act.via));
                 }
             } else if ac.ap.vert != VertMode::QHold {
                 // Descente finale : plan à ~3,5° vers la destination, 250-300 KEAS
@@ -667,9 +697,114 @@ impl Fms {
         out
     }
 
+    /// Listes proposées : (procédures, transitions de la procédure choisie), avec la procédure
+    /// de l'OFP SimBrief en tête si le plan en contient une.
+    fn proc_lists(&self, arr: bool) -> (Vec<crate::procs::Proc>, Vec<crate::procs::Proc>) {
+        use crate::procs::*;
+        let Some(p) = self.plan() else { return (Vec::new(), Vec::new()) };
+        let icao = if arr { &p.dest } else { &p.origin };
+        let Some(apt) = airport(icao) else { return (Vec::new(), Vec::new()) };
+        let sel = if arr { &self.arr } else { &self.dep };
+        let Some(e) = sel.rwy.as_ref().and_then(|r| find_end(apt, r)) else { return (Vec::new(), Vec::new()) };
+        let mut procs = if arr { stars(apt, &e) } else { sids(apt, &e) };
+        let code = if arr { 2 } else { 1 };
+        let ofp: Vec<Wpt> = p.wpts.iter().filter(|w| w.proc == code && p.source == "SIMBRIEF").cloned().collect();
+        let name = if arr { &p.star } else { &p.sid };
+        if !ofp.is_empty() && !name.is_empty() {
+            procs.insert(0, Proc { name: format!("{name} OFP"), pts: ofp });
+        }
+        let trans = match sel.proc.and_then(|i| procs.get(i)) {
+            Some(pr) if !pr.name.ends_with("OFP") => {
+                if arr {
+                    star_trans(apt, pr)
+                } else {
+                    sid_trans(apt, pr)
+                }
+            }
+            _ => Vec::new(),
+        };
+        (procs, trans)
+    }
+
+    /// Insère la sélection DEPARTURES / ARRIVAL dans le plan (temporaire s'il existe, sinon actif).
+    fn insert_procs(&mut self, arr: bool) -> Result<String, String> {
+        use crate::procs::*;
+        let (procs, trans) = self.proc_lists(arr);
+        let sel = if arr { self.arr.clone() } else { self.dep.clone() };
+        let rwy = sel.rwy.clone().ok_or("CHOISIR UNE PISTE")?;
+        let p = self.plan().ok_or("PAS DE PLAN")?.clone();
+        let icao = if arr { p.dest.clone() } else { p.origin.clone() };
+        let apt = airport(&icao).ok_or("AEROPORT HORS BASE")?;
+        let e = find_end(apt, &rwy).ok_or("PISTE INCONNUE")?;
+        let pr = sel.proc.and_then(|i| procs.get(i).cloned());
+        let tr = sel.trans.and_then(|i| if i == 0 { None } else { trans.get(i - 1).cloned() });
+        let mut fp = p;
+        if arr {
+            fp.wpts.retain(|w| w.proc < 2);
+            let mut add: Vec<Wpt> = Vec::new();
+            if let Some(t) = &tr {
+                add.extend(t.pts.clone());
+            }
+            if let Some(s) = &pr {
+                add.extend(s.pts.clone());
+            }
+            add.extend(approach(apt, &e).pts);
+            let at = fp.wpts.len() - 1;
+            for (i, w) in add.into_iter().enumerate() {
+                fp.wpts.insert(at + i, w);
+            }
+            fp.arr_rwy = rwy.clone();
+            fp.star = pr.as_ref().map(|s| s.name.trim_end_matches(" OFP").to_string()).unwrap_or_default();
+        } else {
+            fp.wpts.retain(|w| w.proc != 1);
+            let mut add: Vec<Wpt> = Vec::new();
+            if let Some(s) = &pr {
+                add.extend(s.pts.clone());
+            }
+            if let Some(t) = &tr {
+                add.extend(t.pts.clone());
+            }
+            for (i, w) in add.into_iter().enumerate() {
+                fp.wpts.insert(1 + i, w);
+            }
+            fp.dep_rwy = rwy.clone();
+            fp.sid = pr.as_ref().map(|s| s.name.trim_end_matches(" OFP").to_string()).unwrap_or_default();
+        }
+        fp.active = fp.active.clamp(1, fp.wpts.len() - 1);
+        fp.compute();
+        let m = if arr { format!("ARRIVEE {} {} {}", icao, fp.arr_rwy, fp.star) } else { format!("DEPART {} {} {}", icao, fp.dep_rwy, fp.sid) };
+        if self.temp.is_some() {
+            self.temp = Some(fp);
+        } else {
+            self.fpln = Some(fp);
+        }
+        Ok(m)
+    }
+
+    /// Calage automatique de l'ILS : piste de départ au sol et en montée, ILS de destination à
+    /// 250 NM de l'arrivée ou dès le début de descente. Renvoie un message au changement.
+    pub fn autotune(&mut self, ac: &Aircraft) -> Option<String> {
+        use crate::procs::*;
+        let p = self.fpln.as_ref()?;
+        let rem = p.remaining(ac.lat, ac.lon);
+        let to_dest = rem < 250.0 * NM || self.desc_started;
+        let (icao, rwy) = if to_dest { (&p.dest, &p.arr_rwy) } else { (&p.origin, &p.dep_rwy) };
+        let apt = airport(icao)?;
+        // Sans piste choisie : piste la plus longue
+        let e = if rwy.is_empty() { ends(apt).into_iter().max_by(|a, b| a.len.partial_cmp(&b.len).unwrap())? } else { find_end(apt, rwy)? };
+        let (id, mhz) = ils(apt, &e);
+        let t = IlsTune { apt: apt.icao.to_string(), rwy: e.ident.clone(), id, mhz, crs: e.hdg };
+        if self.ils.as_ref() != Some(&t) {
+            let m = format!("RAD NAV : ILS {} {} CALE AUTOMATIQUEMENT — {} {:.2} CRS {:03.0}", t.apt, t.rwy, t.id, t.mhz, t.crs);
+            self.ils = Some(t);
+            return Some(m);
+        }
+        None
+    }
+
     pub fn new() -> Fms {
         let user = std::fs::read_to_string(config_path()).map(|s| s.trim().to_string()).unwrap_or_default();
-        Fms { fpln: None, temp: None, page: Page::Init, scroll: 0, scratch: String::new(), msg: String::new(), user, from_to: (String::new(), String::new()), crz: (950.0, 6.0), fetch: Arc::new(Mutex::new(Fetch::Idle)), focus: true, acft: "B77W".into(), vnav: true, desc_started: false, land_sent: false, phase: "" }
+        Fms { fpln: None, temp: None, page: Page::Init, scroll: 0, scratch: String::new(), msg: String::new(), user, from_to: (String::new(), String::new()), crz: (950.0, 6.0), fetch: Arc::new(Mutex::new(Fetch::Idle)), focus: true, acft: "B77W".into(), vnav: true, desc_started: false, land_sent: false, phase: "", dep: ProcSel::default(), arr: ProcSel::default(), ils: None }
     }
 
     /// Plan affiché / modifié : temporaire s'il existe, sinon actif.
@@ -864,6 +999,22 @@ impl Fms {
             (Page::Fpln, true, l) if l < 5 => {
                 let idx = self.scroll + l;
                 let active_view = self.temp.is_none();
+                let nw = self.plan().map(|p| p.wpts.len()).unwrap_or(0);
+                if sp.is_empty() && nw > 0 && (idx == 0 || idx == nw - 1) {
+                    let arr = idx == nw - 1;
+                    let p = self.plan().unwrap();
+                    let r = if arr { p.arr_rwy.clone() } else { p.dep_rwy.clone() };
+                    let sel = ProcSel { rwy: if r.is_empty() { None } else { Some(r) }, proc: None, trans: None };
+                    if arr {
+                        self.arr = sel;
+                        self.page = Page::Arr;
+                    } else {
+                        self.dep = sel;
+                        self.page = Page::Dep;
+                    }
+                    self.scroll = 0;
+                    return None;
+                }
                 if let Some(p) = self.plan_mut() {
                     if idx < p.wpts.len() {
                         if sp == "CLR" {
@@ -902,6 +1053,59 @@ impl Fms {
                     self.temp = None;
                     self.msg = "PLAN TEMPORAIRE EFFACE".into();
                 }
+            }
+            // ----- DEPARTURES / ARRIVAL -----
+            (Page::Dep | Page::Arr, true, 5) => {
+                self.page = Page::Fpln;
+                self.scroll = 0;
+            }
+            (Page::Dep | Page::Arr, false, 5) => {
+                let arr = self.page == Page::Arr;
+                match self.insert_procs(arr) {
+                    Ok(m) => {
+                        self.msg = "INSERE".into();
+                        self.page = Page::Fpln;
+                        self.scroll = 0;
+                        out = Some(McduOut::Msg(Level::Info, format!("FMS : {m}")));
+                    }
+                    Err(e) => self.msg = e,
+                }
+            }
+            (Page::Dep | Page::Arr, true, l) if (1..5).contains(&l) => {
+                let arr = self.page == Page::Arr;
+                let icao = self.plan().map(|p| if arr { p.dest.clone() } else { p.origin.clone() }).unwrap_or_default();
+                if let Some(apt) = crate::procs::airport(&icao) {
+                    let ends = crate::procs::ends(apt);
+                    if let Some(e) = ends.get(self.scroll + l - 1) {
+                        let sel = ProcSel { rwy: Some(e.ident.clone()), proc: None, trans: None };
+                        if arr {
+                            self.arr = sel;
+                        } else {
+                            self.dep = sel;
+                        }
+                    }
+                }
+            }
+            (Page::Dep | Page::Arr, false, l) if (1..5).contains(&l) => {
+                let arr = self.page == Page::Arr;
+                let (procs, trans) = self.proc_lists(arr);
+                let sc = self.scroll;
+                let sel = if arr { &mut self.arr } else { &mut self.dep };
+                let i = l - 1;
+                if sel.proc.is_none() {
+                    if sc + i < procs.len() {
+                        sel.proc = Some(sc + i);
+                        sel.trans = Some(0);
+                    }
+                } else if i <= trans.len() {
+                    sel.trans = Some(i);
+                }
+            }
+            (Page::Dep | Page::Arr, false, 0) => {
+                // Retour à la liste des procédures
+                let sel = if self.page == Page::Arr { &mut self.arr } else { &mut self.dep };
+                sel.proc = None;
+                sel.trans = None;
             }
             // ----- PERF -----
             (Page::Perf, true, 5) => {
@@ -997,6 +1201,62 @@ fn page_lines(f: &Fms, ac: &Aircraft) -> (String, Color, Vec<(Line, Line)>) {
     let title;
     let mut tc = WHITE_M;
     match f.page {
+        Page::Dep | Page::Arr => {
+            let arr = f.page == Page::Arr;
+            let icao = f.plan().map(|p| if arr { p.dest.clone() } else { p.origin.clone() }).unwrap_or_default();
+            title = if arr { format!("ARRIVAL TO {icao}") } else { format!("DEPARTURES FROM {icao}") };
+            tc = if f.temp.is_some() { AMB_M } else { WHITE_M };
+            let sel = if arr { &f.arr } else { &f.dep };
+            let (procs, trans) = f.proc_lists(arr);
+            let pname = sel.proc.and_then(|i| procs.get(i)).map(|p| p.name.clone()).unwrap_or("------".into());
+            let tname = match (sel.proc, sel.trans) {
+                (Some(_), Some(0)) | (Some(_), None) => "NONE".to_string(),
+                (Some(_), Some(i)) => trans.get(i - 1).map(|t| t.name.clone()).unwrap_or("------".into()),
+                _ => "------".into(),
+            };
+            let rw = sel.rwy.clone().unwrap_or("---".into());
+            let (lr, lp) = if arr { ("APPR", "STAR") } else { ("RWY", "SID") };
+            rows.push((ln(format!(" {lr}"), LBL_M, format!("{lp}  TRANS "), LBL_M), ln(if arr { format!("ILS{rw}") } else { rw }, AMB_M, format!("{pname} {tname}"), AMB_M)));
+            let apt = crate::procs::airport(&icao);
+            let ends = apt.map(crate::procs::ends).unwrap_or_default();
+            // Colonne droite : procédures, puis transitions une fois la procédure choisie
+            let right: Vec<String> = if sel.rwy.is_none() {
+                Vec::new()
+            } else if sel.proc.is_none() {
+                procs.iter().skip(f.scroll).map(|p| p.name.clone()).collect()
+            } else {
+                std::iter::once("NO TRANS".to_string()).chain(trans.iter().map(|t| t.name.clone())).collect()
+            };
+            for k in 0..4 {
+                let e = ends.get(f.scroll + k);
+                let left = match (e, apt) {
+                    (Some(e), Some(a)) => {
+                        let (id, mhz) = crate::procs::ils(a, e);
+                        let _ = id;
+                        (format!("<{}{}", if arr { "ILS" } else { "" }, e.ident), format!(" {:.0}M CRS{:03.0} {:.2}", e.len, e.hdg, mhz))
+                    }
+                    _ => (String::new(), String::new()),
+                };
+                let sel_l = e.is_some_and(|e| Some(&e.ident) == sel.rwy.as_ref());
+                let r = right.get(k).cloned().unwrap_or_default();
+                rows.push((ln(left.1, LBL_M, "", LBL_M), ln(left.0, if sel_l { GREEN_M } else { CYAN_M }, if r.is_empty() { String::new() } else { format!("{r}>") }, CYAN_M)));
+            }
+            rows.push((blank(), ln("<RETURN", WHITE_M, "INSERT*", AMB_M)));
+        }
+        Page::RadNav => {
+            title = "RAD NAV".into();
+            match &f.ils {
+                Some(t) => {
+                    rows.push((ln(" ILS / FREQ", LBL_M, "CRS ", LBL_M), ln(format!("{}/{:.2}", t.id, t.mhz), CYAN_M, format!("{:03.0}", t.crs), CYAN_M)));
+                    rows.push((ln(" AEROPORT  PISTE", LBL_M, "MODE ", LBL_M), ln(format!("{} {}", t.apt, t.rwy), GREEN_M, "AUTO", GREEN_M)));
+                }
+                None => rows.push((ln(" ILS / FREQ", LBL_M, "", LBL_M), ln("[ ]/[ ]", AMB_M, "", WHITE_M))),
+            }
+            rows.push((ln(" CALAGE AUTO", LBL_M, "", LBL_M), ln("DEP PUIS DEST A 250NM", LBL_M, "", WHITE_M)));
+            while rows.len() < 6 {
+                rows.push((blank(), blank()));
+            }
+        }
         Page::Init => {
             title = "INIT  DK-FMS".to_string();
             let (o, d) = &f.from_to;
@@ -1199,7 +1459,7 @@ pub fn draw_mcdu(f: &Fms, ac: &Aircraft, r: Rect, time: f64) -> Option<McduKey> 
     let _ = COLS;
     // Touches de page
     let ky = scr.y + scr.h + 14.0;
-    let keys: [(&str, Option<Page>); 8] = [("INIT", Some(Page::Init)), ("F-PLN", Some(Page::Fpln)), ("PERF", Some(Page::Perf)), ("PROG", Some(Page::Prog)), ("FUEL", Some(Page::Fuel)), ("DIR", Some(Page::Dir)), ("CLR", None), ("^ v", None)];
+    let keys: [(&str, Option<Page>); 8] = [("INIT", Some(Page::Init)), ("F-PLN", Some(Page::Fpln)), ("PERF", Some(Page::Perf)), ("PROG", Some(Page::Prog)), ("FUEL", Some(Page::Fuel)), ("RAD NAV", Some(Page::RadNav)), ("CLR", None), ("^ v", None)];
     let kw = (b.w - 24.0) / 4.0 - 6.0;
     for (i, (k, p)) in keys.iter().enumerate() {
         let (c, rw) = (i % 4, i / 4);
@@ -1220,6 +1480,7 @@ pub fn draw_mcdu(f: &Fms, ac: &Aircraft, r: Rect, time: f64) -> Option<McduKey> 
     txt(if f.focus { "CLAVIER : SAISIE MCDU (ECHAP pour rendre le clavier au vol)" } else { "CLIC SUR L'ECRAN POUR SAISIR" }, b.x + 12.0, hy, 11.0, if f.focus { CYAN_M } else { LBL_M });
     txt("FROM/TO : KPMD/PHNL > LSK1G   SIMBRIEF ID > LSK1D   IMPORT OFP : LSK2D", b.x + 12.0, hy + 16.0, 10.0, LBL_M);
     txt("F-PLN : saisie + LSK = insertion, CLR + LSK = suppression, LSK seule = DIRECT", b.x + 12.0, hy + 30.0, 10.0, LBL_M);
+    txt("F-PLN : LSK sur l'aeroport de depart / d'arrivee = DEPARTURES / ARRIVAL (piste, SID/STAR, TRANS, ILS)", b.x + 12.0, hy + 44.0, 10.0, LBL_M);
     out
 }
 
@@ -1381,5 +1642,97 @@ mod tests {
         assert_eq!(fp.wpts[4].alt_ft, 19_000.0);
         let star_d = dist_brg(36.60, -121.70, 37.05, -122.00).0 + dist_brg(37.05, -122.00, 37.62, -122.37).0;
         assert!(fp.tod() > star_d);
+    }
+
+    /// MCDU : DEPARTURES (piste, SID, transition) et ARRIVAL (ILS, STAR, transition) par les
+    /// touches de ligne, ILS calé au départ puis à destination, vol complet posé sur la piste choisie.
+    #[test]
+    fn mcdu_dep_arr_and_flight() {
+        let mut f = Fms::new();
+        f.dispatch_now("KEDW", "KSFO", 350.0, 0.9).unwrap();
+        let mut ac = Aircraft::new_on_runway(0);
+        // DEPARTURES : LSK1G sur l'aéroport de départ
+        f.page = Page::Fpln;
+        f.scroll = 0;
+        f.lsk(true, 0, &ac);
+        assert_eq!(f.page, Page::Dep);
+        f.lsk(true, 1, &ac); // première piste
+        f.lsk(false, 1, &ac); // première SID
+        f.lsk(false, 2, &ac); // première transition
+        let r = f.lsk(false, 5, &ac); // INSERT
+        assert!(matches!(r, Some(McduOut::Msg(..))), "{}", f.msg);
+        let p = f.fpln.as_ref().unwrap();
+        println!("depart : {} {} ; {:?}", p.dep_rwy, p.sid, p.wpts.iter().map(|w| w.ident.as_str()).collect::<Vec<_>>());
+        assert!(!p.sid.is_empty() && p.wpts.iter().filter(|w| w.proc == 1).count() >= 3);
+        // ARRIVAL : LSK sur la destination (dernière ligne visible)
+        let n = p.wpts.len();
+        f.page = Page::Fpln;
+        f.scroll = n.saturating_sub(5);
+        f.lsk(true, n - 1 - f.scroll, &ac);
+        assert_eq!(f.page, Page::Arr);
+        // Piste 28L (ou la première proposée), première STAR, sans transition
+        let sfo = crate::procs::airport("KSFO").unwrap();
+        let ends = crate::procs::ends(sfo);
+        let k = ends.iter().position(|e| e.ident == "30L").unwrap_or(0);
+        f.scroll = k;
+        f.lsk(true, 1, &ac);
+        f.scroll = 0;
+        f.lsk(false, 1, &ac);
+        f.lsk(false, 1, &ac); // NO TRANS
+        f.lsk(false, 5, &ac);
+        let p = f.fpln.as_ref().unwrap();
+        println!("arrivee : {} {} ; {:?}", p.arr_rwy, p.star, p.wpts.iter().map(|w| format!("{}:{}", w.ident, w.proc)).collect::<Vec<_>>());
+        assert!(p.wpts.iter().any(|w| w.proc == 3) && !p.star.is_empty());
+        let arr_rwy = p.arr_rwy.clone();
+        // ILS : départ au sol, puis destination
+        let m = f.autotune(&ac).unwrap();
+        println!("{m}");
+        assert!(f.ils.as_ref().unwrap().apt == "KEDW");
+        // Vol complet : décollage déjà fait (en vol au-dessus d'Edwards), LNAV + VNAV, autoland
+        ac.on_ground = false;
+        ac.gear_down = false;
+        ac.gear_pos = 0.0;
+        ac.brakes = false;
+        let edw = crate::procs::airport("KEDW").unwrap();
+        ac.lat = edw.lat;
+        ac.lon = edw.lon;
+        ac.alt = edw.elev + 1_500.0 * FT;
+        ac.tas = 120.0;
+        ac.set_turbines(TurbState::Running, 0.8);
+        ac.ap.on = true;
+        ac.ap.lat = LatMode::Nav;
+        f.fpln.as_mut().unwrap().active = 1;
+        ac.rwy_pref = arr_rwy.clone();
+        let dt = 1.0 / 120.0;
+        let mut t = 0.0;
+        let mut tuned_dest = false;
+        let mut landed_rwy = String::new();
+        while t < 4_000.0 && ac.crashed.is_none() && !(ac.on_ground && ac.tas < 3.0) {
+            if (t * 10.0f64).fract() < dt * 10.0 {
+                if let Some((b, _)) = f.guidance(&ac) {
+                    if ac.autoland.is_none() {
+                        ac.ap.hdg_tgt = b;
+                    }
+                }
+                if let Some(m) = f.autotune(&ac) {
+                    tuned_dest |= m.contains("KSFO");
+                }
+                for o in f.vnav_update(&mut ac) {
+                    if let McduOut::Cmd(c) = o {
+                        if let Some(code) = c.strip_prefix("ATTERRIR ") {
+                            let i = AIRPORTS.iter().position(|a| a.icao == code).unwrap();
+                            ac.engage_autoland(i).unwrap();
+                            landed_rwy = ac.autoland.as_ref().unwrap().rwy.clone();
+                        }
+                    }
+                }
+            }
+            let c = ac.autoflight().unwrap_or((0.0, 0.0));
+            ac.step(dt, c.0, c.1);
+            ac.events.clear();
+            t += dt;
+        }
+        println!("ILS destination cale {tuned_dest}, autoland piste {landed_rwy}, sol {} crash {:?} t {t:.0}", ac.on_ground, ac.crashed);
+        assert!(tuned_dest && landed_rwy == arr_rwy && ac.on_ground && ac.crashed.is_none());
     }
 }

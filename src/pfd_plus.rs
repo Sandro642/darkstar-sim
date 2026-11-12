@@ -26,6 +26,16 @@ pub struct Cue {
 
 thread_local! {
     static LNAV: std::cell::RefCell<Option<String>> = const { std::cell::RefCell::new(None) };
+    static ILS: std::cell::RefCell<Option<String>> = const { std::cell::RefCell::new(None) };
+}
+
+/// ILS calé par le FMS (indicatif, fréquence, aéroport, piste) pour l'étiquette de l'horizon.
+pub fn set_ils(t: Option<String>) {
+    ILS.with(|c| *c.borrow_mut() = t);
+}
+
+pub fn ils_label() -> Option<String> {
+    ILS.with(|c| c.borrow().clone())
 }
 
 /// Point actif du plan de vol FMS (pour l'annonce LNAV du bandeau de modes).

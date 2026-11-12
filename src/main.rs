@@ -4,6 +4,7 @@ mod aircraft;
 mod alarms;
 mod fire;
 mod fms;
+mod procs;
 mod airports;
 mod atmosphere;
 mod elec;
@@ -1146,8 +1147,18 @@ impl Game {
         self.ac.approach = if self.ac.autoland.is_some() || (ils_active && self.ac.approach.is_some()) {
             self.ac.approach
         } else if dd < 80_000.0 {
-            let a = apt.approach_for(self.ac.lat, self.ac.lon);
-            Some((self.dest, a.thr_lat, a.thr_lon, a.hdg, apt.elev))
+            // ILS calé par le FMS sur la piste choisie, sinon piste dans l'axe de l'avion
+            let tuned = self.fms.ils.as_ref().filter(|t| t.apt == apt.icao).and_then(|t| procs::find_end(apt, &t.rwy));
+            match tuned {
+                Some(e) => {
+                    let (tla, tlo) = procs::threshold(apt, &e);
+                    Some((self.dest, tla, tlo, e.hdg, apt.elev))
+                }
+                None => {
+                    let a = apt.approach_for(self.ac.lat, self.ac.lon);
+                    Some((self.dest, a.thr_lat, a.thr_lon, a.hdg, apt.elev))
+                }
+            }
         } else {
             None
         };
@@ -1166,6 +1177,10 @@ impl Game {
         if let Some(o) = self.fms.poll() {
             self.mcdu_out(o);
         }
+        if let Some(m) = self.fms.autotune(&self.ac) {
+            self.push(Level::Info, m);
+        }
+        pfd_plus::set_ils(self.fms.ils.as_ref().map(|t| format!("{} {:.2} {} {}", t.id, t.mhz, t.apt, t.rwy)));
         pfd_plus::set_lnav(self.fms.fpln.as_ref().and_then(|p| p.wpts.get(p.active)).map(|w| w.ident.clone()));
         // Piste d'arrivée du plan de vol (SimBrief) pour l'autoland
         self.ac.rwy_pref = self.fms.fpln.as_ref().map(|p| p.arr_rwy.clone()).unwrap_or_default();
@@ -1777,6 +1792,9 @@ impl Game {
                     "FUEL" => Some(fms::Page::Fuel),
                     "DIR" => Some(fms::Page::Dir),
                     "INIT" => Some(fms::Page::Init),
+                    "DEP" => Some(fms::Page::Dep),
+                    "ARR" => Some(fms::Page::Arr),
+                    "RADNAV" => Some(fms::Page::RadNav),
                     _ => None,
                 };
                 if let Some(p) = p {

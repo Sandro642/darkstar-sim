@@ -613,3 +613,15 @@ Le SR-72 est un avion de reconnaissance : sa charge utile est simulée.
   l'identifiant d'un avion personnalisé (ex. un « Darkstar » créé dans SimBrief).
 - v1.38.2 : LNAV — instruction LNAV (ou NAV), touche N : suit le plan de vol FMS actif ; bandeau
   de modes « LNAV <point actif> » ; message clair sans plan actif (direct destination).
+- v1.39.0 : MCDU DEPARTURES / ARRIVAL, ILS auto, configuration d'atterrissage par l'opérateur.
+  - F-PLN : touche de ligne sur l'aéroport de départ → DEPARTURES (piste, SID, transition) ; sur
+    la destination → ARRIVAL (approche ILS par piste avec longueur, course, fréquence ; STAR,
+    transition) ; INSERT. Procédures générées (points de sortie / d'entrée N-E-S-O, IAF 15 NM,
+    FAF 6 NM) ; la SID / STAR de l'OFP SimBrief est proposée en tête.
+  - RAD NAV : ILS de la piste de départ calé automatiquement, puis ILS de destination à 250 NM
+    ou au début de descente ; l'approche (LOC / G/S, autoland) utilise la piste calée. Étiquette
+    ILS de l'horizon avec indicatif et fréquence.
+  - Autoland : train et aérofreins ne sont plus actionnés par l'avion — l'horizon affiche
+    GEAR DOWN (G) et SPEED BRAKE EXT / RET (S) ; train non sorti à 500 ft : remise des gaz.
+    (Plané d'urgence EMERGENCY OVERRIDE : configuration toujours automatique.)
+  - KXTA (Groom Lake) : piste recalée sur l'imagerie satellite (axe 158,7° vrai) + piste parallèle.
