@@ -24,6 +24,19 @@ pub struct Cue {
 
 // ---------- FMA ----------
 
+thread_local! {
+    static LNAV: std::cell::RefCell<Option<String>> = const { std::cell::RefCell::new(None) };
+}
+
+/// Point actif du plan de vol FMS (pour l'annonce LNAV du bandeau de modes).
+pub fn set_lnav(w: Option<String>) {
+    LNAV.with(|c| *c.borrow_mut() = w);
+}
+
+fn lnav_wpt() -> Option<String> {
+    LNAV.with(|c| c.borrow().clone())
+}
+
 /// Annonciateur de modes : quatre colonnes (poussée, latéral, vertical, AP), actif en vert,
 /// armé en cyan dessous. Remplace la ligne de texte des modes.
 pub fn fma(ac: &Aircraft, x0: f32, y: f32, w: f32, dest: usize) {
@@ -41,7 +54,10 @@ pub fn fma(ac: &Aircraft, x0: f32, y: f32, w: f32, dest: usize) {
         if ac.ap.on {
             let a = match ac.ap.lat {
                 LatMode::Hdg => format!("HDG {:03.0}", ac.ap.hdg_tgt),
-                LatMode::Nav => format!("NAV {}", AIRPORTS[dest].icao),
+                LatMode::Nav => match lnav_wpt() {
+                    Some(w) => format!("LNAV {w}"),
+                    None => format!("NAV {}", AIRPORTS[dest].icao),
+                },
                 LatMode::Loc => "LOC".into(),
             };
             (a, GREEN_S, if ac.ap.loc_armed { "LOC".into() } else { String::new() })

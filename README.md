@@ -611,3 +611,5 @@ Le SR-72 est un avion de reconnaissance : sa charge utile est simulée.
   calculée parmi les parallèles ; plané sans moteur et décollage auto sur n'importe quelle piste.
 - v1.38.1 : horizon — tunnel vert d'aide à l'atterrissage retiré. MCDU : l'avion SimBrief accepte
   l'identifiant d'un avion personnalisé (ex. un « Darkstar » créé dans SimBrief).
+- v1.38.2 : LNAV — instruction LNAV (ou NAV), touche N : suit le plan de vol FMS actif ; bandeau
+  de modes « LNAV <point actif> » ; message clair sans plan actif (direct destination).

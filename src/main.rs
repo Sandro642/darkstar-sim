@@ -1050,7 +1050,11 @@ impl Game {
                 ac.ap.alt_tgt_ft = (ac.alt / FT / 100.0).round() * 100.0;
             }
             ac.ap.lat = LatMode::Nav;
-            msgs.push((Level::Info, format!("NAV — DIRECT {}", AIRPORTS[self.dest].icao)));
+            let m = match self.fms.fpln.as_ref().and_then(|p| p.wpts.get(p.active)) {
+                Some(w) => format!("LNAV — PLAN DE VOL FMS, CAP SUR {}{}", w.ident, if self.fms.vnav { " (VNAV ON)" } else { "" }),
+                None => format!("NAV — DIRECT {} (pas de plan FMS actif)", AIRPORTS[self.dest].icao),
+            };
+            msgs.push((Level::Info, m));
         }
         if is_key_pressed(KeyCode::L) && !ac.on_ground {
             if let Some((_, tla, tlo, th, tel)) = ac.approach {
@@ -1162,6 +1166,7 @@ impl Game {
         if let Some(o) = self.fms.poll() {
             self.mcdu_out(o);
         }
+        pfd_plus::set_lnav(self.fms.fpln.as_ref().and_then(|p| p.wpts.get(p.active)).map(|w| w.ident.clone()));
         // Piste d'arrivée du plan de vol (SimBrief) pour l'autoland
         self.ac.rwy_pref = self.fms.fpln.as_ref().map(|p| p.arr_rwy.clone()).unwrap_or_default();
         for o in self.fms.vnav_update(&mut self.ac) {
@@ -1735,6 +1740,18 @@ impl Game {
                 }
                 _ => reply = Err("PAS AU POINT D'ATTENTE".into()),
             },
+            "LNAV" | "NAV" => {
+                if airborne {
+                    engage_ap(ac);
+                    ac.ap.lat = LatMode::Nav;
+                    reply = Ok(match self.fms.fpln.as_ref().and_then(|p| p.wpts.get(p.active)) {
+                        Some(w) => format!("LNAV : PLAN DE VOL FMS, CAP SUR {}", w.ident),
+                        None => format!("NAV : DIRECT {} (pas de plan FMS actif)", AIRPORTS[self.dest].icao),
+                    });
+                } else {
+                    reply = Err("AU SOL : DECOLLAGE D'ABORD (instruction DECOLLAGE), PUIS LNAV".into());
+                }
+            }
             "VNAV" => {
                 self.fms.vnav = arg(1) != "OFF";
                 reply = Ok(if self.fms.vnav { "VNAV ON : ALTITUDE, MACH ET MOTEURS GERES PAR LE FMS".into() } else { "VNAV OFF".into() });
