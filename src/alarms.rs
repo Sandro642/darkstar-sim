@@ -119,11 +119,14 @@ pub fn draw_alarms(ac: &Aircraft, alerts: &[(Level, String)], r: Rect, time: f64
         let (c, row) = (i % 3, i / 3);
         let b = Rect::new(r.x + 12.0 + c as f32 * (bw + 6.0), y0 + 24.0 + row as f32 * (bh + 6.0), bw, bh);
         let on = ac.fails.has(*fail);
-        rrect(b, 5.0, if on { Color::new(0.4, 0.05, 0.05, 1.0) } else if hovered(b) { Color::new(0.11, 0.13, 0.16, 1.0) } else { Color::new(0.08, 0.09, 0.11, 1.0) });
-        rrect_lines(b, 5.0, 1.0, if on { RED } else { PANEL_BORDER });
+        // Dégât réel d'un incident : affiché à part (ce n'est pas une panne injectée)
+        let dmg = on && ac.damage.has(*fail);
+        let bg = if dmg { Color::new(0.30, 0.17, 0.02, 1.0) } else if on { Color::new(0.4, 0.05, 0.05, 1.0) } else if hovered(b) { Color::new(0.11, 0.13, 0.16, 1.0) } else { Color::new(0.08, 0.09, 0.11, 1.0) };
+        rrect(b, 5.0, bg);
+        rrect_lines(b, 5.0, 1.0, if dmg { AMBER } else if on { RED } else { PANEL_BORDER });
         txt(label, b.x + 8.0, b.y + bh * 0.5 + 4.0, 11.0, if on { WHITE } else { DIM });
-        txt_r(if on { "ACTIVE" } else { code }, b.x + b.w - 6.0, b.y + bh * 0.5 + 4.0, 10.0, if on { RED } else { Color::new(0.4, 0.43, 0.46, 1.0) });
-        if clicked(b) {
+        txt_r(if dmg { "DEGAT" } else if on { "ACTIVE" } else { code }, b.x + b.w - 6.0, b.y + bh * 0.5 + 4.0, 10.0, if dmg { AMBER } else if on { RED } else { Color::new(0.4, 0.43, 0.46, 1.0) });
+        if clicked(b) && !dmg {
             out = Some(AlarmAction::Toggle(*fail));
         }
     }

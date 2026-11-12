@@ -106,6 +106,8 @@ struct Game {
     last_ok: mishap::Snapshot,
     /// Dernier état complet du véhicule avant sa perte (deuxième chance).
     last_ac: Option<Aircraft>,
+    /// États récents (temps simulé, avion) toutes les 0,5 s sur 6 s : reprise avant l'incident
+    ac_hist: std::collections::VecDeque<(f64, Aircraft)>,
     /// Panneau d'alarmes resté allumé après une récupération (jusqu'à TOUT RÉPARER).
     tree: Option<[u8; 32]>,
     muted: bool,
@@ -281,6 +283,7 @@ impl Game {
             mishap: None,
             last_ok: mishap::Snapshot::default(),
             last_ac: None,
+            ac_hist: std::collections::VecDeque::new(),
             tree: None,
             muted: false,
             thermal: thermal::ThermalSys::new(),
@@ -604,13 +607,42 @@ impl Game {
     fn recover_vehicle(&mut self) {
         // Reconnexion immédiate : l'avion reprend exactement l'état de la dernière trame avant la
         // déconnexion (attitude, vitesse, configuration, modes, pannes réelles), liaison rétablie
-        let mut ac = self.last_ac.clone().unwrap_or_else(|| self.ac.clone());
+        // État ~2 s avant l'incident (la dernière trame est souvent déjà irrécupérable : rupture,
+        // surpression), sinon la dernière trame valide
+        let t_inc = self.sim_time;
+        let mut ac = self
+            .ac_hist
+            .iter()
+            .rev()
+            .find(|(t, _)| t_inc - t >= 2.0)
+            .map(|(_, a)| a.clone())
+            .or_else(|| self.last_ac.clone())
+            .unwrap_or_else(|| self.ac.clone());
+        self.ac_hist.clear();
         ac.crashed = None;
         let kind = self.mishap.as_ref().map(|m| m.kind);
         let cause = self.mishap.as_ref().map(|m| m.cause.to_uppercase()).unwrap_or_default();
         self.ac = ac;
         // Dégâts de l'incident, déterminés par sa cause (pas de pannes au hasard)
         let summary = self.incident_damage(kind, &cause);
+        // Autonomie de bord : si les gouvernes répondent, l'AP stabilise l'avion (ailes à plat,
+        // palier, protections de q actives) en attendant les instructions
+        let fcs_ok = !(self.ac.fails.has(systems::Fail::FcsDirect) && self.ac.fails.has(systems::Fail::Hyd));
+        if fcs_ok && !self.ac.on_ground {
+            let ac = &mut self.ac;
+            ac.ap.on = true;
+            // Piqué ou q élevée : remise en palier ; sinon tenue d'assiette (pas d'à-coup en scram)
+            if ac.gamma < -4f64.to_radians() || ac.d.q > 0.75 * Q_LIMIT {
+                ac.ap.vert = VertMode::Alt;
+                ac.ap.alt_tgt_ft = (ac.alt / FT / 1000.0).round() * 1000.0;
+            } else {
+                ac.ap.vert = VertMode::Pitch;
+                ac.ap.pitch_tgt = ac.theta.to_degrees();
+            }
+            ac.ap.lat = LatMode::Hdg;
+            ac.ap.hdg_tgt = ac.hdg_deg();
+            self.push(Level::Info, "AUTONOMIE DE BORD : AP ENGAGE — AILES A PLAT, ASSIETTE TENUE OU REMISE EN PALIER, PROTECTIONS DE q ACTIVES");
+        }
         self.degraded = kind;
         self.mishap = None;
         self.crash_report.clear();
@@ -634,6 +666,10 @@ impl Game {
         use mishap::Kind;
         use systems::Fail;
         let ac = &mut self.ac;
+        let dmg = |ac: &mut Aircraft, f: Fail, on: bool| {
+            ac.fails.set(f, on);
+            ac.damage.set(f, on);
+        };
         let kill_engines = |ac: &mut Aircraft| {
             for k in 0..2 {
                 ac.eng.side[k] = TurbState::Failed;
@@ -645,15 +681,20 @@ impl Game {
             ac.throttle = 0.0;
         };
         let fcs_lost = |ac: &mut Aircraft| {
-            ac.fails.set(Fail::FcsDirect, true);
-            ac.fails.set(Fail::Hyd, true);
+            dmg(ac, Fail::FcsDirect, true);
+            dmg(ac, Fail::Hyd, true);
             ac.ap.on = false;
         };
         match kind {
             Some(Kind::Structural) if cause.contains("THERMIQUE") => {
-                ac.fails.set(Fail::Adc, true);
-                ac.fails.set(Fail::FcsDirect, true);
+                dmg(ac, Fail::Adc, true);
+                dmg(ac, Fail::FcsDirect, true);
                 "STRUCTURE CHAUFFEE, SONDES DETRUITES — FCS EN LOI DIRECTE, PILOTAGE PAR INSTRUCTIONS".into()
+            }
+            Some(Kind::Structural) if cause.contains("PRESSION") => {
+                dmg(ac, Fail::Adc, true);
+                dmg(ac, Fail::FcsDirect, true);
+                "SURPRESSION : SONDES ET REVETEMENT ENDOMMAGES — FCS EN LOI DIRECTE (SANS PROTECTIONS), PILOTAGE PAR INSTRUCTIONS".into()
             }
             Some(Kind::Structural) => {
                 fcs_lost(ac);
@@ -662,18 +703,18 @@ impl Game {
             Some(Kind::Explosion) => {
                 kill_engines(ac);
                 ac.eng.combustor_failed = true;
-                ac.fails.set(Fail::H2Leak, true);
+                dmg(ac, Fail::H2Leak, true);
                 "CHAMBRE DETRUITE, DEUX MOTEURS PERDUS, FUITE H2 — FCS DISPONIBLE (VOL PLANE)".into()
             }
             Some(Kind::Missile) => {
                 kill_engines(ac);
-                ac.fails.set(Fail::FuelPump, true);
+                dmg(ac, Fail::FuelPump, true);
                 fcs_lost(ac);
                 "MOTEURS, CIRCUIT CARBURANT ET HYDRAULIQUE — PLUS DE FCS NI DE POUSSEE".into()
             }
             Some(Kind::Electrical) => {
-                ac.fails.set(Fail::GenL, true);
-                ac.fails.set(Fail::GenR, true);
+                dmg(ac, Fail::GenL, true);
+                dmg(ac, Fail::GenR, true);
                 "GENERATRICES PERDUES — CAPTEURS HORS TENSION (PAS DE CAMERA), FCS SUR BATTERIE".into()
             }
             _ => "AUCUN".into(),
@@ -1319,6 +1360,12 @@ impl Game {
             None if self.ac.crashed.is_none() => {
                 self.last_ok = mishap::Snapshot::of(&self.ac, self.sim_time);
                 self.last_ac = Some(self.ac.clone());
+                if self.ac_hist.back().is_none_or(|(t, _)| self.sim_time - t >= 0.5) {
+                    self.ac_hist.push_back((self.sim_time, self.ac.clone()));
+                    while self.ac_hist.len() > 12 {
+                        self.ac_hist.pop_front();
+                    }
+                }
             }
             None => {
                 let cause = self.ac.crashed.clone().unwrap_or_default();
@@ -1552,6 +1599,7 @@ impl Game {
                     "MOTEUR" | "STATO" => Some("EXPLOSION DE LA CHAMBRE DE COMBUSTION DU STATORÉACTEUR"),
                     "GOUVERNES" | "FCS" => Some("DESTRUCTION DES GOUVERNES (FCS) — CHARGE AÉRODYNAMIQUE EXCESSIVE"),
                     "STRUCTURE" => Some("RUPTURE STRUCTURELLE — FACTEUR DE CHARGE"),
+                    "SURPRESSION" | "Q" => Some("RUPTURE STRUCTURELLE — PRESSION DYNAMIQUE EXCESSIVE"),
                     _ => None,
                 };
                 match why {
@@ -1931,6 +1979,7 @@ impl Game {
                         ac.set_failure(f, false);
                     }
                 }
+                ac.damage = systems::Failures::default();
                 self.link.tx_fail = false;
                 self.link.sat_fail = false;
                 self.degraded = None;

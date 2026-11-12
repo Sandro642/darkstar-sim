@@ -552,3 +552,9 @@ Le SR-72 est un avion de reconnaissance : sa charge utile est simulée.
     AP ENGD/DISC.
   - Horizon : colonne TAS / FPA / limite de g / hauteur d'énergie, mémos GCAS OFF, PITOT ICE,
     G LIM HIGH, FUEL COOL OFF.
+- v1.33.1 : reconnexion après incident — les dégâts de l'incident ne s'affichent plus comme des
+  pannes injectées (« DEGAT » ambre, non commutables, effacés par TOUT REPARER) ; surpression (q
+  excessive) : sondes + FCS en loi directe, pilotage par instructions possible (plus de perte totale
+  du FCS) ; reprise ~2 s avant l'incident (la dernière trame était déjà irrécupérable) ; autonomie
+  de bord : l'AP s'engage (ailes à plat, assiette tenue ou remise en palier) si les gouvernes
+  répondent. Instruction d'essai INCIDENT SURPRESSION.

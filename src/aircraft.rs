@@ -241,6 +241,8 @@ pub struct Aircraft {
     pub g_min: f64,
     pub fcs: Fcs,
     pub fails: systems::Failures,
+    /// Dégâts réels d'un incident (distincts des pannes injectées pour l'essai)
+    pub damage: systems::Failures,
     pub elec: systems::Elec,
     /// Sortie de secours du train (gravité) engagée.
     pub gear_alt: bool,
@@ -446,6 +448,7 @@ impl Aircraft {
             g_min: 1.0,
             fcs: Fcs::default(),
             fails: systems::Failures::default(),
+            damage: systems::Failures::default(),
             elec: systems::Elec::new(),
             gear_alt: false,
             fcs_overload_t: 0.0,
