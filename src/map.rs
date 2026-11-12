@@ -64,7 +64,7 @@ impl MapView {
         }
     }
 
-    pub fn draw(&mut self, world: &World, tiles: &mut Tiles, wx: &crate::weather::Weather, rf: &crate::refuel::Refuel, cb: &crate::combat::Combat, recon: &crate::recon::Recon, ac: &Aircraft, r: Rect, dest: usize, time: f64) {
+    pub fn draw(&mut self, world: &World, tiles: &mut Tiles, wx: &crate::weather::Weather, rf: &crate::refuel::Refuel, cb: &crate::combat::Combat, recon: &crate::recon::Recon, ac: &Aircraft, r: Rect, dest: usize, route: &[(f64, f64, String)], time: f64) {
         if self.follow {
             // Mercator : au-delà de ±85° la carte n'existe pas ; centre limité, avion décalé vers le bord
             self.center = (ac.lat.clamp(-80.0, 80.0), ac.lon);
@@ -224,18 +224,36 @@ impl MapView {
             txt("R-2508", p.x, p.y, 13.0, zc);
         }
 
-        // Route orthodromique vers la destination
+        // Route : plan de vol FMS (points restants) ou orthodromie vers la destination
         let apt = &AIRPORTS[dest];
-        let (dist, brg) = dist_brg(ac.lat, ac.lon, apt.lat, apt.lon);
-        let n = 64;
-        let mut prev = to_s(ac.lat, ac.lon);
-        for i in 1..=n {
-            let (la, lo) = destination(ac.lat, ac.lon, brg, dist * i as f64 / n as f64);
-            let p = to_s(la, lo);
-            if (p.x - prev.x).abs() < r.w * 0.5 {
-                draw_line(prev.x, prev.y, p.x, p.y, 2.0, MAGENTA_S);
+        let legs: Vec<(f64, f64)> = if route.is_empty() { vec![(apt.lat, apt.lon)] } else { route.iter().map(|w| (w.0, w.1)).collect() };
+        let (mut fl, mut fo) = (ac.lat, ac.lon);
+        for (k, &(tl, to)) in legs.iter().enumerate() {
+            let (dist, _) = dist_brg(fl, fo, tl, to);
+            let n = ((dist / 50_000.0) as usize).clamp(4, 64);
+            let mut prev = to_s(fl, fo);
+            let (mut cl, mut co) = (fl, fo);
+            for i in 1..=n {
+                // Pas à pas le long de l'orthodromie (relèvement recalculé à chaque pas)
+                let (dl, b) = dist_brg(cl, co, tl, to);
+                let (la, lo) = destination(cl, co, b, dl / (n - i + 1) as f64);
+                cl = la;
+                co = lo;
+                let p = to_s(la, lo);
+                if (p.x - prev.x).abs() < r.w * 0.5 {
+                    draw_line(prev.x, prev.y, p.x, p.y, 2.0, if k == 0 || route.is_empty() { MAGENTA_S } else { Color::new(0.2, 1.0, 0.35, 0.9) });
+                }
+                prev = p;
             }
-            prev = p;
+            if !route.is_empty() {
+                let p = to_s(tl, to);
+                if r.contains(p) {
+                    draw_poly_lines(p.x, p.y, 4, 5.0, 45.0, 1.5, if k == 0 { MAGENTA_S } else { WHITE });
+                    txt(&route[k].2, p.x + 7.0, p.y - 5.0, 11.0, if k == 0 { MAGENTA_S } else { WHITE });
+                }
+            }
+            fl = tl;
+            fo = to;
         }
 
         // Aéroports

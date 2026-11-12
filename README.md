@@ -572,3 +572,14 @@ Le SR-72 est un avion de reconnaissance : sa charge utile est simulée.
     d'inflammation (EGT, moteur non confiné, parois / rupture de chambre, fuite H2 sur peau chaude),
     propagation, destruction et explosion ; onglet INCENDIE avec poignées FEU, deux bouteilles,
     boucles de détection, FIRE TEST ; repère FIRE sur l'horizon. Instructions FEU, BTL, INCENDIE.
+- v1.35.0 : FMS Darkstar (« DK-FMS ») et MCDU.
+  - Onglet MCDU : écran 24 colonnes, touches de ligne, pages INIT, F-PLN, PERF, PROG, FUEL PRED,
+    DIR TO ; saisie au clavier (clic sur l'écran, ÉCHAP pour rendre le clavier au vol).
+  - SimBrief : identifiant mémorisé, IMPORT OFP (dernier OFP de l'utilisateur, route point par
+    point), GENERER SIMBRIEF (page de dispatch pré-remplie dans le navigateur). Le profil vertical
+    de l'OFP est remplacé par le profil Darkstar.
+  - DARKSTAR DISPATCH : plan calculé (orthodromie, points T/TURB, T/RAM, T/SCRM, T/D), Mach et
+    niveau par phase, temps, besoins JP-7 / H2 avec réserves.
+  - Guidage NAV sur le plan : poursuite du point actif, séquencement avec anticipation du virage,
+    DIRECT TO, insertion / suppression de points (OACI ou coordonnées). Route sur la carte.
+  - Instructions : MCDU [INIT|FPLN|PERF|PROG|FUEL|DIR], SIMBRIEF <id>, DISPATCH KPMD PHNL [FL] [M].

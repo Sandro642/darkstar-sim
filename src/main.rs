@@ -3,6 +3,7 @@
 mod aircraft;
 mod alarms;
 mod fire;
+mod fms;
 mod airports;
 mod atmosphere;
 mod elec;
@@ -109,6 +110,9 @@ struct Game {
     last_ac: Option<Aircraft>,
     /// États récents (temps simulé, avion) toutes les 0,5 s sur 6 s : reprise avant l'incident
     ac_hist: std::collections::VecDeque<(f64, Aircraft)>,
+    /// FMS / MCDU (plan de vol, SimBrief)
+    fms: fms::Fms,
+    typing: bool,
     /// Panneau d'alarmes resté allumé après une récupération (jusqu'à TOUT RÉPARER).
     tree: Option<[u8; 32]>,
     muted: bool,
@@ -285,6 +289,8 @@ impl Game {
             last_ok: mishap::Snapshot::default(),
             last_ac: None,
             ac_hist: std::collections::VecDeque::new(),
+            fms: fms::Fms::new(),
+            typing: false,
             tree: None,
             muted: false,
             thermal: thermal::ThermalSys::new(),
@@ -488,6 +494,43 @@ impl Game {
         self.bit_fail = None;
         self.acked.clear();
         self.push(Level::Info, "SYSTEM RESET : CALCULATEURS DE VOL RÉINITIALISÉS (LOI NORMALE, TRIM CENTRÉ, MÉMOIRE G)");
+    }
+
+    fn mcdu_out(&mut self, o: fms::McduOut) {
+        match o {
+            fms::McduOut::Cmd(c) => self.exec_command(&c),
+            fms::McduOut::Msg(l, m) => self.push(l, m),
+        }
+    }
+
+    fn mcdu_key(&mut self, k: fms::McduKey) {
+        match k {
+            fms::McduKey::Lsk(left, line) => {
+                if let Some(o) = self.fms.lsk(left, line, &self.ac) {
+                    self.mcdu_out(o);
+                }
+                if !self.fms.msg.is_empty() && !self.fms.scratch.is_empty() {
+                    // message affiché tant que la saisie n'est pas modifiée
+                }
+            }
+            fms::McduKey::Page(p) => {
+                self.fms.page = p;
+                self.fms.scroll = 0;
+                self.fms.msg.clear();
+            }
+            fms::McduKey::Slew(down) => self.fms.slew(down),
+            fms::McduKey::Clr => {
+                if !self.fms.msg.is_empty() {
+                    self.fms.msg.clear();
+                } else if self.fms.scratch.is_empty() {
+                    self.fms.scratch = "CLR".into();
+                } else {
+                    self.fms.scratch.pop();
+                }
+            }
+            fms::McduKey::Focus => self.fms.focus = true,
+        }
+        self.cues.push(audio::Cue::Ack);
     }
 
     fn set_gcas(&mut self, on: bool) {
@@ -866,6 +909,13 @@ impl Game {
         a
     }
 
+    /// Manche seul (flèches) pendant une saisie MCDU.
+    fn input_stick(&mut self, real_dt: f64) {
+        self.typing = true;
+        self.input(real_dt);
+        self.typing = false;
+    }
+
     fn input(&mut self, real_dt: f64) {
         let shift = is_key_down(KeyCode::LeftShift) || is_key_down(KeyCode::RightShift);
         let ac = &mut self.ac;
@@ -895,6 +945,9 @@ impl Game {
             cur + (tgt - cur).clamp(-rate * real_dt, rate * real_dt)
         };
         self.stick = (mv(self.stick.0, tp), mv(self.stick.1, tr));
+        if self.typing {
+            return;
+        }
 
         // Consignes AP
         if ac.ap.on && ac.autoland.is_none() {
@@ -1095,7 +1148,19 @@ impl Game {
             None
         };
         if self.ac.ap.lat == LatMode::Nav {
-            self.ac.ap.hdg_tgt = brg;
+            // Plan de vol FMS actif : poursuite du point actif ; sinon direct destination
+            match self.fms.guidance(&self.ac) {
+                Some((b, seq)) => {
+                    self.ac.ap.hdg_tgt = b;
+                    if let Some(m) = seq {
+                        self.push(Level::Info, m);
+                    }
+                }
+                None => self.ac.ap.hdg_tgt = brg,
+            }
+        }
+        if let Some(o) = self.fms.poll() {
+            self.mcdu_out(o);
         }
         if self.ac.ap.lat == LatMode::Loc && self.ac.approach.is_none() {
             self.ac.ap.lat = LatMode::Hdg;
@@ -1665,6 +1730,43 @@ impl Game {
                 }
                 _ => reply = Err("PAS AU POINT D'ATTENTE".into()),
             },
+            "DISPATCH" => {
+                let (o, d) = (arg(1).to_string(), arg(2).to_string());
+                let fl = num(3).unwrap_or(950.0);
+                let m = num(4).unwrap_or(6.0);
+                reply = self.fms.dispatch_now(&o, &d, fl, m);
+                if reply.is_ok() {
+                    if let Some(i) = AIRPORTS.iter().position(|a| a.icao == d) {
+                        self.dest = i;
+                    }
+                }
+            }
+            "MCDU" | "FMS" => {
+                self.tab = gcs::Tab::Mcdu;
+                self.fms.focus = true;
+                let p = match arg(1) {
+                    "FPLN" | "F-PLN" => Some(fms::Page::Fpln),
+                    "PERF" => Some(fms::Page::Perf),
+                    "PROG" => Some(fms::Page::Prog),
+                    "FUEL" => Some(fms::Page::Fuel),
+                    "DIR" => Some(fms::Page::Dir),
+                    "INIT" => Some(fms::Page::Init),
+                    _ => None,
+                };
+                if let Some(p) = p {
+                    self.fms.page = p;
+                    self.fms.scroll = 0;
+                }
+                reply = Ok("MCDU".into());
+            }
+            "SIMBRIEF" => {
+                if !arg(1).is_empty() {
+                    self.fms.user = arg(1).to_lowercase();
+                }
+                self.fms.start_fetch();
+                self.tab = gcs::Tab::Mcdu;
+                reply = if self.fms.user.is_empty() { Err("SIMBRIEF <identifiant>".into()) } else { Ok(format!("SIMBRIEF : IMPORT DE L'OFP DE {}", self.fms.user.to_uppercase())) };
+            }
             "FEU" => {
                 let z = match arg(1) {
                     "L" | "G" | "GAUCHE" => Some(0),
@@ -2250,6 +2352,7 @@ impl Game {
                     "WXR ON/OFF  WXR TILT -3 | WXR AUTO  WXR TURB ON/OFF  WXR HORIZON ON/OFF  WXR RANGE 160 (radar meteo)",
                     "GCAS ON/OFF (auto recovery)  FUELCOOL AUTO/RAM/OFF  GLIM NORM/HIGH  PITOT ON/OFF  NWS HI/LO",
                     "FEU L/R/CHAMB/H2 (poignee feu)  BTL 1/2 (extincteur)  FEU TEST  INCENDIE L/R/CHAMB/H2 (essai)",
+                    "MCDU (plan de vol, page INIT/F-PLN/PERF/PROG/FUEL/DIR)  SIMBRIEF <id> (import de l'OFP)",
                     "TANKER [OACI|OFF]  RAVITAILLEMENT (autonome)  DECROCHER  BINGO [AUTO|t]",
                     "CHAFF  FLARE  ECM ON|OFF  CMDS AUTO|MAN  TIR [I|J|K] (HACM)  ARMEMENT (page)",
                     "EMERGENCY [OFF] (ravitaillement > terrain proche > ejection)  EJECTION CONFIRME",
@@ -2429,6 +2532,31 @@ async fn main() {
                 g.console = None;
             }
             g.stick = (0.0, 0.0);
+        } else if g.tab == gcs::Tab::Mcdu && g.fms.focus && !g.ended && g.connect.is_none() {
+            // Saisie MCDU : les touches alphanumériques vont dans la ligne de saisie
+            while let Some(ch) = get_char_pressed() {
+                let c = ch.to_ascii_uppercase();
+                if (c.is_ascii_alphanumeric() || "/.-+ ".contains(c)) && g.fms.scratch.len() < 22 {
+                    if g.fms.scratch == "CLR" {
+                        g.fms.scratch.clear();
+                    }
+                    g.fms.scratch.push(c);
+                    g.fms.msg.clear();
+                }
+            }
+            if is_key_pressed(KeyCode::Backspace) {
+                g.fms.scratch.pop();
+            }
+            if is_key_pressed(KeyCode::Escape) {
+                g.fms.focus = false;
+            }
+            if is_key_pressed(KeyCode::PageDown) {
+                g.fms.slew(true);
+            }
+            if is_key_pressed(KeyCode::PageUp) {
+                g.fms.slew(false);
+            }
+            g.input_stick(real_dt);
         } else if !g.ended && g.connect.is_none() {
             while get_char_pressed().is_some() {}
             g.input(real_dt);
@@ -2481,7 +2609,8 @@ async fn main() {
         let body = Rect::new(6.0, 40.0, sw - 12.0, sh - 46.0);
         if map_full {
             g.map.input(body);
-            g.map.draw(&world, &mut tiles, &g.wx, &g.refuel, &g.combat, &g.recon, &g.ac, body, g.dest, time);
+            let route = g.fms.route();
+            g.map.draw(&world, &mut tiles, &g.wx, &g.refuel, &g.combat, &g.recon, &g.ac, body, g.dest, &route, time);
         } else {
             // Écran principal Darkstar, aux proportions de l'écran du cockpit
             let mfd_w = (body.w * 0.67).min((body.h - 120.0) * mfd::COCKPIT_ASPECT).floor();
@@ -2579,7 +2708,8 @@ async fn main() {
             let map_h = (body.h * 0.36).floor();
             let mr = Rect::new(rx, body.y, rw, map_h);
             g.map.input(mr);
-            g.map.draw(&world, &mut tiles, &g.wx, &g.refuel, &g.combat, &g.recon, &g.ac, mr, g.dest, time);
+            let route = g.fms.route();
+            g.map.draw(&world, &mut tiles, &g.wx, &g.refuel, &g.combat, &g.recon, &g.ac, mr, g.dest, &route, time);
             let tabs_r = Rect::new(rx, mr.y + mr.h + 6.0, rw, 54.0);
             let mut alert_tabs = Vec::new();
             if g.ac.ovr_engine || g.ac.ovr_fbw || g.ac.h2_dump || g.ac.fuel_dump {
@@ -2599,6 +2729,11 @@ async fn main() {
                     }
                 }
                 gcs::Tab::Moteurs => panels::draw_engines(&g.ac, &g.chambers, cr, time),
+                gcs::Tab::Mcdu => {
+                    if let Some(k) = fms::draw_mcdu(&g.fms, &g.ac, cr, time) {
+                        g.mcdu_key(k);
+                    }
+                }
                 gcs::Tab::Incendie => {
                     if let Some(a) = fire::draw_fire(&g.ac, cr, time) {
                         let cmd = match a {
