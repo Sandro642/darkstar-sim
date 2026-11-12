@@ -454,6 +454,8 @@ pub struct Fms {
     pub focus: bool,
     /// Gestion verticale et de la vitesse par le FMS (VNAV + Mach géré + transitions moteur)
     pub vnav: bool,
+    /// Type d'avion SimBrief utilisé pour générer la route (code SimBrief, ex. B77W, A359)
+    pub acft: String,
     desc_started: bool,
     land_sent: bool,
     /// Dernière phase annoncée
@@ -608,7 +610,7 @@ impl Fms {
 
     pub fn new() -> Fms {
         let user = std::fs::read_to_string(config_path()).map(|s| s.trim().to_string()).unwrap_or_default();
-        Fms { fpln: None, temp: None, page: Page::Init, scroll: 0, scratch: String::new(), msg: String::new(), user, from_to: (String::new(), String::new()), crz: (950.0, 6.0), fetch: Arc::new(Mutex::new(Fetch::Idle)), focus: true, vnav: true, desc_started: false, land_sent: false, phase: "" }
+        Fms { fpln: None, temp: None, page: Page::Init, scroll: 0, scratch: String::new(), msg: String::new(), user, from_to: (String::new(), String::new()), crz: (950.0, 6.0), fetch: Arc::new(Mutex::new(Fetch::Idle)), focus: true, acft: "B77W".into(), vnav: true, desc_started: false, land_sent: false, phase: "" }
     }
 
     /// Plan affiché / modifié : temporaire s'il existe, sinon actif.
@@ -643,7 +645,9 @@ impl Fms {
     /// Ouvre la page de génération SimBrief pré-remplie dans le navigateur.
     pub fn open_simbrief(&mut self) {
         let (o, d) = &self.from_to;
-        let url = format!("https://www.simbrief.com/system/dispatch.php?orig={o}&dest={d}&type=CONC&fl={:.0}&callsign=DKS01", self.crz.0 * 100.0);
+        // SimBrief ne connaît pas le Darkstar : un long-courrier sert à tracer la route (seule la
+        // route est reprise à l'import, le profil vertical est celui du Darkstar)
+        let url = format!("https://dispatch.simbrief.com/options/custom?orig={o}&dest={d}&type={}", self.acft);
         let ok = std::process::Command::new("/usr/bin/open").arg(&url).spawn().is_ok();
         self.msg = if ok { "SIMBRIEF OUVERT : GENERER PUIS IMPORT".into() } else { "NAVIGATEUR INDISPONIBLE".into() };
     }
@@ -759,6 +763,14 @@ impl Fms {
             }
             (Page::Init, false, 1) => self.start_fetch(),
             (Page::Init, false, 2) => self.open_simbrief(),
+            (Page::Init, false, 3) => {
+                if (3..=5).contains(&sp.len()) && sp.chars().all(|c| c.is_ascii_alphanumeric()) {
+                    self.acft = sp.clone();
+                    self.scratch.clear();
+                } else {
+                    self.msg = "CODE SIMBRIEF : B77W".into();
+                }
+            }
             (Page::Init, true, 3) => {
                 let (o, d) = self.from_to.clone();
                 match dispatch(&o, &d, self.crz.0, self.crz.1) {
@@ -932,7 +944,7 @@ fn page_lines(f: &Fms, ac: &Aircraft) -> (String, Color, Vec<(Line, Line)>) {
             let st = if f.busy() { "EN COURS" } else { "IMPORT OFP>" };
             rows.push((ln(" FLT NBR", LBL_M, "", LBL_M), ln(f.plan().map(|p| p.flt.clone()).unwrap_or("DKS01".into()), CYAN_M, st, WHITE_M)));
             rows.push((ln(" CRZ FL/MACH", LBL_M, "GENERER", LBL_M), ln(format!("FL{:.0}/M{:.1}", f.crz.0, f.crz.1), CYAN_M, "SIMBRIEF>", WHITE_M)));
-            rows.push((ln(" CALCUL PLAN", LBL_M, "", LBL_M), ln("<DARKSTAR DISPATCH", WHITE_M, "", WHITE_M)));
+            rows.push((ln(" CALCUL PLAN", LBL_M, "AVION SIMBRIEF ", LBL_M), ln("<DARKSTAR DISPATCH", WHITE_M, f.acft.clone(), CYAN_M)));
             let info = match f.plan() {
                 Some(p) => format!("{} {}-{} {:.0}NM", p.source, p.origin, p.dest, p.total() / NM),
                 None => "AUCUN PLAN".into(),

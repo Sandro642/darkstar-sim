@@ -593,3 +593,6 @@ Le SR-72 est un avion de reconnaissance : sa charge utile est simulée.
     Essai KPMD → PHNL de bout en bout : M6 FL900, posé à Honolulu en 69 min.
   - 69 aéroports ajoutés (Amériques, Europe, Moyen-Orient, Afrique, Asie, Océanie, îles du
     Pacifique, bases : Vandenberg, Beale, Groom Lake, Tonopah, Brize Norton, Wake…) : 96 au total.
+- v1.36.1 : SimBrief — la page de génération s'ouvrait avec un type d'avion inconnu (« CONC ») et
+  demandait de choisir un avion : type long-courrier valide par défaut (B77W), modifiable dans le
+  MCDU (INIT, ligne 4 à droite) ; nouvelle adresse de dispatch SimBrief.
