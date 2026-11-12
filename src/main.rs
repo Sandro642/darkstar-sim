@@ -654,16 +654,24 @@ impl Game {
         // déconnexion (attitude, vitesse, configuration, modes, pannes réelles), liaison rétablie
         // État ~2 s avant l'incident (la dernière trame est souvent déjà irrécupérable : rupture,
         // surpression), sinon la dernière trame valide
+        // Dernier état SÛR des 6 dernières secondes (au moins 1 s avant l'incident) : facteur de
+        // charge, pression dynamique et incidence dans les limites ; sinon le plus ancien
         let t_inc = self.sim_time;
+        let safe = |a: &Aircraft| (-0.5..=3.0).contains(&a.d.nz) && a.d.q < 0.9 * Q_LIMIT && a.d.alpha.to_degrees() < 12.0 && a.skin_temp - 273.15 < SKIN_LIMIT_C;
         let mut ac = self
             .ac_hist
             .iter()
             .rev()
-            .find(|(t, _)| t_inc - t >= 2.0)
+            .filter(|(t, _)| t_inc - t >= 1.0)
+            .find(|(_, a)| safe(a))
+            .or_else(|| self.ac_hist.front())
             .map(|(_, a)| a.clone())
             .or_else(|| self.last_ac.clone())
             .unwrap_or_else(|| self.ac.clone());
         self.ac_hist.clear();
+        // Plus de rotation en cours ni de manœuvre : l'avion repart stabilisé sur sa trajectoire
+        ac.calm_rates();
+        ac.theta = ac.gamma + ac.d.alpha.clamp(0.0, 4f64.to_radians());
         ac.crashed = None;
         let kind = self.mishap.as_ref().map(|m| m.kind);
         let cause = self.mishap.as_ref().map(|m| m.cause.to_uppercase()).unwrap_or_default();

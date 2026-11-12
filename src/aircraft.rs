@@ -514,6 +514,12 @@ impl Aircraft {
         (v_lof * 0.92 / 5.0).round() * 5.0
     }
 
+    /// Annule les vitesses angulaires et la turbulence en cours (reprise après reconnexion).
+    pub fn calm_rates(&mut self) {
+        self.rates = [0.0; 4];
+        self.gust = [0.0; 3];
+    }
+
     pub fn mass(&self) -> f64 {
         M_EMPTY + self.fuel + self.h2
     }
@@ -1489,7 +1495,7 @@ impl Aircraft {
                 let (we, wn) = self.wind;
                 let cross = we * self.psi.cos() - wn * self.psi.sin(); // vent venant de gauche > 0
                 let k = ((self.tas - 15.0) / 40.0).clamp(0.0, 1.0) * (1.0 - ((self.tas - 70.0) / 30.0).clamp(0.0, 1.0) * 0.6);
-                self.psi -= (cross * 0.0025 * k).clamp(-0.02, 0.02) * dt;
+                self.psi -= (cross * 0.0004 * k).clamp(-0.004, 0.004) * dt;
             }
             if vert_force > mass * g && self.theta > 0.02 {
                 self.on_ground = false;

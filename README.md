@@ -664,3 +664,8 @@ Le SR-72 est un avion de reconnaissance : sa charge utile est simulée.
 - v1.44.0 : horizon style HYBRIDE Darkstar / F-35 (par défaut) — échelles défilantes et blocs de
   données Darkstar, langage visuel F-35 : symbologie et chiffres verts, valeurs encadrées en vert,
   échelles allégées à filet vert discret. HUD STYLE HYBRIDE | F35 | DARKSTAR.
+- v1.44.1 : reconnexion — l'avion reprend le dernier état sûr des 6 dernières secondes (facteur
+  de charge, pression dynamique, incidence, peau dans les limites) au lieu d'un état fixe 2 s
+  avant (souvent déjà en pleine manœuvre : nouvelle rupture aussitôt), vitesses de rotation
+  annulées et incidence ramenée ; effet girouette au sol fortement réduit (sortie de piste au
+  décollage manuel sans correction).
