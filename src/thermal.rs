@@ -102,6 +102,15 @@ impl ThermalSys {
         let alpha = ac.d.alpha.to_degrees().max(0.0);
         let e = &ac.eng;
         let fuel_frac = ac.fuel / FUEL_MAX;
+        // FTMS : part de la chaleur restant dans le carburant. AUTO : échangeur H2 (tant qu'il reste
+        // de l'hydrogène) + air dynamique ; RAM AIR : air dynamique seul, inefficace quand l'air
+        // d'impact devient plus chaud que le carburant (haut Mach) ; OFF : aucun refroidissement.
+        let ram_k = (0.45 + ((mach - 2.0) / 4.0).clamp(0.0, 1.0) * 0.55).min(1.0);
+        let ftms_k = match ac.fuel_cool {
+            0 if ac.h2 > 300.0 && !ac.fails.has(crate::systems::Fail::ScramCool) => 0.22,
+            0 | 1 => ram_k,
+            _ => 1.0,
+        };
         let tank = self.reading("TC-501");
         let skin_avg = self.reading("TC-131");
         let avion = self.reading("TC-601");
@@ -143,9 +152,11 @@ impl ThermalSys {
                 Kind::RamWall => e.ram_wall,
                 Kind::ScramWall => e.scram_wall,
                 Kind::Nozzle => ram_w.max(scram_w) * 0.45 + rise * 0.25 + e.egt.max(0.0) * 0.08,
-                Kind::FuelTank => 20.0 + (skin_avg - 20.0).max(0.0) * 0.25 * (1.0 - fuel_frac * 0.6),
+                // Réservoirs : chaleur de la cellule, évacuée par le FTMS (boucle carburant → échangeur
+                // à hydrogène liquide, puits froid à -253 °C, puis échangeur air dynamique en appoint)
+                Kind::FuelTank => 20.0 + (skin_avg - 20.0).max(0.0) * 0.25 * (1.0 - fuel_frac * 0.6) * ftms_k,
                 // Carburant après l'échangeur : échauffé par la cellule, pas par le débit (puits de chaleur)
-                Kind::FuelInj => tank + 30.0 + rise * 0.12 + if e.ram == RamState::Lit || e.scram == ScramState::Lit { 40.0 } else { 0.0 },
+                Kind::FuelInj => tank + 30.0 + (rise * 0.12 + if e.ram == RamState::Lit || e.scram == ScramState::Lit { 40.0 } else { 0.0 }) * ftms_k.max(0.4),
                 Kind::Avionics => ac.elec.ebay_temp + (tank - 20.0).max(0.0) * 0.15,
                 Kind::Hydraulic => 40.0 + rise * 0.12,
                 // Baie isolée et refroidie par la boucle carburant (pneus)

@@ -20,6 +20,11 @@ pub enum MenuAction {
     Bit,
     SystemReset,
     YawTrim(f64),
+    Gcas(bool),
+    FuelCool(u8),
+    GLim(bool),
+    PitotHeat(bool),
+    Nws(bool),
 }
 
 pub struct BitState {
@@ -98,13 +103,14 @@ fn lit_square(r: Rect, lit: bool, time: f64) -> bool {
 pub fn draw_menu(ac: &Aircraft, bit: &BitState, r: Rect, time: f64) -> Option<MenuAction> {
     let mut out = None;
     let e = &ac.eng;
-    panel(r, "CONSOLE - ENGINE/APU  /  FLT CNTRL");
+    panel(r, "CONSOLE - ENGINE/APU  /  FLT CNTRL  /  SYSTEMS");
     // Deux platines côte à côte (onglet de la colonne de droite)
     let inner_w = r.w - 30.0;
-    let ph = r.h - 40.0;
+    let total_h = r.h - 40.0;
+    let ph = (total_h * 0.62).floor();
 
     // --- Platine ENGINE/APU ---
-    let p1 = Rect::new(r.x + 10.0, r.y + 30.0, (inner_w * 0.56).floor(), ph);
+    let p1 = Rect::new(r.x + 10.0, r.y + 30.0, (inner_w * 0.52).floor(), ph);
     plate(p1, "ENGINE/APU");
     let x0 = p1.x + 50.0;
     let w = p1.w - 70.0;
@@ -245,5 +251,56 @@ pub fn draw_menu(ac: &Aircraft, bit: &BitState, r: Rect, time: f64) -> Option<Me
     if asym.abs() > 5.0 {
         txt_c(&format!("ASYM POUSSEE {asym:+.0} kN -> TRIM {}", if asym > 0.0 { "LEFT" } else { "RIGHT" }), col(0.82), p2.y + p2.h - 30.0, 11.0, AMBER);
     }
+
+    // --- Platine SYSTEMS : protections et servitudes ---
+    let p3 = Rect::new(r.x + 10.0, p1.y + ph + 10.0, inner_w + 10.0, total_h - ph - 10.0);
+    plate(p3, "SYS");
+    let x0 = p3.x + 50.0;
+    let w = p3.w - 66.0;
+    let n = 5.0;
+    let cx = |k: f32| x0 + w * (k + 0.5) / n;
+    let yl = p3.y + 22.0;
+    let yt = p3.y + p3.h * 0.52;
+    let state = |k: f32, s: &str, c: Color| txt_c(s, cx(k), yt + 46.0, 11.0, c);
+    // AUTO GCAS
+    txt_c("AUTO GCAS", cx(0.0), yl, 12.0, LEGEND);
+    if let Some(np) = toggle(cx(0.0), yt, if ac.gcas_on { 0 } else { 1 }, 2) {
+        out = Some(MenuAction::Gcas(np == 0));
+    }
+    let (gs, gc) = if ac.gcas_active { ("FLY UP", RED) } else if ac.gcas_on { ("ARME", GREEN_S) } else { ("OFF", AMBER) };
+    state(0.0, gs, gc);
+    // FUEL COOL (FTMS)
+    txt_c("FUEL COOL", cx(1.0), yl, 12.0, LEGEND);
+    if let Some(np) = toggle(cx(1.0), yt, ac.fuel_cool as usize, 3) {
+        out = Some(MenuAction::FuelCool(np as u8));
+    }
+    txt(["AUTO", "RAM", "OFF"][0], cx(1.0) + 20.0, yt - 18.0, 10.0, LEGEND);
+    txt(["AUTO", "RAM", "OFF"][1], cx(1.0) + 20.0, yt + 4.0, 10.0, LEGEND);
+    txt(["AUTO", "RAM", "OFF"][2], cx(1.0) + 20.0, yt + 26.0, 10.0, LEGEND);
+    let (fs, fc) = match ac.fuel_cool {
+        0 if ac.h2 > 300.0 => ("H2 + RAM", GREEN_S),
+        0 | 1 => ("RAM AIR", if ac.d.mach > 3.0 { AMBER } else { LEGEND }),
+        _ => ("OFF", AMBER),
+    };
+    state(1.0, fs, fc);
+    // G LIMITER
+    txt_c("G LIMIT", cx(2.0), yl, 12.0, LEGEND);
+    if let Some(np) = toggle(cx(2.0), yt, if ac.g_lim_high { 0 } else { 1 }, 2) {
+        out = Some(MenuAction::GLim(np == 0));
+    }
+    state(2.0, &format!("{} {:.1} G", if ac.g_lim_high { "HIGH" } else { "NORM" }, ac.nz_law_max()), if ac.g_lim_high { AMBER } else { LEGEND });
+    // PITOT HEAT
+    txt_c("PITOT HEAT", cx(3.0), yl, 12.0, LEGEND);
+    if let Some(np) = toggle(cx(3.0), yt, if ac.pitot_heat { 0 } else { 1 }, 2) {
+        out = Some(MenuAction::PitotHeat(np == 0));
+    }
+    let (ps, pc) = if ac.pitot_iced() { ("GIVRE", RED) } else if ac.pitot_heat { ("ON", LEGEND) } else { ("OFF", AMBER) };
+    state(3.0, ps, pc);
+    // NWS (roulette avant)
+    txt_c("NWS GAIN", cx(4.0), yl, 12.0, LEGEND);
+    if let Some(np) = toggle(cx(4.0), yt, if ac.nws_hi { 0 } else { 1 }, 2) {
+        out = Some(MenuAction::Nws(np == 0));
+    }
+    state(4.0, if ac.nws_hi { "HI 30 DEG" } else { "LO 12 DEG" }, LEGEND);
     out
 }

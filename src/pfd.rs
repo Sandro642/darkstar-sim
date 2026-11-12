@@ -350,7 +350,8 @@ fn draw_svs_overlay(ac: &Aircraft, v: &View, s: Rect, info: &PfdInfo) {
         let ra = d.agl / FT;
         let c = if ra < 200.0 { AMBER } else { GREEN_S };
         let s_ra = if ra < 50.0 { format!("{:.0}", ra) } else { format!("{:.0}", (ra / 10.0).round() * 10.0) };
-        txt_c(&s_ra, cx, cy + 80.0, 28.0, c);
+        // Sous l'aile droite de la maquette (la fenêtre d'alarmes occupe l'axe)
+        txt_c(&s_ra, cx + 120.0, cy + 46.0, 26.0, c);
     }
 
     // Enregistrement
@@ -404,17 +405,124 @@ fn draw_svs_overlay(ac: &Aircraft, v: &View, s: Rect, info: &PfdInfo) {
         txt(&format!("DECEL {dec:.2} G"), s.x + 10.0, oy - 2.0, 11.0, WHITE);
     }
 
-    // Alertes
-    let mut yy = cy + 120.0;
-    for (_, msg) in info.alerts.iter().filter(|(l, _)| *l == Level::Warning).take(3) {
-        if (info.time * 2.0).fract() < 0.7 {
-            let w = txt_w(msg, 22.0) + 24.0;
-            draw_rectangle(cx - w / 2.0, yy - 22.0, w, 30.0, Color::new(0.0, 0.0, 0.0, 0.7));
-            txt_c(msg, cx, yy, 22.0, RED);
-        }
-        yy += 32.0;
-    }
+    // Alarmes façon F/A-18 / Rafale
+    hud_cues(ac, cx, cy, bank_rad, info.time);
+    // Au-dessus de la bannière d'approche / des barres ILS quand elles sont affichées
+    let floor = if crate::appr::visible(ac) { s.y + s.h - crate::appr::BANNER_H - 64.0 } else { s.y + s.h - 60.0 };
+    alarm_window(ac, info, cx, (cy + 118.0).min(floor - 10.0));
     scissor(None);
+}
+
+/// Repères de vol critiques en grosses lettres au-dessus de la maquette (style HUD F/A-18) :
+/// FLY UP / chevrons Auto-GCAS, OVER G, AOA, OVERSPEED, SPEED. Rouge clignotant, ambre fixe.
+fn hud_cues(ac: &Aircraft, cx: f32, cy: f32, bank_rad: f32, time: f64) {
+    if ac.on_ground || ac.crashed.is_some() {
+        return;
+    }
+    let d = &ac.d;
+    let fast = (time * 3.0).fract() < 0.6;
+    let y = cy - bank_rad * 0.42;
+    // Auto-GCAS : chevrons qui se referment avant le déclenchement, puis FLY UP
+    if ac.gcas_active {
+        if fast {
+            for k in 0..3 {
+                let yy = y + 26.0 - k as f32 * 13.0;
+                stroke(&[vec2(cx - 34.0, yy + 12.0), vec2(cx, yy), vec2(cx + 34.0, yy + 12.0)], false, 3.5, RED);
+            }
+            let msg = if ac.gcas_ovr { "FLY UP  5G" } else { "FLY UP" };
+            let w = txt_w(msg, 24.0) + 22.0;
+            rrect(Rect::new(cx - w / 2.0, y - 46.0, w, 30.0), 5.0, Color::new(0.35, 0.0, 0.0, 0.85));
+            txt_c(msg, cx, y - 24.0, 24.0, RED);
+        }
+        return;
+    }
+    if ac.gcas_on && ac.gcas_t < 6.0 {
+        // Chevrons convergents : l'écart se ferme au déclenchement
+        let k = (ac.gcas_t / 6.0).clamp(0.0, 1.0) as f32;
+        let gap = 20.0 + 90.0 * k;
+        let c = if ac.gcas_t < 2.5 { RED } else { AMBER };
+        for sgn in [-1.0f32, 1.0] {
+            let x = cx + sgn * gap;
+            stroke(&[vec2(x + sgn * 16.0, y - 14.0), vec2(x, y), vec2(x + sgn * 16.0, y + 14.0)], false, 3.0, c);
+        }
+        if ac.gcas_t < 2.5 && fast {
+            txt_c("PULL UP", cx, y - 22.0, 20.0, RED);
+        }
+        return;
+    }
+    let nmax = ac.fcs.nz_max.max(1.5);
+    let amax = ac.fcs.alpha_max.max(1.0);
+    let keas = d.keas;
+    let cue: Option<(&str, bool)> = if d.nz > nmax * 0.95 || d.nz < -1.5 {
+        Some(("OVER G", true))
+    } else if d.alpha.to_degrees() > amax * 0.92 && keas < 300.0 {
+        Some(("AOA", true))
+    } else if d.q > 0.92 * Q_LIMIT {
+        Some(("OVERSPEED", true))
+    } else if !ac.gear_down && keas < 150.0 && d.agl > 100.0 {
+        Some(("SPEED", false))
+    } else {
+        None
+    };
+    if let Some((m, red)) = cue {
+        if !red || fast {
+            let c = if red { RED } else { AMBER };
+            let w = txt_w(m, 22.0) + 22.0;
+            rrect_lines(Rect::new(cx - w / 2.0, y - 18.0, w, 28.0), 4.0, 2.0, c);
+            txt_c(m, cx, y + 3.0, 22.0, c);
+        }
+    }
+}
+
+/// Fenêtre d'alarmes façon Rafale : cadre rouge « ALARME » (voyants rouges, clignotants) et ligne
+/// ambre « PANNE » (voyants ambre), sans répéter les mémos déjà affichés à gauche.
+fn alarm_window(ac: &Aircraft, info: &PfdInfo, cx: f32, y: f32) {
+    if ac.crashed.is_some() {
+        return;
+    }
+    const MEMO: [&str; 5] = ["ENG OVRD", "FADEC LIMIT", "FUEL DUMP", "H2 DUMP", "FCS DIRECT"];
+    let lit = crate::alarms::lit(ac, info.alerts);
+    let skip = |n: &str, l: u8| MEMO.contains(&n) && !(n == "FCS DIRECT" && l == 2);
+    let reds: Vec<&str> = lit.iter().filter(|(n, l)| *l == 2 && !skip(n, *l)).map(|(n, _)| *n).collect();
+    let ambers: Vec<&str> = lit.iter().filter(|(n, l)| *l == 1 && !skip(n, *l)).map(|(n, _)| *n).collect();
+    let blink = (info.time * 2.0).fract() < 0.65;
+    // Une seule ligne compacte : [ALARME] rouges  [PANNE] ambres
+    let red_body = {
+        let n = reds.iter().take(3).copied().collect::<Vec<_>>().join("  ");
+        if reds.len() > 3 { format!("{n}  +{}", reds.len() - 3) } else { n }
+    };
+    let amb_body = {
+        let n = ambers.iter().take(3).copied().collect::<Vec<_>>().join("  ");
+        if ambers.len() > 3 { format!("{n}  +{}", ambers.len() - 3) } else { n }
+    };
+    let ta = txt_w("ALARME", 13.0) + 12.0;
+    let tp = txt_w("PANNE", 13.0) + 12.0;
+    let w_red = if reds.is_empty() { 0.0 } else { ta + txt_w(&red_body, 16.0) + 18.0 };
+    let w_amb = if ambers.is_empty() { 0.0 } else { tp + txt_w(&amb_body, 14.0) + 16.0 };
+    let gap = if w_red > 0.0 && w_amb > 0.0 { 8.0 } else { 0.0 };
+    if w_red + w_amb == 0.0 {
+        return;
+    }
+    let mut x = cx - (w_red + gap + w_amb) / 2.0;
+    if w_red > 0.0 {
+        let b = Rect::new(x, y - 18.0, w_red, 26.0);
+        draw_rectangle(b.x, b.y, b.w, b.h, Color::new(0.0, 0.0, 0.0, 0.65));
+        draw_rectangle_lines(b.x, b.y, b.w, b.h, 2.0, RED);
+        draw_rectangle(b.x, b.y, ta, b.h, if blink { RED } else { Color::new(0.45, 0.0, 0.0, 1.0) });
+        txt_c("ALARME", b.x + ta / 2.0, y, 13.0, BLACK);
+        if blink {
+            txt(&red_body, b.x + ta + 9.0, y + 1.0, 16.0, RED);
+        }
+        x += w_red + gap;
+    }
+    if w_amb > 0.0 {
+        let b = Rect::new(x, y - 16.0, w_amb, 22.0);
+        draw_rectangle(b.x, b.y, b.w, b.h, Color::new(0.0, 0.0, 0.0, 0.55));
+        draw_rectangle_lines(b.x, b.y, b.w, b.h, 1.5, AMBER);
+        draw_rectangle(b.x, b.y, tp, b.h, AMBER);
+        txt_c("PANNE", b.x + tp / 2.0, y - 1.0, 13.0, BLACK);
+        txt(&amb_body, b.x + tp + 8.0, y, 14.0, AMBER);
+    }
 }
 
 /// Erreur des données air quand les sondes sont dégradées (Mach > 5.5 sans AIR DATA OVRD).

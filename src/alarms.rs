@@ -53,6 +53,11 @@ const LIGHTS: [Light; 32] = [
     ("SENS FAIL", |_, al| has(al, "SENS FAIL") as u8),
 ];
 
+/// Voyants allumés (nom, 1 ambre / 2 rouge), pour la fenêtre d'alarmes de l'horizon.
+pub fn lit(ac: &Aircraft, alerts: &[(Level, String)]) -> Vec<(&'static str, u8)> {
+    LIGHTS.iter().map(|(n, f)| (*n, f(ac, alerts))).filter(|(_, l)| *l > 0).collect()
+}
+
 /// Nombre de voyants allumés (pour signaler l'onglet).
 pub fn lit_count(ac: &Aircraft, alerts: &[(Level, String)]) -> usize {
     LIGHTS.iter().filter(|(_, f)| f(ac, alerts) > 0).count()

@@ -200,6 +200,24 @@ pub struct Aircraft {
     pub fadec_limit: f64,
     /// Données air (pitot) remplacées par les données inertielles/GPS.
     pub air_data_ovrd: bool,
+    /// Auto-GCAS (récupération automatique avant impact sol), désactivable à la console
+    pub gcas_on: bool,
+    /// Récupération en cours ; `gcas_ovr` : protections FCS dépassées pour sauver l'avion
+    pub gcas_active: bool,
+    pub gcas_ovr: bool,
+    /// Temps (s) avant déclenchement de la récupération (alerte chevrons sur l'horizon)
+    pub gcas_t: f64,
+    gcas_clear_t: f64,
+    gcas_g_max: f64,
+    /// Refroidissement carburant (FTMS) : 0 AUTO (échangeur H2 + air dynamique), 1 RAM AIR, 2 OFF
+    pub fuel_cool: u8,
+    /// Limiteur de g : false NORM (3 g / 2 g au-delà de Mach 4), true HIGH (4 g / 2,5 g)
+    pub g_lim_high: bool,
+    /// Réchauffage des sondes ; givrage accumulé (s) quand il est coupé par air froid
+    pub pitot_heat: bool,
+    pitot_ice: f64,
+    /// Orientation de la roulette avant : gain HI (manœuvres lentes) ou LO (course au décollage)
+    pub nws_hi: bool,
     /// Compensateur de lacet (-1 gauche .. +1 droite).
     pub yaw_trim: f64,
     pub throttle: f64,
@@ -348,6 +366,17 @@ impl Aircraft {
             ovr_fbw: false,
             fadec_limit: 1.0,
             air_data_ovrd: false,
+            gcas_on: true,
+            gcas_active: false,
+            gcas_ovr: false,
+            gcas_t: f64::INFINITY,
+            gcas_clear_t: 0.0,
+            gcas_g_max: 0.0,
+            fuel_cool: 0,
+            g_lim_high: false,
+            pitot_heat: true,
+            pitot_ice: 0.0,
+            nws_hi: false,
             yaw_trim: 0.0,
             throttle: 0.0,
             gear_down: true,
@@ -703,8 +732,55 @@ impl Aircraft {
 
     /// Données anémométriques dégradées (échauffement des sondes au-delà de Mach 5.5).
     pub fn adc_degraded(&self) -> bool {
-        (self.d.mach > 5.5 || self.fails.has(Fail::Adc)) && !self.air_data_ovrd
+        (self.d.mach > 5.5 || self.fails.has(Fail::Adc) || self.pitot_iced()) && !self.air_data_ovrd
     }
+
+    /// Sondes givrées (réchauffage coupé plus de 45 s par air froid).
+    pub fn pitot_iced(&self) -> bool {
+        self.pitot_ice > 45.0
+    }
+
+    /// Facteur de charge maximal de la loi normale selon le limiteur et le Mach.
+    pub fn nz_law_max(&self) -> f64 {
+        match (self.g_lim_high, self.d.mach > 4.0) {
+            (false, false) => 3.0,
+            (false, true) => 2.0,
+            (true, false) => 4.0,
+            (true, true) => 2.5,
+        }
+    }
+
+    /// Auto-GCAS : marge (m) entre la hauteur disponible et la hauteur nécessaire pour une
+    /// récupération (remise à plat puis ressource à `n` g), relief devant compris, et temps avant
+    /// déclenchement. Négatif : il faut récupérer maintenant.
+    pub fn gcas_margin(&self, n: f64) -> (f64, f64) {
+        let v = self.tas.max(30.0);
+        let g = G0;
+        let gam = self.gamma;
+        let mach = self.d.mach;
+        let pmax = (35.0f64).to_radians() / (1.0 + mach / 6.0);
+        let t_roll = 0.6 + self.phi.abs() / pmax.max(0.05) + if self.phi.abs() > std::f64::consts::FRAC_PI_2 { 0.8 } else { 0.0 };
+        let sink = (-v * gam.sin()).max(0.0);
+        // Pendant la remise à plat la pente continue de se creuser (portance hors de la verticale)
+        let dgam = ((1.0 - self.phi.cos()) * g / v * t_roll * 0.5).min(1.2);
+        let gam_end = (gam - dgam).clamp(-1.5, 0.0);
+        let h_roll = (-v * ((gam + gam_end) / 2.0).sin()).max(0.0) * t_roll;
+        let r = v * v / (g * (n - 1.0).max(0.3));
+        let h_pull = r * (1.0 - gam_end.cos());
+        // Relief sous la trajectoire de récupération (jusqu'à ~12 s devant)
+        let mut terr = ground_elev(self.lat, self.lon);
+        let gs = (v * gam.cos()).max(30.0);
+        for k in 1..=6 {
+            let d = gs * (t_roll + 2.0 * k as f64);
+            let (la, lo) = destination(self.lat, self.lon, self.track_deg(), d);
+            terr = terr.max(ground_elev(la, lo));
+        }
+        let buffer = 90.0 + v * 0.35;
+        let m = self.alt - terr - (h_roll + h_pull + buffer);
+        let closing = sink.max(1.0);
+        (m, if sink > 0.5 { m / closing } else { f64::INFINITY })
+    }
+
 
     pub fn cmd_inlet(&mut self) {
         if self.fails.has(Fail::InletJam) {
@@ -924,7 +1000,7 @@ impl Aircraft {
         // Protections inhibées : FBW OVERRIDE ou panne FCS (loi directe)
         let prot_off = self.ovr_fbw || self.fails.has(Fail::FcsDirect);
         // Limites de la loi FBW normale (facteur de charge) et part utilisée par l'AP
-        let nz_law = if mach > 4.0 { 2.0 } else { 3.0 };
+        let nz_law = self.nz_law_max();
         let perf = self.ap.max_perf && !matches!(self.ap.vert, VertMode::Gs | VertMode::Flare) && self.autoland.is_none();
         let ap_rate = if perf { 1.0 } else { 0.6 };
         if self.ap.on && !self.on_ground {
@@ -1021,6 +1097,65 @@ impl Aircraft {
             let pmax_m = (55.0f64).to_radians() / (1.0 + mach / 4.0) * hyd;
             pitch_rate = pitch_in * qmax_m;
             roll_rate = roll_in * pmax_m;
+        }
+        // --- Auto-GCAS : récupération automatique avant impact (prioritaire sur le manche et l'AP) ---
+        if !self.on_ground {
+            let inhibit = !self.gcas_on || self.gear_down || self.autoland.is_some();
+            let (m, t) = if inhibit { (f64::INFINITY, f64::INFINITY) } else { self.gcas_margin(self.nz_law_max() * 0.95) };
+            self.gcas_t = t;
+            if self.gcas_active && !self.gcas_on {
+                self.gcas_active = false;
+                self.gcas_ovr = false;
+                self.msg(Level::Caution, "AUTO-GCAS OFF — RECUPERATION INTERROMPUE, PILOTE A VOUS");
+            }
+            if !self.gcas_active && !inhibit && m < 0.0 && self.gamma < -2f64.to_radians() {
+                self.gcas_active = true;
+                self.gcas_clear_t = 0.0;
+                self.gcas_g_max = self.d.nz;
+                self.ap.on = false;
+                self.msg(Level::Warning, "AUTO-GCAS : FLY UP — RECUPERATION AUTOMATIQUE (AILES A PLAT, RESSOURCE)");
+            }
+            if self.gcas_active {
+                // En retard sur la loi normale : on dépasse les protections (jusqu'à 5 g) pour sauver l'avion
+                if !self.gcas_ovr && m < -(90.0 + 0.35 * v) && self.gamma < 0.0 {
+                    self.gcas_ovr = true;
+                    self.msg(Level::Warning, "AUTO-GCAS : PROTECTIONS FCS DEPASSEES — RESSOURCE 5 G");
+                }
+                let pmax_r = (35.0f64).to_radians() / (1.0 + mach / 6.0) * hyd;
+                let qmax_r = (12.0f64).to_radians() / (1.0 + mach / 3.0) * hyd;
+                roll_rate = (3.0 * wrap_pi(-self.phi)).clamp(-pmax_r, pmax_r);
+                pitch_rate = if self.phi.abs() < 60f64.to_radians() { qmax_r } else { 0.0 };
+                self.gcas_g_max = self.gcas_g_max.max(self.d.nz);
+                let (m_ok, _) = self.gcas_margin(self.nz_law_max() * 0.95);
+                if self.gamma > 3f64.to_radians() && m_ok > 150.0 {
+                    self.gcas_clear_t += dt;
+                } else {
+                    self.gcas_clear_t = 0.0;
+                }
+                if self.gcas_clear_t > 1.5 {
+                    self.gcas_active = false;
+                    self.msg(Level::Info, format!("AUTO-GCAS : RECUPERATION TERMINEE ({:.1} G MAX) — PILOTE A VOUS", self.gcas_g_max));
+                    if self.gcas_ovr && self.gcas_g_max > self.nz_law_max() + 0.3 {
+                        self.set_failure(Fail::FcsDirect, true);
+                        self.msg(Level::Warning, "FCS ENDOMMAGE PAR LA RESSOURCE — LOI DIRECTE (AVION SAUVE)");
+                    }
+                    self.gcas_ovr = false;
+                }
+            }
+        } else {
+            self.gcas_active = false;
+            self.gcas_ovr = false;
+            self.gcas_t = f64::INFINITY;
+        }
+        // Réchauffage sondes coupé par air froid : givrage progressif
+        if !self.pitot_heat && !self.on_ground && self.d.oat < -5.0 {
+            let was = self.pitot_iced();
+            self.pitot_ice += dt;
+            if !was && self.pitot_iced() {
+                self.msg(Level::Caution, "SONDES ANEMOMETRIQUES GIVREES — PITOT HEAT OFF (AIR DATA OVRD OU PITOT HEAT ON)");
+            }
+        } else {
+            self.pitot_ice = (self.pitot_ice - dt * if self.pitot_heat { 3.0 } else { 0.5 }).max(0.0);
         }
         // Loi FBW : protection haute vitesse anticipatrice (q prévue à 8 s), cabré automatique
         // prioritaire sur le manche, sauf FBW OVERRIDE
@@ -1155,15 +1290,15 @@ impl Aircraft {
             }
             self.theta = self.theta.clamp(0.0, 13f64.to_radians());
             self.phi = 0.0;
-            let steer = (12f64).to_radians() * (1.0 - (v / 80.0)).max(0.08);
+            let steer = if self.nws_hi { 30f64 } else { 12f64 }.to_radians() * (1.0 - (v / 80.0)).max(0.08);
             self.psi += roll_in * steer * dt;
         } else {
             self.theta += pitch_rate * dt;
-            let nmax = if mach > 4.0 { 2.0 } else { 3.0 };
+            let nmax = if self.gcas_ovr { 5.0 } else { self.nz_law_max() };
             let alpha_g = nmax * mass * g / (q.max(1.0) * S_WING * cla);
             let mut amax = alpha_g.min(20f64.to_radians());
-            if prot_off {
-                amax = 25f64.to_radians();
+            if prot_off || self.gcas_ovr {
+                amax = amax.max(if prot_off { 25f64.to_radians() } else { 0.0 }).min(25f64.to_radians());
             } else if self.eng.scram == ScramState::Lit {
                 // Loi FBW : protection d'incidence de l'entrée d'air (plus stricte sous AP)
                 let lim: f64 = if self.ap.on && !perf { 6.5 } else { 9.0 };
@@ -1885,6 +2020,50 @@ mod tests {
         assert!(ac.on_ground && ac.tas < 3.0, "pas arrete sur la piste");
         assert_eq!(max_thrust, 0.0, "poussee pendant le plane");
         assert_eq!(max_throttle, 0.0, "manette pendant le plane");
+    }
+
+    /// Auto-GCAS : piqué à 30°, 120° d'inclinaison, sans action pilote → récupération sans impact ;
+    /// GCAS coupé → impact. Départ tardif → protections dépassées mais avion sauvé.
+    #[test]
+    fn auto_gcas_recovers() {
+        let run = |gcas: bool, agl_ft: f64, gam: f64, phi: f64, keas: f64| {
+            let mut ac = Aircraft::new_on_runway(0);
+            let elev = ground_elev(ac.lat, ac.lon);
+            ac.on_ground = false;
+            ac.gear_down = false;
+            ac.gear_pos = 0.0;
+            ac.brakes = false;
+            ac.alt = elev + agl_ft * FT;
+            ac.tas = keas * KT / (isa(ac.alt).rho / RHO0).sqrt();
+            ac.gamma = gam.to_radians();
+            ac.theta = ac.gamma + 2f64.to_radians();
+            ac.phi = phi.to_radians();
+            ac.set_turbines(TurbState::Running, 0.5);
+            ac.throttle = 0.5;
+            ac.gcas_on = gcas;
+            let mut min_agl = f64::MAX;
+            let mut trig = false;
+            let mut ovr = false;
+            for _ in 0..(40 * 120) {
+                ac.step(1.0 / 120.0, 0.0, 0.0);
+                if ac.crashed.is_some() {
+                    break;
+                }
+                trig |= ac.gcas_active;
+                ovr |= ac.gcas_ovr;
+                min_agl = min_agl.min((ac.alt - ground_elev(ac.lat, ac.lon)) / FT);
+            }
+            println!("gcas={gcas} depart {agl_ft:.0} ft {gam:+.0} deg phi {phi:.0} : declenche={trig} ovr={ovr} hauteur min {min_agl:.0} ft g max {:.1} crash {:?} fcs {}", ac.g_max, ac.crashed, ac.fails.has(Fail::FcsDirect));
+            (ac.crashed.is_none(), trig, ovr)
+        };
+        let (ok, trig, _) = run(true, 8_000.0, -30.0, 120.0, 420.0);
+        assert!(ok && trig, "recuperation normale");
+        let (ok, _, _) = run(false, 8_000.0, -30.0, 120.0, 420.0);
+        assert!(!ok, "sans GCAS l'avion percute");
+        let (ok, trig, _) = run(true, 2_200.0, -25.0, 30.0, 450.0);
+        assert!(ok && trig, "recuperation basse");
+        let (ok, trig, ovr) = run(true, 1_500.0, -30.0, 20.0, 480.0);
+        assert!(ok && trig && ovr, "recuperation tardive au-dela des protections");
     }
 
     /// Turbulence modérée : l'AP tient l'altitude et le cap, bosses de facteur de charge réalistes ;

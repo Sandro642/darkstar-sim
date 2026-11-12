@@ -524,3 +524,16 @@ Le SR-72 est un avion de reconnaissance : sa charge utile est simulée.
 - v1.31.2 : ravitaillement en vol — transfert simultané de JP-7 et d'hydrogène liquide (scramjet) :
   ravitailleur avec 40 t de JP-7 et 16 t de H2 (~1 t/min), deux jauges en contact, bilan JP-7 + H2,
   ravitaillement possible si l'un des deux réservoirs n'est pas plein.
+- v1.32.0 : protections et systèmes.
+  - AUTO GCAS (récupération automatique avant impact sol) : prédiction remise à plat + ressource
+    avec le relief devant ; chevrons convergents puis PULL UP sur l'horizon, déclenchement FLY UP
+    (ailes à plat, ressource), protections FCS dépassées jusqu'à 5 g si la loi normale ne suffit
+    plus (FCS en loi directe ensuite : avion sauvé). Inhibé train sorti / autoland. Interrupteur
+    AUTO GCAS à la console, instruction GCAS ON/OFF.
+  - FUEL COOL (FTMS) : carburant refroidi par échangeur à hydrogène liquide + air dynamique (AUTO),
+    air dynamique seul (RAM, inefficace au-delà de Mach 3) ou OFF ; fini le FUEL HOT en croisière
+    hypersonique normale. Instruction FUELCOOL AUTO/RAM/OFF.
+  - Console : nouvelle platine SYSTEMS (AUTO GCAS, FUEL COOL, G LIMIT NORM/HIGH, PITOT HEAT avec
+    givrage des sondes s'il est coupé par air froid, NWS GAIN HI/LO) ; instructions GLIM, PITOT, NWS.
+  - Horizon façon F/A-18 / Rafale : repères critiques en grosses lettres (FLY UP, PULL UP, OVER G,
+    AOA, OVERSPEED, SPEED), fenêtre « ALARME » rouge clignotante et ligne « PANNE » ambre.

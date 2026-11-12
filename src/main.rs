@@ -486,6 +486,33 @@ impl Game {
         self.push(Level::Info, "SYSTEM RESET : CALCULATEURS DE VOL RÉINITIALISÉS (LOI NORMALE, TRIM CENTRÉ, MÉMOIRE G)");
     }
 
+    fn set_gcas(&mut self, on: bool) {
+        self.ac.gcas_on = on;
+        self.push(if on { Level::Info } else { Level::Caution }, if on { "AUTO GCAS ARME : RECUPERATION AUTOMATIQUE AVANT IMPACT" } else { "AUTO GCAS OFF : PLUS DE RECUPERATION AUTOMATIQUE" });
+    }
+
+    fn set_fuel_cool(&mut self, m: u8) {
+        self.ac.fuel_cool = m.min(2);
+        self.push(
+            if m == 2 { Level::Caution } else { Level::Info },
+            match m {
+                0 => "FUEL COOL AUTO : ECHANGEUR CARBURANT / HYDROGENE LIQUIDE + AIR DYNAMIQUE",
+                1 => "FUEL COOL RAM AIR : ECHANGEUR AIR DYNAMIQUE SEUL (INEFFICACE AU-DELA DE MACH 3)",
+                _ => "FUEL COOL OFF : CARBURANT NON REFROIDI — SURVEILLER FUEL HOT",
+            },
+        );
+    }
+
+    fn set_glim(&mut self, high: bool) {
+        self.ac.g_lim_high = high;
+        self.push(if high { Level::Caution } else { Level::Info }, if high { "G LIMIT HIGH : LOI A 4 G (2,5 G AU-DELA DE MACH 4)" } else { "G LIMIT NORM : LOI A 3 G (2 G AU-DELA DE MACH 4)" });
+    }
+
+    fn set_pitot(&mut self, on: bool) {
+        self.ac.pitot_heat = on;
+        self.push(if on { Level::Info } else { Level::Caution }, if on { "PITOT HEAT ON : RECHAUFFAGE DES SONDES" } else { "PITOT HEAT OFF : RISQUE DE GIVRAGE DES SONDES PAR AIR FROID" });
+    }
+
     fn apply_menu(&mut self, a: menu::MenuAction) {
         use menu::MenuAction::*;
         match a {
@@ -504,6 +531,14 @@ impl Game {
             Bit => self.start_bit(),
             SystemReset => self.system_reset(),
             YawTrim(v) => self.ac.yaw_trim = v,
+            Gcas(on) => self.set_gcas(on),
+            FuelCool(m) => self.set_fuel_cool(m),
+            GLim(h) => self.set_glim(h),
+            PitotHeat(on) => self.set_pitot(on),
+            Nws(h) => {
+                self.ac.nws_hi = h;
+                self.push(Level::Info, if h { "NWS HI : ROULETTE AVANT 30 DEG (MANOEUVRES AU SOL)" } else { "NWS LO : ROULETTE AVANT 12 DEG (ALIGNEMENT, COURSE AU DECOLLAGE)" });
+            }
         }
         self.cues.push(audio::Cue::Ack);
     }
@@ -1494,6 +1529,65 @@ impl Game {
                 }
                 _ => reply = Err("PAS AU POINT D'ATTENTE".into()),
             },
+            "GCAS" | "AUTOGCAS" => match arg(1) {
+                "ON" => {
+                    self.set_gcas(true);
+                    reply = Ok("AUTO GCAS ARME".into());
+                }
+                "OFF" => {
+                    self.set_gcas(false);
+                    reply = Ok("AUTO GCAS OFF".into());
+                }
+                _ => reply = Err(format!("AUTO GCAS {} (GCAS ON | GCAS OFF)", if self.ac.gcas_on { "ARME" } else { "OFF" })),
+            },
+            "FUELCOOL" | "REFROID" | "FTMS" => match arg(1) {
+                "AUTO" | "ON" => {
+                    self.set_fuel_cool(0);
+                    reply = Ok("FUEL COOL AUTO".into());
+                }
+                "RAM" => {
+                    self.set_fuel_cool(1);
+                    reply = Ok("FUEL COOL RAM AIR".into());
+                }
+                "OFF" => {
+                    self.set_fuel_cool(2);
+                    reply = Ok("FUEL COOL OFF".into());
+                }
+                _ => reply = Err("FUELCOOL AUTO | RAM | OFF".into()),
+            },
+            "GLIM" | "GLIMIT" => match arg(1) {
+                "HIGH" | "HAUT" => {
+                    self.set_glim(true);
+                    reply = Ok("G LIMIT HIGH".into());
+                }
+                "NORM" | "NORMAL" => {
+                    self.set_glim(false);
+                    reply = Ok("G LIMIT NORM".into());
+                }
+                _ => reply = Err(format!("G LIMIT {} {:.1} G (GLIM NORM | GLIM HIGH)", if self.ac.g_lim_high { "HIGH" } else { "NORM" }, self.ac.nz_law_max())),
+            },
+            "PITOT" => match arg(1) {
+                "ON" => {
+                    self.set_pitot(true);
+                    reply = Ok("PITOT HEAT ON".into());
+                }
+                "OFF" => {
+                    self.set_pitot(false);
+                    reply = Ok("PITOT HEAT OFF".into());
+                }
+                _ => reply = Err("PITOT ON | PITOT OFF".into()),
+            },
+            "NWS" => match arg(1) {
+                "HI" | "HIGH" => {
+                    self.ac.nws_hi = true;
+                    reply = Ok("NWS HI (30 DEG)".into());
+                }
+                "LO" | "LOW" => {
+                    self.ac.nws_hi = false;
+                    reply = Ok("NWS LO (12 DEG)".into());
+                }
+                _ => reply = Err("NWS HI | NWS LO".into()),
+            },
             "DA" | "DH" | "MINIMUMS" | "MINIMA" => match num(1) {
                 Some(v) if (50.0..=1_000.0).contains(&v) => {
                     self.da_ft = v;
@@ -1976,6 +2070,7 @@ impl Game {
                     "CIBLE B  DIRECT CIBLE  PLAN RECON  ROUTE RECON|OFF  MENACES ON|OFF  RECON (page)",
                     "METEO REEL (defaut) | CALME|BEAU|NUAGEUX|COUVERT|ORAGEUX  METEO 3D ON/OFF  HUD (infos 10 s)",
                     "WXR ON/OFF  WXR TILT -3 | WXR AUTO  WXR TURB ON/OFF  WXR HORIZON ON/OFF  WXR RANGE 160 (radar meteo)",
+                    "GCAS ON/OFF (auto recovery)  FUELCOOL AUTO/RAM/OFF  GLIM NORM/HIGH  PITOT ON/OFF  NWS HI/LO",
                     "TANKER [OACI|OFF]  RAVITAILLEMENT (autonome)  DECROCHER  BINGO [AUTO|t]",
                     "CHAFF  FLARE  ECM ON|OFF  CMDS AUTO|MAN  TIR [I|J|K] (HACM)  ARMEMENT (page)",
                     "EMERGENCY [OFF] (ravitaillement > terrain proche > ejection)  EJECTION CONFIRME",
