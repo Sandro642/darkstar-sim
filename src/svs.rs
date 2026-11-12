@@ -407,151 +407,153 @@ pub fn draw_svs(world: &World, tiles: &mut Tiles, wx: &crate::weather::Weather, 
     let mut outlines: Vec<[Vec3; 4]> = Vec::new();
     let mut mb = MeshBuilder::new();
     for apt in AIRPORTS {
-        let (ce, cn) = enu_offset(ac.lat, ac.lon, apt.lat, apt.lon);
-        let dist = (ce * ce + cn * cn).sqrt();
-        if dist > 150_000.0 {
-            continue;
-        }
-        let hr = apt.hdg.to_radians();
-        let f = AptFrame {
-            ce,
-            cn,
-            u: (hr.sin(), hr.cos()),
-            c: (hr.cos(), -hr.sin()),
-            dz: apt.elev - (ac.alt + EYE_H),
-        };
-        let (l2, w2) = (apt.len / 2.0, apt.width / 2.0);
-        outlines.push([f.p(-l2, -w2, 0.0), f.p(l2, -w2, 0.0), f.p(l2, w2, 0.0), f.p(-l2, w2, 0.0)]);
-        let white = [235, 235, 235, 255];
-        let concrete = [150, 148, 140, 255];
-        // Taxiway, aire de trafic, bretelles
-        rw_quad(&mut mb, &f, -l2, l2, w2 + 160.0, w2 + 185.0, false, [70, 70, 72, 255]);
-        let mut a = -l2 + 100.0;
-        while a < l2 {
-            rw_quad(&mut mb, &f, a - 12.0, a + 12.0, w2, w2 + 170.0, false, [70, 70, 72, 255]);
-            a += 900.0;
-        }
-        rw_quad(&mut mb, &f, -600.0, 600.0, w2 + 185.0, w2 + 380.0, false, concrete);
-        // Piste + prolongements
-        let asphalt = if dark { [118, 118, 124, 255] } else { [52, 52, 55, 255] };
-        rw_quad(&mut mb, &f, -l2 - 60.0, l2 + 60.0, -w2, w2, false, asphalt);
-        rw_quad(&mut mb, &f, -l2 + 60.0, l2 - 60.0, -w2 + 1.5, -w2 + 2.5, true, white);
-        rw_quad(&mut mb, &f, -l2 + 60.0, l2 - 60.0, w2 - 2.5, w2 - 1.5, true, white);
-        // Axe
-        let mut a = -l2 + 90.0;
-        while a + 36.0 < l2 - 90.0 {
-            rw_quad(&mut mb, &f, a, a + 36.0, -0.9, 0.9, true, white);
-            a += 66.0;
-        }
-        for s in [-1.0f64, 1.0] {
-            let thr = s * l2;
-            let inw = -s;
-            let num_hdg = if s < 0.0 { apt.hdg } else { wrap360(apt.hdg + 180.0) };
-            let at = |x: f64| thr + inw * x;
-            let qa = |x0: f64, x1: f64, c0: f64, c1: f64| {
-                let (a0, a1) = (at(x0), at(x1));
-                let (c0, c1) = if inw > 0.0 { (c0, c1) } else { (-c1, -c0) };
-                (a0.min(a1), a0.max(a1), c0, c1)
+    for rw in apt.runways() {
+            let (ce, cn) = enu_offset(ac.lat, ac.lon, rw.lat, rw.lon);
+            let dist = (ce * ce + cn * cn).sqrt();
+            if dist > 150_000.0 {
+                continue;
+            }
+            let hr = rw.hdg.to_radians();
+            let f = AptFrame {
+                ce,
+                cn,
+                u: (hr.sin(), hr.cos()),
+                c: (hr.cos(), -hr.sin()),
+                dz: apt.elev - (ac.alt + EYE_H),
             };
-            { let (a0, a1, c0, c1) = qa(0.0, 3.0, -w2, w2); rw_quad(&mut mb, &f, a0, a1, c0, c1, true, white); }
-            // Bandes de seuil ("piano")
-            let n = ((apt.width - 6.0) / 3.6) as i32;
-            for k in 0..n {
-                let c0 = -w2 + 3.0 + k as f64 * 3.6;
-                if c0.abs() < 3.0 || (c0 + 1.8).abs() < 3.0 {
-                    continue;
-                }
-                { let (a0, a1, c0, c1) = qa(6.0, 36.0, c0, c0 + 1.8); rw_quad(&mut mb, &f, a0, a1, c0, c1, true, white); }
+            let (l2, w2) = (rw.len / 2.0, rw.width / 2.0);
+            outlines.push([f.p(-l2, -w2, 0.0), f.p(l2, -w2, 0.0), f.p(l2, w2, 0.0), f.p(-l2, w2, 0.0)]);
+            let white = [235, 235, 235, 255];
+            let concrete = [150, 148, 140, 255];
+            // Taxiway, aire de trafic, bretelles
+            rw_quad(&mut mb, &f, -l2, l2, w2 + 160.0, w2 + 185.0, false, [70, 70, 72, 255]);
+            let mut a = -l2 + 100.0;
+            while a < l2 {
+                rw_quad(&mut mb, &f, a - 12.0, a + 12.0, w2, w2 + 170.0, false, [70, 70, 72, 255]);
+                a += 900.0;
             }
-            // Numéro de piste
-            let num = crate::airports::Airport::runway_number(num_hdg);
-            let digits: Vec<u32> = if num >= 10 { vec![num / 10, num % 10] } else { vec![0, num] };
-            let (dw, dh, gap) = (9.0, 18.0, 4.0);
-            let total = digits.len() as f64 * dw + gap;
-            for (k, dg) in digits.iter().enumerate() {
-                let x0 = -total / 2.0 + k as f64 * (dw + gap);
-                for (sx0, sy0, sx1, sy1) in seg_rects(*dg) {
-                    { let (a0, a1, c0, c1) = qa(48.0 + sy0 * dh / 2.0, 48.0 + sy1 * dh / 2.0, x0 + sx0 * dw, x0 + sx1 * dw); rw_quad(&mut mb, &f, a0, a1, c0, c1, true, white); }
-                }
+            rw_quad(&mut mb, &f, -600.0, 600.0, w2 + 185.0, w2 + 380.0, false, concrete);
+            // Piste + prolongements
+            let asphalt = if dark { [118, 118, 124, 255] } else { [52, 52, 55, 255] };
+            rw_quad(&mut mb, &f, -l2 - 60.0, l2 + 60.0, -w2, w2, false, asphalt);
+            rw_quad(&mut mb, &f, -l2 + 60.0, l2 - 60.0, -w2 + 1.5, -w2 + 2.5, true, white);
+            rw_quad(&mut mb, &f, -l2 + 60.0, l2 - 60.0, w2 - 2.5, w2 - 1.5, true, white);
+            // Axe
+            let mut a = -l2 + 90.0;
+            while a + 36.0 < l2 - 90.0 {
+                rw_quad(&mut mb, &f, a, a + 36.0, -0.9, 0.9, true, white);
+                a += 66.0;
             }
-            // Point d'aboutissement et zone de toucher
-            { let (a0, a1, c0, c1) = qa(300.0, 345.0, 7.0, 15.0); rw_quad(&mut mb, &f, a0, a1, c0, c1, true, white); }
-            { let (a0, a1, c0, c1) = qa(300.0, 345.0, -15.0, -7.0); rw_quad(&mut mb, &f, a0, a1, c0, c1, true, white); }
-            for (dx, nb) in [(150.0, 3), (450.0, 2), (600.0, 2), (750.0, 1), (900.0, 1)] {
-                for k in 0..nb {
-                    let c0 = 8.0 + k as f64 * 3.0;
-                    { let (a0, a1, c0, c1) = qa(dx, dx + 22.5, c0, c0 + 1.8); rw_quad(&mut mb, &f, a0, a1, c0, c1, true, white); }
-                    { let (a0, a1, c0, c1) = qa(dx, dx + 22.5, -c0 - 1.8, -c0); rw_quad(&mut mb, &f, a0, a1, c0, c1, true, white); }
-                }
-            }
-            // Feux : rampe d'approche, seuil, PAPI
-            if dist < 40_000.0 {
-                let mut x = 30.0;
-                while x <= 900.0 {
-                    for k in -2..=2 {
-                        lights.pts.push((f.p(at(-x), k as f64 * 1.2 * inw, 0.5), Color::new(1.0, 0.98, 0.85, 1.0), 1.6));
+            for s in [-1.0f64, 1.0] {
+                let thr = s * l2;
+                let inw = -s;
+                let num_hdg = if s < 0.0 { rw.hdg } else { wrap360(rw.hdg + 180.0) };
+                let at = |x: f64| thr + inw * x;
+                let qa = |x0: f64, x1: f64, c0: f64, c1: f64| {
+                    let (a0, a1) = (at(x0), at(x1));
+                    let (c0, c1) = if inw > 0.0 { (c0, c1) } else { (-c1, -c0) };
+                    (a0.min(a1), a0.max(a1), c0, c1)
+                };
+                { let (a0, a1, c0, c1) = qa(0.0, 3.0, -w2, w2); rw_quad(&mut mb, &f, a0, a1, c0, c1, true, white); }
+                // Bandes de seuil ("piano")
+                let n = ((rw.width - 6.0) / 3.6) as i32;
+                for k in 0..n {
+                    let c0 = -w2 + 3.0 + k as f64 * 3.6;
+                    if c0.abs() < 3.0 || (c0 + 1.8).abs() < 3.0 {
+                        continue;
                     }
-                    x += 30.0;
+                    { let (a0, a1, c0, c1) = qa(6.0, 36.0, c0, c0 + 1.8); rw_quad(&mut mb, &f, a0, a1, c0, c1, true, white); }
                 }
-                for k in -6..=6 {
-                    lights.pts.push((f.p(at(-300.0), k as f64 * 2.5, 0.5), Color::new(1.0, 0.98, 0.85, 1.0), 1.6));
-                }
-                // Flash séquentiel ("rabbit")
-                let ph = ((time * 2.0).fract() * 30.0) as i32;
-                let xr = 900.0 - ph as f64 * 30.0;
-                if xr > 300.0 {
-                    lights.pts.push((f.p(at(-xr), 0.0, 1.0), WHITE, 4.0));
-                }
-                let mut c = -w2;
-                while c <= w2 {
-                    lights.pts.push((f.p(at(0.0), c, 0.5), Color::new(0.2, 1.0, 0.3, 1.0), 1.8));
-                    lights.pts.push((f.p(at(-1.0), c, 0.5), Color::new(1.0, 0.1, 0.1, 1.0), 1.2));
-                    c += 4.5;
-                }
-                // PAPI (à gauche) : seuils 3.5 / 3.17 / 2.83 / 2.5°
-                let papi_pos = f.p(at(300.0), 0.0, 0.0);
-                let horiz = (papi_pos.x * papi_pos.x + papi_pos.z * papi_pos.z).sqrt().max(1.0);
-                let ang = ((-papi_pos.y) / horiz).atan().to_degrees();
-                for (k, set) in [3.5f32, 3.17, 2.83, 2.5].iter().enumerate() {
-                    let col = if ang > *set { Color::new(1.0, 1.0, 0.95, 1.0) } else { Color::new(1.0, 0.1, 0.1, 1.0) };
-                    let cr = -(w2 + 15.0 + (3 - k) as f64 * 9.0);
-                    lights.pts.push((f.p(at(300.0), cr * inw, 1.0), col, 2.6));
-                }
-            }
-        }
-        // Feux de bord de piste
-        if dist < 25_000.0 {
-            let mut a = -l2;
-            while a <= l2 {
-                for c in [-w2 - 1.0, w2 + 1.0] {
-                    lights.pts.push((f.p(a, c, 0.5), Color::new(1.0, 0.95, 0.7, 0.9), 1.3));
-                }
-                a += 60.0;
-            }
-        }
-        // Hangars (cubes, faces arrière éliminées)
-        if dist < 30_000.0 {
-            let hangars = [(-350.0, 100.0), (-200.0, 80.0), (250.0, 120.0), (420.0, 60.0)];
-            for (a0, wdt) in hangars {
-                let (c0, c1) = (w2 + 395.0, w2 + 470.0);
-                let (a1, hz) = (a0 + wdt, 28.0);
-                let corners = [f.p(a0, c0, 0.0), f.p(a1, c0, 0.0), f.p(a1, c1, 0.0), f.p(a0, c1, 0.0)];
-                let tops = [f.p(a0, c0, hz), f.p(a1, c0, hz), f.p(a1, c1, hz), f.p(a0, c1, hz)];
-                let center = (corners[0] + corners[2]) * 0.5;
-                for k in 0..4 {
-                    let k1 = (k + 1) % 4;
-                    let mid = (corners[k] + corners[k1]) * 0.5;
-                    let normal = (mid - center).normalize_or_zero();
-                    if normal.dot(-mid) > 0.0 {
-                        let shade = 120 + (k as u8) * 25;
-                        mb.quad([corners[k], corners[k1], tops[k1], tops[k]], [shade, shade, (shade as f32 * 1.05) as u8, 255]);
+                // Numéro de piste
+                let num = crate::airports::Airport::runway_number(num_hdg);
+                let digits: Vec<u32> = if num >= 10 { vec![num / 10, num % 10] } else { vec![0, num] };
+                let (dw, dh, gap) = (9.0, 18.0, 4.0);
+                let total = digits.len() as f64 * dw + gap;
+                for (k, dg) in digits.iter().enumerate() {
+                    let x0 = -total / 2.0 + k as f64 * (dw + gap);
+                    for (sx0, sy0, sx1, sy1) in seg_rects(*dg) {
+                        { let (a0, a1, c0, c1) = qa(48.0 + sy0 * dh / 2.0, 48.0 + sy1 * dh / 2.0, x0 + sx0 * dw, x0 + sx1 * dw); rw_quad(&mut mb, &f, a0, a1, c0, c1, true, white); }
                     }
                 }
-                if tops[0].y < 0.0 {
-                    mb.quad(tops, [190, 192, 196, 255]);
+                // Point d'aboutissement et zone de toucher
+                { let (a0, a1, c0, c1) = qa(300.0, 345.0, 7.0, 15.0); rw_quad(&mut mb, &f, a0, a1, c0, c1, true, white); }
+                { let (a0, a1, c0, c1) = qa(300.0, 345.0, -15.0, -7.0); rw_quad(&mut mb, &f, a0, a1, c0, c1, true, white); }
+                for (dx, nb) in [(150.0, 3), (450.0, 2), (600.0, 2), (750.0, 1), (900.0, 1)] {
+                    for k in 0..nb {
+                        let c0 = 8.0 + k as f64 * 3.0;
+                        { let (a0, a1, c0, c1) = qa(dx, dx + 22.5, c0, c0 + 1.8); rw_quad(&mut mb, &f, a0, a1, c0, c1, true, white); }
+                        { let (a0, a1, c0, c1) = qa(dx, dx + 22.5, -c0 - 1.8, -c0); rw_quad(&mut mb, &f, a0, a1, c0, c1, true, white); }
+                    }
+                }
+                // Feux : rampe d'approche, seuil, PAPI
+                if dist < 40_000.0 {
+                    let mut x = 30.0;
+                    while x <= 900.0 {
+                        for k in -2..=2 {
+                            lights.pts.push((f.p(at(-x), k as f64 * 1.2 * inw, 0.5), Color::new(1.0, 0.98, 0.85, 1.0), 1.6));
+                        }
+                        x += 30.0;
+                    }
+                    for k in -6..=6 {
+                        lights.pts.push((f.p(at(-300.0), k as f64 * 2.5, 0.5), Color::new(1.0, 0.98, 0.85, 1.0), 1.6));
+                    }
+                    // Flash séquentiel ("rabbit")
+                    let ph = ((time * 2.0).fract() * 30.0) as i32;
+                    let xr = 900.0 - ph as f64 * 30.0;
+                    if xr > 300.0 {
+                        lights.pts.push((f.p(at(-xr), 0.0, 1.0), WHITE, 4.0));
+                    }
+                    let mut c = -w2;
+                    while c <= w2 {
+                        lights.pts.push((f.p(at(0.0), c, 0.5), Color::new(0.2, 1.0, 0.3, 1.0), 1.8));
+                        lights.pts.push((f.p(at(-1.0), c, 0.5), Color::new(1.0, 0.1, 0.1, 1.0), 1.2));
+                        c += 4.5;
+                    }
+                    // PAPI (à gauche) : seuils 3.5 / 3.17 / 2.83 / 2.5°
+                    let papi_pos = f.p(at(300.0), 0.0, 0.0);
+                    let horiz = (papi_pos.x * papi_pos.x + papi_pos.z * papi_pos.z).sqrt().max(1.0);
+                    let ang = ((-papi_pos.y) / horiz).atan().to_degrees();
+                    for (k, set) in [3.5f32, 3.17, 2.83, 2.5].iter().enumerate() {
+                        let col = if ang > *set { Color::new(1.0, 1.0, 0.95, 1.0) } else { Color::new(1.0, 0.1, 0.1, 1.0) };
+                        let cr = -(w2 + 15.0 + (3 - k) as f64 * 9.0);
+                        lights.pts.push((f.p(at(300.0), cr * inw, 1.0), col, 2.6));
+                    }
                 }
             }
-        }
+            // Feux de bord de piste
+            if dist < 25_000.0 {
+                let mut a = -l2;
+                while a <= l2 {
+                    for c in [-w2 - 1.0, w2 + 1.0] {
+                        lights.pts.push((f.p(a, c, 0.5), Color::new(1.0, 0.95, 0.7, 0.9), 1.3));
+                    }
+                    a += 60.0;
+                }
+            }
+            // Hangars (cubes, faces arrière éliminées)
+            if dist < 30_000.0 {
+                let hangars = [(-350.0, 100.0), (-200.0, 80.0), (250.0, 120.0), (420.0, 60.0)];
+                for (a0, wdt) in hangars {
+                    let (c0, c1) = (w2 + 395.0, w2 + 470.0);
+                    let (a1, hz) = (a0 + wdt, 28.0);
+                    let corners = [f.p(a0, c0, 0.0), f.p(a1, c0, 0.0), f.p(a1, c1, 0.0), f.p(a0, c1, 0.0)];
+                    let tops = [f.p(a0, c0, hz), f.p(a1, c0, hz), f.p(a1, c1, hz), f.p(a0, c1, hz)];
+                    let center = (corners[0] + corners[2]) * 0.5;
+                    for k in 0..4 {
+                        let k1 = (k + 1) % 4;
+                        let mid = (corners[k] + corners[k1]) * 0.5;
+                        let normal = (mid - center).normalize_or_zero();
+                        if normal.dot(-mid) > 0.0 {
+                            let shade = 120 + (k as u8) * 25;
+                            mb.quad([corners[k], corners[k1], tops[k1], tops[k]], [shade, shade, (shade as f32 * 1.05) as u8, 255]);
+                        }
+                    }
+                    if tops[0].y < 0.0 {
+                        mb.quad(tops, [190, 192, 196, 255]);
+                    }
+                }
+            }
+    }
     }
     // Ravitailleur et perche
     crate::refuel::draw_tanker(rf, ac, &mut mb);

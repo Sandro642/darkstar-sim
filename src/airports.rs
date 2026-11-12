@@ -123,6 +123,144 @@ pub const AIRPORTS: &[Airport] = &[
     apt!("PWAK", "ILE DE WAKE", 19.2821, 166.6364, 100.0, 2988.0, 46.0, 5.0),
 ];
 
+/// Pistes supplémentaires (la piste principale est celle de `AIRPORTS`) :
+/// (OACI, lat, lon du centre, cap vrai du sens « bas », longueur, largeur). Coordonnées approchées.
+pub const EXTRA_RWY: &[(&str, f64, f64, f64, f64, f64)] = &[
+    ("KEDW", 34.8960, -117.8990, 51.0, 2438.0, 46.0),
+    ("KEDW", 34.9300, -117.8250, 170.0, 7000.0, 90.0), // lac sec Rogers 17/35
+    ("KPMD", 34.6330, -118.0740, 40.0, 3658.0, 46.0),
+    ("KNID", 35.6810, -117.6830, 140.0, 2700.0, 46.0),
+    ("KLAX", 33.9490, -118.4180, 83.0, 2720.0, 46.0),
+    ("KLAX", 33.9365, -118.4180, 83.0, 3382.0, 61.0),
+    ("KSFO", 37.6160, -122.3800, 118.0, 3231.0, 61.0),
+    ("KSFO", 37.6140, -122.3720, 28.0, 2286.0, 61.0),
+    ("KSFO", 37.6110, -122.3800, 28.0, 2637.0, 61.0),
+    ("KLAS", 36.0820, -115.1640, 20.0, 2739.0, 46.0),
+    ("KLAS", 36.0850, -115.1580, 20.0, 2979.0, 46.0),
+    ("KLAS", 36.0790, -115.1440, 77.0, 3208.0, 46.0),
+    ("KDEN", 39.8400, -104.6400, 90.0, 3658.0, 46.0),
+    ("KDEN", 39.8780, -104.6620, 90.0, 3658.0, 46.0),
+    ("KDEN", 39.8600, -104.6460, 0.0, 3658.0, 46.0),
+    ("KJFK", 40.6480, -73.7880, 121.0, 4442.0, 61.0),
+    ("KJFK", 40.6390, -73.7650, 31.0, 2560.0, 46.0),
+    ("KJFK", 40.6620, -73.7900, 121.0, 3048.0, 46.0),
+    ("KORD", 41.9840, -87.8970, 90.0, 3292.0, 46.0),
+    ("KORD", 41.9690, -87.8880, 40.0, 2286.0, 46.0),
+    ("KORD", 41.9630, -87.9050, 90.0, 3048.0, 61.0),
+    ("KATL", 33.6470, -84.4380, 90.0, 2743.0, 46.0),
+    ("KATL", 33.6280, -84.4200, 90.0, 2743.0, 46.0),
+    ("KATL", 33.6340, -84.4180, 90.0, 2743.0, 46.0),
+    ("KDFW", 32.8950, -97.0230, 175.0, 2591.0, 46.0),
+    ("KDFW", 32.9000, -97.0540, 175.0, 4085.0, 61.0),
+    ("KDFW", 32.8850, -97.0570, 130.0, 2835.0, 61.0),
+    ("KMIA", 25.7990, -80.2860, 90.0, 2621.0, 46.0),
+    ("KMIA", 25.7900, -80.2950, 120.0, 2896.0, 61.0),
+    ("KSEA", 47.4500, -122.3040, 180.0, 3627.0, 46.0),
+    ("KSEA", 47.4500, -122.3170, 180.0, 2591.0, 46.0),
+    ("KBOS", 42.3640, -71.0090, 150.0, 3050.0, 46.0),
+    ("KBOS", 42.3600, -71.0070, 90.0, 2134.0, 46.0),
+    ("KIAD", 38.9400, -77.4700, 10.0, 3505.0, 46.0),
+    ("KIAD", 38.9400, -77.4420, 120.0, 3200.0, 46.0),
+    ("KIAH", 29.9850, -95.3200, 150.0, 3658.0, 46.0),
+    ("KIAH", 29.9930, -95.3500, 90.0, 2866.0, 46.0),
+    ("KMCO", 28.4310, -81.2950, 180.0, 3659.0, 46.0),
+    ("KPHX", 33.4290, -112.0100, 90.0, 3139.0, 46.0),
+    ("KSLC", 40.7880, -111.9910, 170.0, 3658.0, 46.0),
+    ("KMSP", 44.8780, -93.2090, 120.0, 3355.0, 61.0),
+    ("KMSP", 44.8800, -93.2330, 170.0, 2438.0, 46.0),
+    ("PANC", 61.1880, -149.9970, 150.0, 3200.0, 46.0),
+    ("PANC", 61.1700, -149.9830, 70.0, 3231.0, 61.0),
+    ("PHNL", 21.3060, -157.9200, 78.0, 3749.0, 61.0),
+    ("PHNL", 21.3220, -157.9300, 40.0, 2743.0, 46.0),
+    ("CYYZ", 43.6650, -79.6150, 53.0, 2956.0, 61.0),
+    ("CYYZ", 43.6860, -79.6250, 150.0, 3389.0, 61.0),
+    ("CYVR", 49.1900, -123.1830, 100.0, 3030.0, 61.0),
+    ("EGLL", 51.4648, -0.4560, 90.0, 3660.0, 50.0),
+    ("LFPG", 49.0240, 2.5260, 86.0, 2700.0, 45.0),
+    ("LFPG", 48.9960, 2.5580, 86.0, 2700.0, 45.0),
+    ("LFPG", 49.0250, 2.5650, 86.0, 4215.0, 45.0),
+    ("EDDF", 50.0330, 8.5870, 70.0, 4000.0, 60.0),
+    ("EDDF", 50.0450, 8.5450, 70.0, 2800.0, 45.0),
+    ("EDDF", 50.0350, 8.5270, 180.0, 4000.0, 45.0),
+    ("EHAM", 52.3040, 4.7790, 58.0, 3500.0, 45.0),
+    ("EHAM", 52.3170, 4.7700, 87.0, 3453.0, 45.0),
+    ("EHAM", 52.3130, 4.7380, 183.0, 3300.0, 45.0),
+    ("LEMD", 40.4900, -3.5600, 143.0, 3500.0, 60.0),
+    ("LEMD", 40.5050, -3.5620, 180.0, 4350.0, 60.0),
+    ("LFBO", 43.6350, 1.3700, 143.0, 3000.0, 45.0),
+    ("LEBL", 41.2920, 2.0650, 70.0, 2660.0, 60.0),
+    ("LIRF", 41.8300, 12.2700, 160.0, 3900.0, 60.0),
+    ("LIRF", 41.7950, 12.2650, 70.0, 3309.0, 45.0),
+    ("EKCH", 55.6260, 12.6440, 120.0, 2800.0, 45.0),
+    ("ENGM", 60.1910, 11.0750, 10.0, 2950.0, 45.0),
+    ("ESSA", 59.6550, 17.9280, 10.0, 2500.0, 45.0),
+    ("ESSA", 59.6450, 17.9450, 80.0, 2500.0, 45.0),
+    ("LTFM", 41.2670, 28.7300, 170.0, 4100.0, 60.0),
+    ("LTFM", 41.2550, 28.7700, 170.0, 3750.0, 60.0),
+    ("UUEE", 55.9650, 37.4150, 60.0, 3550.0, 60.0),
+    ("OMDB", 25.2480, 55.3550, 120.0, 4447.0, 60.0),
+    ("OTHH", 25.2750, 51.6350, 160.0, 4250.0, 60.0),
+    ("OERK", 24.9450, 46.7230, 150.0, 4205.0, 60.0),
+    ("VHHH", 22.2960, 113.9250, 73.0, 3800.0, 60.0),
+    ("VHHH", 22.3220, 113.9100, 73.0, 3800.0, 60.0),
+    ("RJTT", 35.5560, 139.7780, 40.0, 2500.0, 60.0),
+    ("RJTT", 35.5380, 139.8000, 50.0, 2500.0, 60.0),
+    ("RJTT", 35.5530, 139.7720, 157.0, 3000.0, 60.0),
+    ("RJAA", 35.7920, 140.3810, 160.0, 2500.0, 60.0),
+    ("RKSI", 37.4700, 126.4300, 150.0, 3750.0, 60.0),
+    ("RKSI", 37.4500, 126.4500, 150.0, 4000.0, 60.0),
+    ("ZBAA", 40.0700, 116.6200, 180.0, 3800.0, 60.0),
+    ("ZBAA", 40.0900, 116.5900, 180.0, 3200.0, 50.0),
+    ("ZSPD", 31.1600, 121.7950, 170.0, 3800.0, 60.0),
+    ("WSSS", 1.3560, 103.9850, 20.0, 4000.0, 60.0),
+    ("VTBS", 13.6850, 100.7650, 10.0, 3700.0, 60.0),
+    ("VIDP", 28.5700, 77.0900, 100.0, 3813.0, 46.0),
+    ("VIDP", 28.5650, 77.1150, 100.0, 4400.0, 60.0),
+    ("YSSY", -33.9480, 151.1800, 69.0, 2530.0, 45.0),
+    ("YSSY", -33.9520, 151.1880, 155.0, 2438.0, 45.0),
+    ("YMML", -37.6650, 144.8300, 90.0, 2286.0, 45.0),
+    ("NZAA", -37.0050, 174.8000, 50.0, 3108.0, 45.0),
+    ("SBGR", -23.4300, -46.4650, 95.0, 3000.0, 45.0),
+    ("SAEZ", -34.8150, -58.5450, 170.0, 3105.0, 45.0),
+    ("FAOR", -26.1300, 28.2350, 29.0, 3400.0, 60.0),
+    ("HECA", 30.1100, 31.3950, 50.0, 3300.0, 60.0),
+    ("HECA", 30.1300, 31.4200, 160.0, 3300.0, 60.0),
+    ("MMMX", 19.4350, -99.0800, 50.0, 3900.0, 45.0),
+];
+
+/// Une piste (centre, cap du sens « bas », dimensions).
+#[derive(Clone, Copy, Debug)]
+pub struct Rwy {
+    pub lat: f64,
+    pub lon: f64,
+    pub hdg: f64,
+    pub len: f64,
+    pub width: f64,
+}
+
+impl Rwy {
+    pub fn point(&self, along: f64, cross: f64) -> (f64, f64) {
+        let h = self.hdg.to_radians();
+        let e = along * h.sin() + cross * h.cos();
+        let n = along * h.cos() - cross * h.sin();
+        from_enu(self.lat, self.lon, e, n)
+    }
+    pub fn to_runway(&self, lat: f64, lon: f64) -> (f64, f64) {
+        let (e, n) = enu_offset(self.lat, self.lon, lat, lon);
+        let h = self.hdg.to_radians();
+        (e * h.sin() + n * h.cos(), e * h.cos() - n * h.sin())
+    }
+    pub fn on(&self, lat: f64, lon: f64) -> bool {
+        let (a, c) = self.to_runway(lat, lon);
+        a.abs() <= self.len / 2.0 + 60.0 && c.abs() <= self.width / 2.0 + 15.0
+    }
+    /// Seuil d'atterrissage dans le sens `hdg` (cap d'approche).
+    pub fn threshold(&self, hdg: f64) -> (f64, f64) {
+        let low = wrap180(hdg - self.hdg).abs() < 90.0;
+        self.point(if low { -self.len / 2.0 } else { self.len / 2.0 }, 0.0)
+    }
+}
+
 /// Seuil d'approche choisi en fonction de la position de l'avion : (lat, lon, cap d'approche).
 pub struct Approach {
     pub thr_lat: f64,
@@ -131,6 +269,35 @@ pub struct Approach {
 }
 
 impl Airport {
+    /// Toutes les pistes de l'aérodrome (principale en premier).
+    pub fn runways(&self) -> Vec<Rwy> {
+        let mut v = vec![Rwy { lat: self.lat, lon: self.lon, hdg: self.hdg, len: self.len, width: self.width }];
+        v.extend(EXTRA_RWY.iter().filter(|r| r.0 == self.icao).map(|r| Rwy { lat: r.1, lon: r.2, hdg: r.3, len: r.4, width: r.5 }));
+        v
+    }
+
+    /// Désignation de l'extrémité de piste (« 28L ») pour la piste `k` et le cap d'approche `hdg` :
+    /// numéro, puis gauche / centre / droite parmi les pistes parallèles vues dans ce sens.
+    pub fn runway_ident(&self, k: usize, hdg: f64) -> String {
+        let rws = self.runways();
+        let num = Airport::runway_number(hdg);
+        let par: Vec<usize> = (0..rws.len()).filter(|&i| Airport::runway_number(if wrap180(hdg - rws[i].hdg).abs() < 90.0 { rws[i].hdg } else { wrap360(rws[i].hdg + 180.0) }) == num).collect();
+        if par.len() < 2 {
+            return format!("{num:02}");
+        }
+        // Position latérale (à droite > 0) vue dans le sens d'approche
+        let h = hdg.to_radians();
+        let side = |i: usize| {
+            let (e, n) = enu_offset(self.lat, self.lon, rws[i].lat, rws[i].lon);
+            e * h.cos() - n * h.sin()
+        };
+        let mut sorted = par.clone();
+        sorted.sort_by(|a, b| side(*a).partial_cmp(&side(*b)).unwrap());
+        let pos = sorted.iter().position(|&i| i == k).unwrap_or(0);
+        let letter = if pos == 0 { "L" } else if pos + 1 == sorted.len() { "R" } else { "C" };
+        format!("{num:02}{letter}")
+    }
+
     /// Coordonnées géographiques d'un point (le long, latéral à droite) dans le repère piste.
     pub fn point(&self, along: f64, cross: f64) -> (f64, f64) {
         let h = self.hdg.to_radians();
@@ -157,6 +324,16 @@ impl Airport {
 
     /// Choisit l'extrémité de piste selon le côté où se trouve l'avion.
     pub fn approach_for(&self, lat: f64, lon: f64) -> Approach {
+        // Piste dont l'axe prolongé passe au plus près de l'avion
+        let rws = self.runways();
+        if rws.len() > 1 {
+            let k = (0..rws.len()).min_by(|&a, &b| rws[a].to_runway(lat, lon).1.abs().partial_cmp(&rws[b].to_runway(lat, lon).1.abs()).unwrap()).unwrap();
+            let r = rws[k];
+            let (along, _) = r.to_runway(lat, lon);
+            let hdg = if along < 0.0 { r.hdg } else { wrap360(r.hdg + 180.0) };
+            let (thr_lat, thr_lon) = r.threshold(hdg);
+            return Approach { thr_lat, thr_lon, hdg };
+        }
         let (along, _) = self.to_runway(lat, lon);
         let (a, hdg) = if along < 0.0 {
             (-self.len / 2.0, self.hdg)
@@ -168,8 +345,7 @@ impl Airport {
     }
 
     pub fn on_runway(&self, lat: f64, lon: f64) -> bool {
-        let (a, c) = self.to_runway(lat, lon);
-        a.abs() <= self.len / 2.0 + 60.0 && c.abs() <= self.width / 2.0 + 15.0
+        self.runways().iter().any(|r| r.on(lat, lon))
     }
 }
 

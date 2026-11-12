@@ -39,6 +39,9 @@ pub struct Autoland {
     pub pat: u8,
     /// Côté du circuit : -90 (gauche de l'axe) ou +90 (droite), choisi à l'entrée.
     pub pat_side: f64,
+    /// Piste choisie : longueur et désignation (« 28L »)
+    pub len: f64,
+    pub rwy: String,
 }
 
 /// Plané sans moteur (façon navette spatiale) : pente extérieure forte vers un point d'aboutissement
@@ -60,26 +63,51 @@ pub fn dead_stick_path(along: f64) -> f64 {
     outer.max(inner).max(0.0)
 }
 
+/// La piste `pref` (« 28L », numérotation magnétique) correspond-elle à l'extrémité de cap vrai
+/// `hdg` dont la désignation calculée (cap vrai) est `ident` ?
+fn pref_match(pref: &str, hdg: f64, ident: &str) -> bool {
+    let p = pref.trim();
+    if p.is_empty() {
+        return false;
+    }
+    let digits: String = p.chars().take_while(|c| c.is_ascii_digit()).collect();
+    let letter: String = p.chars().skip_while(|c| c.is_ascii_digit()).collect();
+    let Ok(n) = digits.parse::<f64>() else { return false };
+    let id_letter: String = ident.chars().skip_while(|c| c.is_ascii_digit()).collect();
+    wrap180(hdg - n * 10.0).abs() <= 25.0 && (letter.is_empty() || letter == id_letter)
+}
+
 impl Autoland {
     /// Choisit le sens de piste qui minimise le trajet jusqu'à l'IAF.
-    pub fn new(apt_idx: usize, lat: f64, lon: f64) -> Autoland {
+    /// Choix de la piste et du sens : piste demandée (plan de vol) si elle existe, sinon face au
+    /// vent (vent de face > 10 kt), sinon trajet le plus court vers l'IAF.
+    pub fn new(apt_idx: usize, lat: f64, lon: f64, pref: &str, wind: (f64, f64)) -> Autoland {
         let a = &AIRPORTS[apt_idx];
         let mut best: Option<(f64, Autoland)> = None;
-        for (along_thr, hdg) in [(-a.len / 2.0, a.hdg), (a.len / 2.0, wrap360(a.hdg + 180.0))] {
-            let (tla, tlo) = a.point(along_thr, 0.0);
-            let iaf = destination(tla, tlo, wrap360(hdg + 180.0), IAF_DIST);
-            let (d, _) = dist_brg(lat, lon, iaf.0, iaf.1);
-            let al = Autoland { apt: apt_idx, thr_lat: tla, thr_lon: tlo, hdg, elev: a.elev, iaf, phase: AlPhase::ToIaf, gs_captured: false, holding: false, go_arounds: 0, dead_stick: false, pat: 0, pat_side: -90.0 };
-            if best.as_ref().map_or(true, |(bd, _)| d < *bd) {
-                best = Some((d, al));
+        for (k, r) in a.runways().iter().enumerate() {
+            for hdg in [r.hdg, wrap360(r.hdg + 180.0)] {
+                let (tla, tlo) = r.threshold(hdg);
+                let iaf = destination(tla, tlo, wrap360(hdg + 180.0), IAF_DIST);
+                let (d, _) = dist_brg(lat, lon, iaf.0, iaf.1);
+                let ident = a.runway_ident(k, hdg);
+                // Vent de face (m/s) dans l'axe d'approche
+                let hw = -(wind.0 * hdg.to_radians().sin() + wind.1 * hdg.to_radians().cos());
+                let mut score = d - hw.clamp(-15.0, 15.0) * if hw.abs() > 5.0 { 4_000.0 } else { 0.0 };
+                // Piste du plan (numérotation magnétique) : cap à ±25° (déclinaison) et même lettre
+                let matched = pref_match(pref, hdg, &ident);
+                if matched {
+                    score -= 1e9;
+                }
+                let rwy = if matched { pref.to_string() } else { ident };
+                let al = Autoland { apt: apt_idx, thr_lat: tla, thr_lon: tlo, hdg, elev: a.elev, iaf, phase: AlPhase::ToIaf, gs_captured: false, holding: false, go_arounds: 0, dead_stick: false, pat: 0, pat_side: -90.0, len: r.len, rwy };
+                if best.as_ref().is_none_or(|(bs, _)| score < *bs) {
+                    best = Some((score, al));
+                }
             }
         }
         best.unwrap().1
     }
 
-    pub fn runway_number(&self) -> u32 {
-        crate::airports::Airport::runway_number(self.hdg)
-    }
 }
 
 #[derive(Clone)]
@@ -99,15 +127,15 @@ impl Aircraft {
         if self.eng.turb != TurbState::Running {
             return Err("TURBINES REQUISES (M<2.5 : I puis T, ou commande TURB START)".into());
         }
-        let al = Autoland::new(apt, self.lat, self.lon);
-        let num = al.runway_number();
+        let al = Autoland::new(apt, self.lat, self.lon, &self.rwy_pref.clone(), self.wind);
+        let num = al.rwy.clone();
         self.autoland = Some(al);
         self.autotakeoff = None;
         self.ap.on = true;
         self.ap.at_on = true;
         self.ap.vert = VertMode::Alt;
         self.ap.lat = LatMode::Hdg;
-        self.msg(Level::Info, format!("AUTOLAND ARMÉ : {} PISTE {:02} — RALLIEMENT IAF 15 NM", AIRPORTS[apt].icao, num));
+        self.msg(Level::Info, format!("AUTOLAND ARMÉ : {} PISTE {num} — RALLIEMENT IAF 15 NM", AIRPORTS[apt].icao));
         Ok(())
     }
 
@@ -118,17 +146,22 @@ impl Aircraft {
         }
         let a = &AIRPORTS[apt];
         // Seuil le plus proche dans l'axe de la position actuelle (pas de circuit possible en plané)
-        let mut best: Option<(f64, f64, f64, f64)> = None;
-        for (along_thr, hdg) in [(-a.len / 2.0, a.hdg), (a.len / 2.0, wrap360(a.hdg + 180.0))] {
-            let (tla, tlo) = a.point(along_thr, 0.0);
-            let along = along_before(tla, tlo, hdg, self.lat, self.lon);
-            if best.is_none_or(|b| along > b.0) {
-                best = Some((along, tla, tlo, hdg));
+        // Toutes les pistes : extrémité devant l'avion, la plus dans l'axe et la plus longue
+        let mut best: Option<(f64, f64, f64, f64, f64, String)> = None;
+        for (k, r) in a.runways().iter().enumerate() {
+            for hdg in [r.hdg, wrap360(r.hdg + 180.0)] {
+                let (tla, tlo) = r.threshold(hdg);
+                let along = along_before(tla, tlo, hdg, self.lat, self.lon);
+                let cross = cross_track(tla, tlo, hdg, self.lat, self.lon);
+                let score = along - 2.0 * cross.abs() + r.len * 2.0;
+                if best.as_ref().is_none_or(|b| score > b.0) {
+                    best = Some((score, tla, tlo, hdg, r.len, a.runway_ident(k, hdg)));
+                }
             }
         }
-        let (_, tla, tlo, hdg) = best.unwrap();
-        let al = Autoland { apt, thr_lat: tla, thr_lon: tlo, hdg, elev: a.elev, iaf: (tla, tlo), phase: AlPhase::Approach, gs_captured: false, holding: false, go_arounds: 0, dead_stick: true, pat: 0, pat_side: -90.0 };
-        let num = al.runway_number();
+        let (_, tla, tlo, hdg, len, rwy) = best.unwrap();
+        let al = Autoland { apt, thr_lat: tla, thr_lon: tlo, hdg, elev: a.elev, iaf: (tla, tlo), phase: AlPhase::Approach, gs_captured: false, holding: false, go_arounds: 0, dead_stick: true, pat: 0, pat_side: -90.0, len, rwy };
+        let num = al.rwy.clone();
         self.autoland = Some(al);
         self.autotakeoff = None;
         self.ap.on = true;
@@ -178,13 +211,13 @@ impl Aircraft {
         if self.eng.turb != TurbState::Running {
             return Err("TURBINES NON DÉMARRÉES (T)".into());
         }
-        let Some(apt) = AIRPORTS.iter().find(|a| a.on_runway(self.lat, self.lon)) else {
+        let Some(rw) = AIRPORTS.iter().flat_map(|a| a.runways()).find(|r| r.on(self.lat, self.lon)) else {
             return Err("PAS SUR UNE PISTE".into());
         };
-        // Axe de piste le plus proche du cap actuel
+        // Sens de piste le plus proche du cap actuel
         let h = self.hdg_deg();
-        let hdg = if wrap180(apt.hdg - h).abs() < 90.0 { apt.hdg } else { wrap360(apt.hdg + 180.0) };
-        let (thr_lat, thr_lon) = apt.point(if hdg == apt.hdg { -apt.len / 2.0 } else { apt.len / 2.0 }, 0.0);
+        let hdg = if wrap180(rw.hdg - h).abs() < 90.0 { rw.hdg } else { wrap360(rw.hdg + 180.0) };
+        let (thr_lat, thr_lon) = rw.threshold(hdg);
         self.autotakeoff = Some(Takeoff { hdg, alt_ft, thr_lat, thr_lon });
         self.autoland = None;
         self.msg(Level::Info, format!("DÉCOLLAGE AUTO : PLEINE PUISSANCE, ROTATION {:.0} KEAS (VR), MONTÉE {alt_ft:.0} FT", self.vr_keas()));
@@ -564,7 +597,7 @@ impl Aircraft {
                 if !self.ap.at_on {
                     self.throttle = (self.throttle - 0.5 / 120.0).max(0.0);
                 }
-                let half = AIRPORTS[apt].len * 0.5;
+                let half = self.autoland.as_ref().map(|a| a.len).unwrap_or(AIRPORTS[apt].len) * 0.5;
                 if !self.on_ground && along < -half && !dead_stick {
                     next = AlPhase::ToIaf;
                     let al = self.autoland.as_mut().unwrap();

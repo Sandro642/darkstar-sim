@@ -226,6 +226,8 @@ pub struct Aircraft {
     pitot_ice: f64,
     /// Orientation de la roulette avant : gain HI (manœuvres lentes) ou LO (course au décollage)
     pub nws_hi: bool,
+    /// Piste d'arrivée demandée par le plan de vol (« 28L »), vide sinon
+    pub rwy_pref: String,
     /// Compensateur de lacet (-1 gauche .. +1 droite).
     pub yaw_trim: f64,
     /// Compensation automatique de la dissymétrie de poussée par le trim de lacet
@@ -395,6 +397,7 @@ impl Aircraft {
             pitot_heat: true,
             pitot_ice: 0.0,
             nws_hi: false,
+            rwy_pref: String::new(),
             yaw_trim: 0.0,
             auto_trim: true,
             throttle: 0.0,
@@ -1979,6 +1982,45 @@ mod tests {
             t += dt;
         }
         t
+    }
+
+    #[test]
+    fn autoland_runway_choice() {
+        use crate::airports::AIRPORTS;
+        let sfo = AIRPORTS.iter().position(|a| a.icao == "KSFO").unwrap();
+        let a = &AIRPORTS[sfo];
+        let idents: Vec<String> = a.runways().iter().enumerate().flat_map(|(k, r)| [a.runway_ident(k, r.hdg), a.runway_ident(k, r.hdg + 180.0)]).collect();
+        println!("KSFO : {idents:?}");
+        assert_eq!(idents.len(), 8);
+        // Piste du plan de vol (magnétique) prioritaire : 28L = la plus au sud des deux parallèles 28
+        let al = crate::autoflight::Autoland::new(sfo, 37.0, -122.0, "28L", (0.0, 0.0));
+        let al_r = crate::autoflight::Autoland::new(sfo, 37.0, -122.0, "28R", (0.0, 0.0));
+        println!("28L seuil {:.4},{:.4} cap {:.0} / 28R seuil {:.4},{:.4}", al.thr_lat, al.thr_lon, al.hdg, al_r.thr_lat, al_r.thr_lon);
+        assert_eq!(al.rwy, "28L");
+        assert!((al.hdg - 298.0).abs() < 1.0 && al.thr_lat < al_r.thr_lat);
+        let al = crate::autoflight::Autoland::new(sfo, 37.0, -122.0, "19R", (0.0, 0.0));
+        assert_eq!(al.rwy, "19R");
+        // Sans préférence : face à un vent d'ouest de 20 kt (vers l'est)
+        let al = crate::autoflight::Autoland::new(sfo, 37.62, -122.0, "", (10.0, 0.0));
+        println!("vent d'ouest : piste {}", al.rwy);
+        assert!(al.rwy.starts_with("30"), "cap vrai 298 face au vent d'ouest");
+        // Atterrissage complet sur la piste 17 du lac sec d'Edwards
+        let edw = AIRPORTS.iter().position(|a| a.icao == "KEDW").unwrap();
+        let mut ac = Aircraft::new_on_runway(0);
+        ac.on_ground = false;
+        ac.gear_down = false;
+        ac.gear_pos = 0.0;
+        ac.brakes = false;
+        ac.alt = 12_000.0 * FT;
+        ac.tas = 160.0;
+        ac.set_turbines(TurbState::Running, 0.6);
+        ac.rwy_pref = "17".into();
+        ac.engage_autoland(edw).unwrap();
+        let rwy = ac.autoland.as_ref().unwrap().rwy.clone();
+        run(&mut ac, 3000.0, |a| a.autoland.is_none());
+        println!("piste {rwy} crash={:?} sol={}", ac.crashed, ac.on_ground);
+        assert_eq!(rwy, "17");
+        assert!(ac.crashed.is_none() && ac.on_ground);
     }
 
     #[test]

@@ -604,3 +604,8 @@ Le SR-72 est un avion de reconnaissance : sa charge utile est simulée.
   - VNAV IFR : SID volée aux altitudes prévues par SimBrief (250 kt sous le FL100), profil
     Darkstar en route, descente hypersonique terminée à l'entrée de STAR, STAR volée aux
     altitudes prévues, puis autoland.
+- v1.38.0 : plusieurs pistes par aéroport (106 pistes supplémentaires : parallèles et sécantes des
+  grands aéroports, lac sec d'Edwards 17/35…). Rendu de toutes les pistes, détection « sur la
+  piste » sur chacune. Autoland : piste du plan de vol (SimBrief, numérotation magnétique, L/C/R)
+  en priorité, sinon face au vent (> 10 kt), sinon trajet le plus court ; désignation L/C/R
+  calculée parmi les parallèles ; plané sans moteur et décollage auto sur n'importe quelle piste.

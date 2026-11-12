@@ -1162,6 +1162,8 @@ impl Game {
         if let Some(o) = self.fms.poll() {
             self.mcdu_out(o);
         }
+        // Piste d'arrivée du plan de vol (SimBrief) pour l'autoland
+        self.ac.rwy_pref = self.fms.fpln.as_ref().map(|p| p.arr_rwy.clone()).unwrap_or_default();
         for o in self.fms.vnav_update(&mut self.ac) {
             self.mcdu_out(o);
         }
