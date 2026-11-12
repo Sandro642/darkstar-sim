@@ -1162,6 +1162,9 @@ impl Game {
         if let Some(o) = self.fms.poll() {
             self.mcdu_out(o);
         }
+        for o in self.fms.vnav_update(&mut self.ac) {
+            self.mcdu_out(o);
+        }
         if self.ac.ap.lat == LatMode::Loc && self.ac.approach.is_none() {
             self.ac.ap.lat = LatMode::Hdg;
             self.ac.ap.vert = VertMode::Alt;
@@ -1730,6 +1733,10 @@ impl Game {
                 }
                 _ => reply = Err("PAS AU POINT D'ATTENTE".into()),
             },
+            "VNAV" => {
+                self.fms.vnav = arg(1) != "OFF";
+                reply = Ok(if self.fms.vnav { "VNAV ON : ALTITUDE, MACH ET MOTEURS GERES PAR LE FMS".into() } else { "VNAV OFF".into() });
+            }
             "DISPATCH" => {
                 let (o, d) = (arg(1).to_string(), arg(2).to_string());
                 let fl = num(3).unwrap_or(950.0);

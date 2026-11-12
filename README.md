@@ -583,3 +583,13 @@ Le SR-72 est un avion de reconnaissance : sa charge utile est simulée.
   - Guidage NAV sur le plan : poursuite du point actif, séquencement avec anticipation du virage,
     DIRECT TO, insertion / suppression de points (OACI ou coordonnées). Route sur la carte.
   - Instructions : MCDU [INIT|FPLN|PERF|PROG|FUEL|DIR], SIMBRIEF <id>, DISPATCH KPMD PHNL [FL] [M].
+- v1.36.0 : VNAV et Mach gérés par le FMS, base d'aéroports étendue.
+  - VNAV (par défaut à l'activation du plan) : montée / accélération selon le TBCC (FL350 →
+    FL500 → stato armé puis allumé, turbines coupées et entrées fermées à Mach 3, FL580 → FL800,
+    scram activé puis allumé), croisière FL / Mach du plan par l'A/THR ; au T/D descente à q
+    constant, coupure propre du scram sous Mach 5 et du stato sous Mach 2,6, réouverture des
+    entrées et rallumage des turbines, descente finale vers la destination, ATTERRIR à 60 NM.
+    Distance de descente recalibrée. Page PERF : VNAV ON/OFF ; instruction VNAV ON/OFF.
+    Essai KPMD → PHNL de bout en bout : M6 FL900, posé à Honolulu en 69 min.
+  - 69 aéroports ajoutés (Amériques, Europe, Moyen-Orient, Afrique, Asie, Océanie, îles du
+    Pacifique, bases : Vandenberg, Beale, Groom Lake, Tonopah, Brize Norton, Wake…) : 96 au total.

@@ -202,12 +202,18 @@ pub struct Fpln {
     pub ete: f64,
 }
 
+/// Distance de descente (m) : descente à q constant (~(1 + M/2) NM par 1000 ft, mesuré en vol
+/// simulé) puis descente finale subsonique (~80 NM).
+pub fn tod_dist(crz_fl: f64, crz_mach: f64) -> f64 {
+    ((crz_fl / 10.0) * (1.0 + 0.5 * crz_mach) + 80.0) * NM
+}
+
 /// Profil hypersonique du Darkstar : (phase, Mach, FL) en fonction de la distance parcourue et
 /// restante (m), pour une croisière à `crz_fl` / `crz_mach`.
 fn profile(d_from: f64, d_to: f64, crz_fl: f64, crz_mach: f64) -> (&'static str, f64, f64) {
     let nm = |x: f64| x / NM;
     // Descente à q constant : ~ 25 NM par 1000 ft de dénivelé en hypersonique (plus à Mach élevé)
-    let tod = (crz_fl * 100.0 / 1000.0) * (2.0 + crz_mach * 1.6) * NM;
+    let tod = tod_dist(crz_fl, crz_mach);
     if nm(d_from) < 40.0 {
         ("CLB TURB", 0.9_f64.min(crz_mach), 350.0_f64.min(crz_fl))
     } else if nm(d_from) < 160.0 && crz_mach > 2.5 {
@@ -282,7 +288,7 @@ impl Fpln {
 
     /// Point de début de descente (distance à destination, m).
     pub fn tod(&self) -> f64 {
-        (self.crz_fl * 100.0 / 1000.0) * (2.0 + self.crz_mach * 1.6) * NM
+        tod_dist(self.crz_fl, self.crz_mach)
     }
 }
 
@@ -446,6 +452,12 @@ pub struct Fms {
     fetch: Arc<Mutex<Fetch>>,
     /// Saisie clavier dirigée vers le MCDU
     pub focus: bool,
+    /// Gestion verticale et de la vitesse par le FMS (VNAV + Mach géré + transitions moteur)
+    pub vnav: bool,
+    desc_started: bool,
+    land_sent: bool,
+    /// Dernière phase annoncée
+    phase: &'static str,
 }
 
 pub enum McduOut {
@@ -463,12 +475,140 @@ impl Fms {
         self.crz = (fl, m);
         self.fpln = Some(fp);
         self.temp = None;
+        self.arm_vnav();
         Ok(msg)
+    }
+
+    fn arm_vnav(&mut self) {
+        self.vnav = true;
+        self.desc_started = false;
+        self.land_sent = false;
+        self.phase = "";
+    }
+
+    /// VNAV : altitude, Mach et mode du TBCC gérés selon la position sur le plan.
+    /// Montée turbines → stato (armement, allumage, coupure turbines, fermeture des entrées) →
+    /// scram (si la croisière l'exige), croisière, descente à q constant au T/D, rallumage des
+    /// turbines en subsonique, descente finale et ATTERRIR à 60 NM.
+    pub fn vnav_update(&mut self, ac: &mut Aircraft) -> Vec<McduOut> {
+        let mut out = Vec::new();
+        if !self.vnav || ac.on_ground || ac.crashed.is_some() || ac.autoland.is_some() || !ac.ap.on || ac.gear_down || ac.gcas_active || ac.osr_active {
+            return out;
+        }
+        let Some(fp) = self.fpln.as_ref() else { return out };
+        let rem = fp.remaining(ac.lat, ac.lon);
+        let tot = fp.total();
+        let tod = fp.tod().min(tot * 0.5);
+        let (crz_ft, crz_m, dest) = (fp.crz_fl * 100.0, fp.crz_mach, fp.dest.clone());
+        let mach = ac.d.mach;
+        let e = ac.eng.clone();
+        let turb_on = e.side.iter().any(|s| matches!(s, TurbState::Running | TurbState::Starting));
+        let say = |m: &mut Vec<McduOut>, ph: &mut &'static str, p: &'static str, txt: String| {
+            if *ph != p {
+                *ph = p;
+                m.push(McduOut::Msg(Level::Info, txt));
+            }
+        };
+        if rem > tod && !self.desc_started {
+            // ----- Montée / accélération / croisière -----
+            ac.ap.at_on = true;
+            ac.ap.spd_keas = None;
+            ac.ap.spd_managed = false;
+            ac.ap.mach_tgt = crz_m;
+            let sched = if crz_m <= 2.5 {
+                crz_ft
+            } else if e.scram == ScramState::Lit {
+                if mach < 6.0 { 88_000.0 } else if mach < 8.0 { 98_000.0 } else { 108_000.0 }
+            } else if e.ram == RamState::Lit && !turb_on {
+                if mach < 3.5 { 58_000.0 } else if mach < 4.2 { 72_000.0 } else { 80_000.0 }
+            } else if e.ram == RamState::Lit {
+                58_000.0
+            } else if mach < 1.6 {
+                35_000.0
+            } else {
+                50_000.0
+            };
+            ac.ap.vert = VertMode::Alt;
+            ac.ap.alt_tgt_ft = sched.min(crz_ft);
+            if crz_m > 2.5 {
+                if mach > 2.05 && e.ram == RamState::Off {
+                    ac.cmd_ram();
+                }
+                if ac.eng.ram == RamState::Armed && ac.ram_ignition_check().is_ok() {
+                    ac.cmd_ram();
+                }
+                if ac.eng.ram == RamState::Lit && mach > 3.05 && turb_on {
+                    ac.cmd_turbine();
+                    if ac.eng.inlet_open {
+                        ac.cmd_inlet();
+                    }
+                }
+            }
+            if crz_m > 4.8 {
+                if mach > 4.0 && ac.eng.scram == ScramState::Off {
+                    ac.cmd_scram();
+                }
+                if ac.eng.scram == ScramState::Armed && ac.scram_ignition_check().is_ok() {
+                    ac.cmd_scram();
+                }
+            }
+            let at_crz = (ac.alt / FT - crz_ft).abs() < 2_000.0 && (mach - crz_m).abs() < 0.15;
+            let p = if at_crz { "CRZ" } else { "CLB" };
+            say(&mut out, &mut self.phase, p, if at_crz { format!("FMS : CROISIERE FL{:.0} M{crz_m:.1}", crz_ft / 100.0) } else { format!("FMS : MONTEE / ACCELERATION VERS FL{:.0} M{crz_m:.1}", crz_ft / 100.0) });
+        } else {
+            // ----- Descente -----
+            if !self.desc_started {
+                self.desc_started = true;
+                if mach > 1.2 {
+                    ac.ap.vert = VertMode::QHold;
+                    ac.ap.q_tgt = 50_000.0;
+                    ac.ap.at_on = false;
+                    ac.throttle = 0.0;
+                }
+                out.push(McduOut::Msg(Level::Info, "FMS : T/D — DESCENTE A q CONSTANT (50 kPa), MANETTE REDUITE".into()));
+            }
+            // Turbines à rallumer en subsonique / bas supersonique (entrées ouvertes sous Mach 2,5)
+            if mach < 2.3 {
+                if !ac.eng.inlet_open {
+                    ac.cmd_inlet();
+                }
+                if ac.eng.scram != ScramState::Off {
+                    ac.eng.scram = ScramState::Off;
+                }
+                if !turb_on && ac.eng.inlet_open && ac.eng.side.iter().any(|s| *s == TurbState::Off) {
+                    ac.cmd_turbine();
+                }
+            }
+            // Coupures propres avant les limites de fonctionnement (pas de désamorçage ni d'extinction)
+            if mach < 5.0 && ac.eng.scram == ScramState::Lit {
+                ac.eng.scram = ScramState::Off;
+                out.push(McduOut::Msg(Level::Info, "FMS : SCRAM OFF (MACH < 5) — STATO EN DESCENTE".into()));
+            }
+            if mach < 2.6 && ac.eng.ram == RamState::Lit {
+                ac.eng.ram = RamState::Off;
+                out.push(McduOut::Msg(Level::Info, "FMS : STATO OFF (MACH < 2,6) — RALLUMAGE TURBINES".into()));
+            }
+            if ac.ap.vert != VertMode::QHold {
+                // Descente finale : plan à ~3,5° vers la destination, 250-300 KEAS
+                let elev_ft = AIRPORTS.iter().find(|a| a.icao == dest).map(|a| a.elev / FT).unwrap_or(0.0);
+                let tgt = (elev_ft + rem * 3.5f64.to_radians().tan() / FT).clamp(elev_ft + 3_000.0, 35_000.0);
+                ac.ap.vert = VertMode::Alt;
+                ac.ap.alt_tgt_ft = ((tgt / 500.0).round() * 500.0).min(ac.ap.alt_tgt_ft.max(tgt));
+                ac.ap.at_on = true;
+                ac.ap.spd_keas = Some(if rem > 30.0 * NM { 300.0 } else { 250.0 });
+                say(&mut out, &mut self.phase, "DES", "FMS : DESCENTE FINALE VERS LA DESTINATION".into());
+            }
+            if !self.land_sent && rem < 60.0 * NM && mach < 0.95 && AIRPORTS.iter().any(|a| a.icao == dest) {
+                self.land_sent = true;
+                out.push(McduOut::Cmd(format!("ATTERRIR {dest}")));
+            }
+        }
+        out
     }
 
     pub fn new() -> Fms {
         let user = std::fs::read_to_string(config_path()).map(|s| s.trim().to_string()).unwrap_or_default();
-        Fms { fpln: None, temp: None, page: Page::Init, scroll: 0, scratch: String::new(), msg: String::new(), user, from_to: (String::new(), String::new()), crz: (950.0, 6.0), fetch: Arc::new(Mutex::new(Fetch::Idle)), focus: true }
+        Fms { fpln: None, temp: None, page: Page::Init, scroll: 0, scratch: String::new(), msg: String::new(), user, from_to: (String::new(), String::new()), crz: (950.0, 6.0), fetch: Arc::new(Mutex::new(Fetch::Idle)), focus: true, vnav: true, desc_started: false, land_sent: false, phase: "" }
     }
 
     /// Plan affiché / modifié : temporaire s'il existe, sinon actif.
@@ -638,6 +778,7 @@ impl Fms {
                 let dest = fp.dest.clone();
                 let (cfl, cm) = (fp.crz_fl, fp.crz_mach);
                 self.fpln = Some(fp);
+                self.arm_vnav();
                 self.msg = "F-PLN ACTIVE".into();
                 out = Some(McduOut::Cmd(format!("DEST {dest}")));
                 let _ = (cfl, cm);
@@ -690,16 +831,13 @@ impl Fms {
             }
             // ----- PERF -----
             (Page::Perf, true, 5) => {
-                if let Some(p) = self.plan() {
-                    out = Some(McduOut::Cmd(format!("ALT {:.0}", p.crz_fl * 100.0)));
-                    self.msg = "CRZ FL ENVOYE".into();
+                self.vnav = !self.vnav;
+                if self.vnav {
+                    self.desc_started = false;
+                    self.phase = "";
                 }
-            }
-            (Page::Perf, false, 5) => {
-                if let Some(p) = self.plan() {
-                    out = Some(McduOut::Cmd(format!("MACH {:.1}", p.crz_mach)));
-                    self.msg = "CRZ MACH ENVOYE".into();
-                }
+                self.msg = if self.vnav { "VNAV ON".into() } else { "VNAV OFF".into() };
+                out = Some(McduOut::Msg(Level::Info, if self.vnav { "FMS : VNAV ON — ALTITUDE, MACH ET MOTEURS GERES".into() } else { "FMS : VNAV OFF — CONSIGNES MANUELLES".into() }));
             }
             (Page::Perf, true, 4) => {
                 out = Some(McduOut::Cmd("DESCENTE 50".into()));
@@ -852,7 +990,7 @@ fn page_lines(f: &Fms, ac: &Aircraft) -> (String, Color, Vec<(Line, Line)>) {
                 rows.push((ln(format!(" {m}"), LBL_M, cond, LBL_M), ln(t, if cur { GREEN_M } else { CYAN_M }, if cur { "ACTIF" } else { "" }, GREEN_M)));
             }
             rows.push((ln(" DES q CONST", LBL_M, "AUTOLAND ", LBL_M), ln("<DESCENTE", WHITE_M, "ATTERRIR>", WHITE_M)));
-            rows.push((ln(" CRZ FL", LBL_M, "CRZ MACH ", LBL_M), ln(format!("<FL{crz_fl:.0}"), CYAN_M, format!("M{crz_m:.1}>"), CYAN_M)));
+            rows.push((ln(" VNAV / MACH GERES", LBL_M, "CRZ ", LBL_M), ln(if f.vnav { "<VNAV ON" } else { "<VNAV OFF" }, if f.vnav { GREEN_M } else { AMB_M }, format!("FL{crz_fl:.0}/M{crz_m:.1}"), CYAN_M)));
         }
         Page::Prog => {
             title = format!("PROG  {}", ac.mode_name());
@@ -1070,5 +1208,66 @@ mod tests {
         let (d, _) = dist_brg(ac.lat, ac.lon, fp.wpts.last().unwrap().lat, fp.wpts.last().unwrap().lon);
         println!("{seq:?} ; reste {:.0} NM", d / NM);
         assert!(seq.len() >= 2 && d < 40.0 * NM);
+    }
+
+    /// VNAV de bout en bout : KPMD → PHNL, montée turbines, stato, scram, croisière M6 FL950,
+    /// descente à q constant, rallumage des turbines, autoland.
+    #[test]
+    fn vnav_full_flight() {
+        let mut f = Fms::new();
+        f.dispatch_now("KPMD", "PHNL", 950.0, 6.0).unwrap();
+        let mut ac = Aircraft::new_on_runway(0);
+        ac.on_ground = false;
+        ac.gear_down = false;
+        ac.gear_pos = 0.0;
+        ac.brakes = false;
+        ac.alt = 15_000.0 * FT;
+        ac.tas = 0.7 * crate::atmosphere::isa(ac.alt).a;
+        ac.set_turbines(TurbState::Running, 0.8);
+        ac.throttle = 0.8;
+        ac.ap.on = true;
+        ac.ap.lat = LatMode::Nav;
+        let dt = 1.0 / 120.0;
+        let (mut t, mut mmax, mut altmax, mut lp) = (0.0, 0.0f64, 0.0f64, -1e9);
+        let mut log = Vec::new();
+        while t < 3.0 * 3600.0 && ac.crashed.is_none() && !(ac.on_ground && ac.tas < 3.0) {
+            if (t * 10.0f64).fract() < dt * 10.0 {
+                if let Some((b, _)) = f.guidance(&ac) {
+                    ac.ap.hdg_tgt = b;
+                }
+                for o in f.vnav_update(&mut ac) {
+                    match o {
+                        McduOut::Cmd(c) => {
+                            if let Some(code) = c.strip_prefix("ATTERRIR ") {
+                                let i = AIRPORTS.iter().position(|a| a.icao == code).unwrap();
+                                let r = ac.engage_autoland(i);
+                                log.push(format!("{t:.0}s {c} -> {r:?}"));
+                            }
+                        }
+                        McduOut::Msg(_, m) => log.push(format!("{t:.0}s {m}")),
+                    }
+                }
+            }
+            let c = ac.autoflight().unwrap_or((0.0, 0.0));
+            ac.step(dt, c.0, c.1);
+            for (_, m) in ac.events.drain(..) {
+                if m.contains("STATO") || m.contains("SCRAM") || m.contains("TURBINE") || m.contains("TOUCHER") || m.contains("AUTOLAND") || m.contains("PALIER") {
+                    log.push(format!("{t:.0}s {m}"));
+                }
+            }
+            mmax = mmax.max(ac.d.mach);
+            altmax = altmax.max(ac.alt / FT);
+            if t - lp > 600.0 {
+                lp = t;
+                log.push(format!("{t:.0}s M{:.2} FL{:.0} mode {} reste {:.0} NM", ac.d.mach, ac.alt / FT / 100.0, ac.mode_name(), f.fpln.as_ref().unwrap().remaining(ac.lat, ac.lon) / NM));
+            }
+            t += dt;
+        }
+        for l in &log {
+            println!("{l}");
+        }
+        println!("crash {:?} sol {} M max {mmax:.2} FL max {:.0}", ac.crashed, ac.on_ground, altmax / 100.0);
+        assert!(mmax > 5.5 && altmax > 85_000.0, "croisiere scram atteinte");
+        assert!(ac.crashed.is_none() && ac.on_ground, "pose a destination");
     }
 }
