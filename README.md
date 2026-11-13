@@ -707,3 +707,7 @@ Le SR-72 est un avion de reconnaissance : sa charge utile est simulée.
   - Ressenti : écrasement des amortisseurs au toucher proportionnel au taux de chute, à-coup de
     la roulette de nez, inclinaison de la tête dans les virages de roulage, tête poussée à
     l'accélération et au freinage, détente des amortisseurs à l'envol.
+- v1.48.1 : EMERGENCY OVERRIDE — sans terrain joignable en vol plané mais avec des moteurs :
+  déroutement motorisé vers le terrain le plus proche puis autoland (au lieu d'imposer
+  l'éjection) ; pendant une urgence, le VNAV du FMS ne pilote plus et l'avion actionne lui-même
+  train et aérofreins.

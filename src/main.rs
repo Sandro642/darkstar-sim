@@ -1196,7 +1196,11 @@ impl Game {
         pfd_plus::set_lnav(self.fms.fpln.as_ref().and_then(|p| p.wpts.get(p.active)).map(|w| w.ident.clone()));
         // Piste d'arrivée du plan de vol (SimBrief) pour l'autoland
         self.ac.rwy_pref = self.fms.fpln.as_ref().map(|p| p.arr_rwy.clone()).unwrap_or_default();
-        for o in self.fms.vnav_update(&mut self.ac) {
+        // En urgence, l'avion actionne lui-même train et aérofreins (l'opérateur n'a peut-être plus la main)
+        self.ac.auto_config = self.emerg.mode.is_some();
+        // Pendant une urgence (override, déroutement, plané), le FMS ne pilote plus
+        let vnav_out = if self.emerg.mode.is_some() { Vec::new() } else { self.fms.vnav_update(&mut self.ac) };
+        for o in vnav_out {
             self.mcdu_out(o);
         }
         if self.ac.ap.lat == LatMode::Loc && self.ac.approach.is_none() {

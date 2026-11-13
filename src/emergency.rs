@@ -141,7 +141,20 @@ impl Emergency {
                 self.events.push((Level::Warning, "MAYDAY MAYDAY MAYDAY — OVERRIDE : AUTOLAND PLANE AUTORISE".into()));
                 Ok(format!("OVERRIDE : MOTEURS COUPES, VOL PLANE VERS {} {:.0} NM PUIS AUTOLAND PLANE", AIRPORTS[i].icao, d / NM))
             }
-            None => Err("AUCUN TERRAIN EN VOL PLANE — EJECTION CONFIRME (BOITE NOIRE SAUVEGARDEE)".into()),
+            // Aucun terrain en plané mais des moteurs : déroutement motorisé puis autoland
+            None if powered(ac) => {
+                let (i, d) = AIRPORTS
+                    .iter()
+                    .enumerate()
+                    .map(|(i, a)| (i, dist_brg(ac.lat, ac.lon, a.lat, a.lon).0))
+                    .min_by(|a, b| a.1.total_cmp(&b.1))
+                    .unwrap();
+                self.dead_stick = false;
+                self.set(Mode::Divert(i));
+                self.events.push((Level::Warning, "MAYDAY MAYDAY MAYDAY — OVERRIDE : DEROUTEMENT MOTORISE AUTORISE".into()));
+                Ok(format!("OVERRIDE : AUCUN TERRAIN EN VOL PLANE — DEROUTEMENT MOTORISE VERS {} {:.0} NM PUIS AUTOLAND", AIRPORTS[i].icao, d / NM))
+            }
+            None => Err("AUCUN TERRAIN EN VOL PLANE ET PLUS DE POUSSEE — EJECTION CONFIRME (BOITE NOIRE SAUVEGARDEE)".into()),
         }
     }
 
