@@ -761,3 +761,4 @@ Le SR-72 est un avion de reconnaissance : sa charge utile est simulée.
   +50 %, 1,5 s de dépassement toléré avant rupture). Très haute vitesse en air dense (peau
   > 1150 C) : vitres chaudes puis fissurées, vitre avant rompue (centrale aéro perdue), usure
   et surchauffe des moteurs, risque de feu moteurs / baie des chambres / soute H2.
+- v1.54.1 : vérification des mises à jour toutes les 5 minutes (1 minute après une erreur).

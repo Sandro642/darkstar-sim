@@ -3070,7 +3070,9 @@ async fn main() {
         }
 
         // --- Mise à jour ---
-        if get_time() - last_check > 1800.0 {
+        // Vérification toutes les 5 min (1 min après une erreur réseau)
+        let every = if matches!(upd.get(), updater::State::Error(_)) { 60.0 } else { 300.0 };
+        if get_time() - last_check > every {
             last_check = get_time();
             upd.check();
         }
