@@ -764,3 +764,7 @@ Le SR-72 est un avion de reconnaissance : sa charge utile est simulée.
 - v1.54.1 : vérification des mises à jour toutes les 5 minutes (1 minute après une erreur).
 - v1.54.2 : KXTA (Groom Lake) — piste principale recalée sur l'imagerie satellite haute résolution
   (axe décalé de 32 m et cap 158.7 -> 157.3 vrai) : l'avion apparaît sur l'axe, au seuil réel.
+- v1.55.0 : MCDU INIT <VOL D'ESSAI — plan local (départ et retour sur le même terrain : saisi en
+  OACI ou le plus proche), piste de départ présélectionnée, SID, zone ESSAI au-delà de la sortie
+  de SID, puis enchaînement sur ARRIVAL (piste, STAR, approche) ; croisière FL250 / M0.9
+  modifiable ; vol LNAV / VNAV et autoland sur la piste choisie.

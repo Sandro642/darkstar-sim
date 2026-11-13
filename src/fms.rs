@@ -450,6 +450,20 @@ pub fn dispatch(from: &str, to: &str, crz_fl: f64, crz_mach: f64) -> Result<Fpln
     Ok(fp)
 }
 
+/// Vol d'essai local : départ et retour sur le même terrain. Point « ESSAI » (zone d'essais) à
+/// 50 NM dans l'axe de départ, recalé au bout de la SID choisie ; SID, STAR et approche ajoutées
+/// par les pages DEPARTURES / ARRIVAL.
+pub fn local_plan(icao: &str, hdg: f64, crz_fl: f64, crz_mach: f64) -> Result<Fpln, String> {
+    let a = apt(icao).ok_or(format!("{icao} INCONNU"))?;
+    let (la, lo) = destination(a.lat, a.lon, hdg, 50.0 * NM);
+    let mut fp = Fpln { origin: icao.into(), dest: icao.into(), wpts: Vec::new(), active: 1, source: "ESSAI", flt: "DKS-T".into(), crz_fl, crz_mach, ..Default::default() };
+    fp.wpts.push(Wpt { ident: icao.into(), lat: a.lat, lon: a.lon, phase: "DEP", ..Default::default() });
+    fp.wpts.push(Wpt { ident: "ESSAI".into(), lat: la, lon: lo, ..Default::default() });
+    fp.wpts.push(Wpt { ident: icao.into(), lat: a.lat, lon: a.lon, phase: "ARR", ..Default::default() });
+    fp.compute();
+    Ok(fp)
+}
+
 /// Plan depuis un OFP SimBrief (JSON).
 pub fn from_simbrief(j: &Json, crz_fl: f64, crz_mach: f64, crz_max: bool) -> Result<Fpln, String> {
     if let Some(e) = j.path(&["fetch", "status"]) {
@@ -1004,8 +1018,20 @@ impl Fms {
             if let Some(t) = &tr {
                 add.extend(t.pts.clone());
             }
+            let sid_end = add.last().map(|w| (w.lat, w.lon));
             for (i, w) in add.into_iter().enumerate() {
                 fp.wpts.insert(1 + i, w);
+            }
+            // Vol d'essai : zone d'essais 40 NM au-delà de la sortie de SID
+            if fp.source == "ESSAI" {
+                if let (Some((sla, slo)), a) = (sid_end, apt) {
+                    let (d, b) = dist_brg(a.lat, a.lon, sla, slo);
+                    let (la, lo) = destination(a.lat, a.lon, b, d + 40.0 * NM);
+                    if let Some(w) = fp.wpts.iter_mut().find(|w| w.ident == "ESSAI") {
+                        w.lat = la;
+                        w.lon = lo;
+                    }
+                }
             }
             fp.dep_rwy = rwy.clone();
             fp.sid = pr.as_ref().map(|s| s.name.trim_end_matches(" OFP").to_string()).unwrap_or_default();
@@ -1430,6 +1456,34 @@ impl Fms {
             (Page::Init, true, 5) => {
                 self.page = Page::Fpln;
             }
+            // Vol d'essai local : terrain saisi (OACI) ou le plus proche de l'avion
+            (Page::Init, true, 4) => {
+                let a = if sp.len() == 4 { apt(&sp) } else { None }.or_else(|| AIRPORTS.iter().min_by(|x, y| dist_brg(ac.lat, ac.lon, x.lat, x.lon).0.total_cmp(&dist_brg(ac.lat, ac.lon, y.lat, y.lon).0)));
+                if let Some(a) = a {
+                    let near = dist_brg(ac.lat, ac.lon, a.lat, a.lon).0 < 5.0 * NM && ac.on_ground;
+                    let hdg = if near { ac.hdg_deg() } else { crate::geo::wrap360(a.hdg + 180.0) };
+                    let (fl, m) = (250.0, 0.9);
+                    match local_plan(a.icao, hdg, fl, m) {
+                        Ok(fp) => {
+                            self.fpln = Some(fp);
+                            self.temp = None;
+                            self.crz = (fl, m);
+                            self.crz_max = false;
+                            self.from_to = (a.icao.into(), a.icao.into());
+                            self.arm_vnav();
+                            self.scratch.clear();
+                            // Piste de départ : celle où l'avion est aligné
+                            let rwy = if near { Some(a.end_ident(hdg, Some((ac.lat, ac.lon)))) } else { None };
+                            self.dep = ProcSel { rwy, proc: None, trans: None };
+                            self.page = Page::Dep;
+                            self.scroll = 0;
+                            self.msg = "CHOISIR PISTE / SID".into();
+                            out = Some(McduOut::Cmd(format!("DEST {}", a.icao)));
+                        }
+                        Err(e) => self.msg = e,
+                    }
+                }
+            }
             // ----- F-PLN -----
             (Page::Fpln, true, l) if l < 5 => {
                 let idx = self.scroll + l;
@@ -1511,6 +1565,12 @@ impl Fms {
                         self.msg = "INSERE".into();
                         self.page = Page::Fpln;
                         self.scroll = 0;
+                        // Vol d'essai : départ inséré, on enchaîne sur l'arrivée
+                        if !arr && self.plan().is_some_and(|p| p.source == "ESSAI" && p.arr_rwy.is_empty()) {
+                            self.arr = ProcSel { rwy: None, proc: None, trans: None };
+                            self.page = Page::Arr;
+                            self.msg = "CHOISIR PISTE / STAR".into();
+                        }
                         out = Some(McduOut::Msg(Level::Info, format!("FMS : {m}")));
                     }
                     Err(e) => self.msg = e,
@@ -1778,7 +1838,7 @@ fn page_lines(f: &Fms, ac: &Aircraft) -> (String, Color, Vec<(Line, Line)>) {
                 Some(p) => format!("{} {}-{} {:.0}NM", p.source, p.origin, p.dest, p.total() / NM),
                 None => "AUCUN PLAN".into(),
             };
-            rows.push((ln(" PLAN", LBL_M, "", LBL_M), ln(info, if f.plan().is_some() { GREEN_M } else { LBL_M }, "", WHITE_M)));
+            rows.push((ln(format!(" {info}"), if f.plan().is_some() { GREEN_M } else { LBL_M }, "", LBL_M), ln("<VOL D'ESSAI", WHITE_M, "", WHITE_M)));
             rows.push((blank(), if f.temp.is_some() { ln("<F-PLN", WHITE_M, "ACTIVATE*", AMB_M) } else { ln("<F-PLN", WHITE_M, "", WHITE_M) }));
         }
         Page::Fpln => {
@@ -2364,6 +2424,79 @@ mod tests {
         }
         println!("ILS destination cale {tuned_dest}, autoland piste {landed_rwy}, sol {} crash {:?} t {t:.0}", ac.on_ground, ac.crashed);
         assert!(tuned_dest && landed_rwy == arr_rwy && ac.on_ground && ac.crashed.is_none());
+    }
+
+    /// Vol d'essai local (MCDU INIT <VOL D'ESSAI) : piste et SID au départ, STAR à l'arrivée sur
+    /// le même terrain, vol LNAV / VNAV complet et autoland sur la piste choisie.
+    #[test]
+    fn local_test_flight() {
+        let ai = AIRPORTS.iter().position(|a| a.icao == "KEDW").unwrap();
+        let mut f = Fms::new();
+        let mut ac = Aircraft::new_on_runway(ai);
+        f.page = Page::Init;
+        f.scratch = "KEDW".into();
+        let r = f.lsk(true, 4, &ac);
+        assert!(matches!(r, Some(McduOut::Cmd(ref c)) if c == "DEST KEDW"), "{}", f.msg);
+        assert_eq!(f.page, Page::Dep);
+        assert!(f.dep.rwy.is_some(), "piste de depart preselectionnee");
+        f.scroll = 0;
+        f.lsk(false, 1, &ac); // SID
+        f.lsk(false, 1, &ac); // NO TRANS
+        f.lsk(false, 5, &ac); // INSERT -> ARRIVAL
+        assert_eq!(f.page, Page::Arr, "{}", f.msg);
+        let edw = crate::procs::airport("KEDW").unwrap();
+        let ends = crate::procs::ends(edw);
+        let arr_rwy = ends[0].ident.clone();
+        f.scroll = 0;
+        f.lsk(true, 1, &ac); // piste
+        f.lsk(false, 1, &ac); // STAR
+        f.lsk(false, 1, &ac); // NO TRANS
+        f.lsk(false, 5, &ac);
+        let p = f.fpln.as_ref().unwrap();
+        println!("essai : {} {} / {} {} ; {}", p.dep_rwy, p.sid, p.arr_rwy, p.star, p.wpts.iter().map(|w| format!("{}:{}", w.ident, w.proc)).collect::<Vec<_>>().join(" "));
+        assert!(p.origin == "KEDW" && p.dest == "KEDW" && !p.sid.is_empty() && !p.star.is_empty());
+        assert!(p.wpts.iter().any(|w| w.proc == 3));
+        // Vol : en l'air au-dessus du terrain, LNAV + VNAV jusqu'à l'autoland
+        ac.on_ground = false;
+        ac.gear_down = false;
+        ac.gear_pos = 0.0;
+        ac.brakes = false;
+        ac.alt = edw.elev + 1_500.0 * FT;
+        ac.tas = 120.0;
+        ac.set_turbines(TurbState::Running, 0.8);
+        ac.ap.on = true;
+        ac.ap.lat = LatMode::Nav;
+        f.fpln.as_mut().unwrap().active = 1;
+        ac.rwy_pref = arr_rwy.clone();
+        let dt = 1.0 / 120.0;
+        let mut t = 0.0;
+        let mut landed = String::new();
+        while t < 4_000.0 && ac.crashed.is_none() && !(ac.on_ground && ac.tas < 3.0) {
+            if (t * 10.0f64).fract() < dt * 10.0 {
+                if let Some((b, _)) = f.guidance(&ac) {
+                    if ac.autoland.is_none() {
+                        ac.ap.hdg_tgt = b;
+                    }
+                }
+                let _ = f.autotune(&ac);
+                for o in f.vnav_update(&mut ac) {
+                    if let McduOut::Cmd(c) = o {
+                        if let Some(code) = c.strip_prefix("ATTERRIR ") {
+                            let i = AIRPORTS.iter().position(|a| a.icao == code).unwrap();
+                            ac.engage_autoland(i).unwrap();
+                            landed = ac.autoland.as_ref().unwrap().rwy.clone();
+                            println!("ATTERRIR a t {t:.0} s, alt {:.0} ft", ac.alt / FT);
+                        }
+                    }
+                }
+            }
+            let c = ac.autoflight().unwrap_or((0.0, 0.0));
+            ac.step(dt, c.0, c.1);
+            ac.events.clear();
+            t += dt;
+        }
+        println!("autoland {landed} (prevue {arr_rwy}), sol {} crash {:?} t {t:.0}", ac.on_ground, ac.crashed);
+        assert!(landed == arr_rwy && ac.on_ground && ac.crashed.is_none());
     }
 
     /// Panneau IFR de l'horizon : départ au sol, arrivée, approche.
