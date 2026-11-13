@@ -530,6 +530,33 @@ impl Game {
                 }
             }
             fms::McduKey::Focus => self.fms.focus = true,
+            fms::McduKey::Char(c) => {
+                if self.fms.scratch == "CLR" {
+                    self.fms.scratch.clear();
+                }
+                if self.fms.scratch.len() < 30 {
+                    self.fms.scratch.push(c);
+                }
+                self.fms.msg.clear();
+            }
+            fms::McduKey::PlusMinus => {
+                if self.fms.scratch.ends_with('-') {
+                    self.fms.scratch.pop();
+                    self.fms.scratch.push('+');
+                } else if self.fms.scratch.ends_with('+') {
+                    self.fms.scratch.pop();
+                    self.fms.scratch.push('-');
+                } else {
+                    self.fms.scratch.push('-');
+                }
+            }
+            fms::McduKey::Inop(k) => self.fms.msg = format!("{k} NON DISPONIBLE"),
+            fms::McduKey::Bright(d) => fms::bright(d),
+            fms::McduKey::Airport => {
+                self.fms.page = fms::Page::Fpln;
+                let n = self.fms.fpln.as_ref().map(|p| p.wpts.len()).unwrap_or(0);
+                self.fms.scroll = n.saturating_sub(5);
+            }
         }
         self.cues.push(audio::Cue::Click);
     }

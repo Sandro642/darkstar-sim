@@ -1342,10 +1342,24 @@ struct Line {
     r: String,
     lc: Color,
     rc: Color,
+    /// Colonne centrale (heure UTC sur F-PLN), facultative
+    c: String,
+    cc: Color,
 }
 
 fn ln(l: impl Into<String>, lc: Color, r: impl Into<String>, rc: Color) -> Line {
-    Line { l: l.into(), r: r.into(), lc, rc }
+    Line { l: l.into(), r: r.into(), lc, rc, c: String::new(), cc: WHITE_M }
+}
+
+fn ln3(l: impl Into<String>, lc: Color, c: impl Into<String>, cc: Color, r: impl Into<String>, rc: Color) -> Line {
+    Line { l: l.into(), r: r.into(), lc, rc, c: c.into(), cc }
+}
+
+/// Heure UTC (HHMM) dans `secs` secondes.
+fn utc_in(secs: f64) -> String {
+    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs_f64()).unwrap_or(0.0);
+    let t = ((now + secs.max(0.0)) / 60.0) as i64 % (24 * 60);
+    format!("{:02}{:02}", t / 60, t % 60)
 }
 
 fn fmt_eta(s: f64) -> String {
@@ -1435,43 +1449,55 @@ fn page_lines(f: &Fms, ac: &Aircraft) -> (String, Color, Vec<(Line, Line)>) {
         }
         Page::Fpln => {
             let tmp = f.temp.is_some();
-            title = if tmp { "TMPY F-PLN".into() } else { "F-PLN".into() };
+            title = if tmp { "TMPY F-PLN".into() } else { format!("FROM  {}", f.plan().map(|p| p.flt.clone()).unwrap_or_default()) };
             tc = if tmp { AMB_M } else { WHITE_M };
             match f.plan() {
                 None => {
                     rows.push((blank(), ln("PAS DE PLAN", AMB_M, "", WHITE_M)));
                 }
                 Some(p) => {
-                    let mut prev: Option<&Wpt> = None;
-                    if f.scroll > 0 {
-                        prev = p.wpts.get(f.scroll - 1);
+                    // Format Airbus : voie au-dessus du point, distance de la branche au centre,
+                    // point en vert (actif blanc, temporaire jaune), heure UTC, vitesse / altitude
+                    let gs = ac.ground_speed().max(120.0);
+                    let mut prev: Option<&Wpt> = if f.scroll > 0 { p.wpts.get(f.scroll - 1) } else { None };
+                    // Distance cumulée depuis l'avion jusqu'au point i (pour l'heure estimée)
+                    let mut cum = vec![0.0f64; p.wpts.len()];
+                    {
+                        let (mut pl, mut po, mut acc) = (ac.lat, ac.lon, 0.0);
+                        for k in p.active.min(p.wpts.len())..p.wpts.len() {
+                            acc += dist_brg(pl, po, p.wpts[k].lat, p.wpts[k].lon).0;
+                            cum[k] = acc;
+                            pl = p.wpts[k].lat;
+                            po = p.wpts[k].lon;
+                        }
                     }
                     for i in f.scroll..(f.scroll + 5).min(p.wpts.len()) {
                         let w = &p.wpts[i];
-                        let (dd, brg) = match prev {
-                            Some(q) => dist_brg(q.lat, q.lon, w.lat, w.lon),
-                            None => (0.0, 0.0),
-                        };
+                        let dd = prev.map(|q| dist_brg(q.lat, q.lon, w.lat, w.lon).0).unwrap_or(0.0);
                         let act = !tmp && i == p.active;
-                        let col = if tmp { AMB_M } else if act { MAG_M } else if i < p.active { LBL_M } else { GREEN_M };
-                        let lab = if i == 0 {
-                            format!(" DEP RWY{} {}", p.dep_rwy, p.sid)
-                        } else if !w.via.is_empty() && w.via != "DCT" {
-                            format!(" {} C{:03.0} {:.0}NM", w.via, brg, dd / NM)
-                        } else {
-                            format!(" C{:03.0} {:.0}NM {}", brg, dd / NM, w.phase)
-                        };
-                        let cons = if w.mach > 1.0 { format!("M{:.1}/FL{:.0}", w.mach, w.alt_ft / 100.0) } else if w.alt_ft > 0.0 && i > 0 && i + 1 < p.wpts.len() { format!("M.{:.0}/FL{:.0}", w.mach * 100.0, w.alt_ft / 100.0) } else { format!("{:.0}", w.alt_ft) };
-                        rows.push((ln(lab, LBL_M, "", LBL_M), ln(w.ident.clone(), col, cons, if act { MAG_M } else { CYAN_M })));
+                        let passed = !tmp && i < p.active;
+                        let col = if tmp { AMB_M } else if act { WHITE_M } else if passed { LBL_M } else { GREEN_M };
+                        let via = if i == 0 { if p.sid.is_empty() { "".to_string() } else { p.sid.clone() } } else if w.via.is_empty() { if w.phase.starts_with("T/") || w.ident.starts_with("T/") { String::new() } else { "DCT".into() } } else { w.via.clone() };
+                        let lab_c = if i > 0 && dd > 0.0 { format!("{:.0}", dd / NM) } else { String::new() };
+                        let ident = if i == 0 { format!("{}{}", w.ident, p.dep_rwy) } else if w.ident.starts_with("T/") { format!("({})", w.ident) } else { w.ident.clone() };
+                        let time = if i == 0 || passed || tmp { "----".to_string() } else { utc_in(cum[i] / gs) };
+                        let spd = if w.mach > 1.0 { format!("M{:.1}", w.mach) } else if i == 0 || i + 1 == p.wpts.len() { "---".into() } else { format!("{:.0}", (w.mach * 600.0).clamp(250.0, 340.0)) };
+                        let alt = if w.alt_ft > 18_000.0 { format!("FL{:03.0}", w.alt_ft / 100.0) } else { format!("{:.0}", w.alt_ft) };
+                        rows.push((ln3(format!(" {via}"), LBL_M, lab_c, LBL_M, "", LBL_M), ln3(ident, col, time, GREEN_M, format!("{spd}/{alt}"), if act { WHITE_M } else { CYAN_M })));
                         prev = Some(w);
                     }
                     while rows.len() < 5 {
                         rows.push((blank(), blank()));
                     }
                     let rem = if tmp { p.total() } else { p.remaining(ac.lat, ac.lon) };
-                    let dest = format!("{} {:.0}NM {}", p.dest, rem / NM, fmt_eta(p.ete));
-                    let dlab = if p.arr_rwy.is_empty() { " DEST   DIST  TEMPS".to_string() } else { format!(" DEST RWY{} {}", p.arr_rwy, p.star) };
-                    rows.push((ln(dlab, LBL_M, "", LBL_M), if tmp { ln("<EFFACER", AMB_M, "ACTIVATE*", AMB_M) } else { ln(dest, WHITE_M, "", WHITE_M) }));
+                    // Carburant estimé à destination (JP-7 + H2, t)
+                    let tot = p.total().max(1.0);
+                    let efob = ((ac.fuel + ac.h2) - (p.jp7_req - APPR_JP7 - 2.0 * GA_JP7 + p.h2_req) * (rem / tot)) / 1000.0;
+                    let dest = format!("{}{}", p.dest, p.arr_rwy);
+                    rows.push((
+                        ln3(" DEST", LBL_M, "UTC", LBL_M, "DIST  EFOB ", LBL_M),
+                        if tmp { ln("<ERASE", AMB_M, "INSERT*", AMB_M) } else { ln3(dest, WHITE_M, utc_in(rem / gs), GREEN_M, format!("{:.0}  {:.1}", rem / NM, efob.max(0.0)), GREEN_M) },
+                    ));
                 }
             }
         }
@@ -1568,79 +1594,183 @@ pub enum McduKey {
     Slew(bool),
     Clr,
     Focus,
+    /// Touche du clavier alphanumérique (caractère à ajouter à la ligne de saisie)
+    Char(char),
+    /// +/- : inverse le signe de la saisie
+    PlusMinus,
+    /// Touches sans fonction sur le Darkstar (SEC F-PLN, ATC COMM…)
+    Inop(&'static str),
+    /// Luminosité de l'écran (+1 / -1)
+    Bright(i32),
+    /// AIRPORT : défile jusqu'à la destination
+    Airport,
 }
 
-/// MCDU complet : écran 24 colonnes x 14 lignes, LSK, touches de page, ligne de saisie.
+/// Luminosité de l'écran du MCDU (BRT / DIM).
+pub fn bright(d: i32) {
+    BRT.with(|c| c.set((c.get() + d as f32 * 0.15).clamp(0.3, 1.0)));
+}
+
+thread_local! {
+    static BRT: std::cell::Cell<f32> = const { std::cell::Cell::new(1.0) };
+}
+
+/// Touche du MCDU : fond gris foncé, légende blanche ; renvoie vrai si cliquée.
+fn mkey(r: Rect, label: &str, round: bool, framed: bool) -> bool {
+    let hov = hovered(r);
+    let face = if hov { Color::new(0.30, 0.31, 0.33, 1.0) } else { Color::new(0.20, 0.21, 0.22, 1.0) };
+    if round {
+        let c = vec2(r.x + r.w / 2.0, r.y + r.h / 2.0);
+        draw_circle(c.x + 1.0, c.y + 2.0, r.w / 2.0, Color::new(0.05, 0.05, 0.06, 1.0));
+        draw_circle(c.x, c.y, r.w / 2.0, face);
+        draw_circle_lines(c.x, c.y, r.w / 2.0, 1.0, Color::new(0.45, 0.46, 0.48, 1.0));
+    } else {
+        draw_rectangle(r.x + 1.0, r.y + 2.0, r.w, r.h, Color::new(0.05, 0.05, 0.06, 1.0));
+        draw_rectangle(r.x, r.y, r.w, r.h, face);
+        draw_rectangle_lines(r.x, r.y, r.w, r.h, 1.0, Color::new(0.45, 0.46, 0.48, 1.0));
+    }
+    let sz = if label.len() > 4 { 9.5 } else { 12.0 };
+    if label.contains(' ') && !round {
+        let (a, b) = label.split_once(' ').unwrap();
+        txt_c(a, r.x + r.w / 2.0, r.y + r.h / 2.0 - 2.0, sz, WHITE_M);
+        txt_c(b, r.x + r.w / 2.0, r.y + r.h / 2.0 + 10.0, sz, WHITE_M);
+    } else {
+        txt_c(label, r.x + r.w / 2.0, r.y + r.h / 2.0 + sz * 0.36, if round { 14.0 } else { sz }, WHITE_M);
+    }
+    if framed {
+        draw_rectangle_lines(r.x + 5.0, r.y + 5.0, r.w - 10.0, r.h - 10.0, 1.0, WHITE_M);
+    }
+    clicked(r)
+}
+
+/// MCDU façon A320 : écran 24 colonnes x 14 lignes, 6 touches de ligne de chaque côté, touches
+/// de page, flèches, BRT/DIM, pavé numérique rond, clavier alphabétique, SP, OVFY, CLR.
 pub fn draw_mcdu(f: &Fms, ac: &Aircraft, r: Rect, time: f64) -> Option<McduKey> {
     let mut out = None;
-    panel(r, "MCDU  DK-FMS");
-    // Boîtier
-    let bw = (r.w - 24.0).min(520.0);
-    let b = Rect::new(r.x + (r.w - bw) / 2.0, r.y + 28.0, bw, r.h - 36.0);
-    rrect(b, 10.0, Color::new(0.16, 0.17, 0.18, 1.0));
-    rrect_lines(b, 10.0, 1.5, Color::new(0.3, 0.32, 0.34, 1.0));
-    let lsk_w = 34.0;
-    let scr = Rect::new(b.x + lsk_w + 14.0, b.y + 12.0, b.w - 2.0 * (lsk_w + 14.0), (b.h * 0.58).min(330.0));
-    draw_rectangle(scr.x, scr.y, scr.w, scr.h, Color::new(0.01, 0.02, 0.02, 1.0));
-    draw_rectangle_lines(scr.x, scr.y, scr.w, scr.h, 2.0, Color::new(0.05, 0.06, 0.06, 1.0));
+    // Boîtier gris
+    let bw = (r.w - 16.0).min(560.0);
+    let b = Rect::new(r.x + (r.w - bw) / 2.0, r.y + 6.0, bw, r.h - 12.0);
+    draw_rectangle(b.x, b.y, b.w, b.h, Color::new(0.33, 0.35, 0.37, 1.0));
+    draw_rectangle_lines(b.x, b.y, b.w, b.h, 2.0, Color::new(0.18, 0.19, 0.2, 1.0));
+    for k in 0..5 {
+        draw_rectangle(b.x + b.w * 0.36 + k as f32 * b.w * 0.07, b.y + 7.0, b.w * 0.05, 5.0, Color::new(0.1, 0.1, 0.11, 1.0));
+    }
+    let brt = BRT.with(|c| c.get());
+    let lsk_w = 30.0;
+    let scr = Rect::new(b.x + lsk_w + 22.0, b.y + 20.0, b.w - 2.0 * (lsk_w + 22.0), (b.h * 0.45).min(300.0));
+    draw_rectangle(scr.x - 4.0, scr.y - 4.0, scr.w + 8.0, scr.h + 8.0, Color::new(0.1, 0.1, 0.11, 1.0));
+    draw_rectangle(scr.x, scr.y, scr.w, scr.h, BLACK);
     if clicked(scr) {
         out = Some(McduKey::Focus);
     }
+    let dim = |c: Color| Color::new(c.r * brt, c.g * brt, c.b * brt, c.a);
     let rowh = scr.h / 14.0;
-    let fs = (rowh * 0.95).min(18.0);
-    let small = fs * 0.75;
+    let fs = (rowh * 1.0).min(19.0);
+    let small = fs * 0.72;
     let (title, tc, rows) = page_lines(f, ac);
-    txt_c(&title, scr.x + scr.w / 2.0, scr.y + rowh * 0.85, fs, tc);
+    txt_c(&title, scr.x + scr.w / 2.0, scr.y + rowh * 0.9, fs * 0.9, dim(tc));
+    if f.page == Page::Fpln {
+        // Flèches de défilement latéral / vertical (dessinées)
+        let (ax, ay) = (scr.x + scr.w - 22.0, scr.y + rowh * 0.6);
+        draw_line(ax - 8.0, ay, ax + 8.0, ay, 1.5, dim(WHITE_M));
+        draw_triangle(vec2(ax - 11.0, ay), vec2(ax - 6.0, ay - 3.0), vec2(ax - 6.0, ay + 3.0), dim(WHITE_M));
+        draw_triangle(vec2(ax + 11.0, ay), vec2(ax + 6.0, ay - 3.0), vec2(ax + 6.0, ay + 3.0), dim(WHITE_M));
+    }
+    let cx_col = scr.x + scr.w * 0.47;
     for (k, (lab, dat)) in rows.iter().enumerate().take(6) {
         let yl = scr.y + rowh * (2.0 * k as f32 + 1.85);
         let yd = yl + rowh;
-        txt(&lab.l, scr.x + 4.0, yl, small, lab.lc);
-        txt_r(&lab.r, scr.x + scr.w - 4.0, yl, small, lab.rc);
-        txt(&dat.l, scr.x + 4.0, yd, fs, dat.lc);
-        txt_r(&dat.r, scr.x + scr.w - 4.0, yd, fs, dat.rc);
-        // LSK
-        for (left, x) in [(true, b.x + 8.0), (false, b.x + b.w - 8.0 - lsk_w)] {
-            let kr = Rect::new(x, yd - rowh * 0.8, lsk_w, rowh * 0.95);
-            rrect(kr, 3.0, if hovered(kr) { Color::new(0.38, 0.4, 0.42, 1.0) } else { Color::new(0.28, 0.29, 0.3, 1.0) });
-            draw_line(if left { kr.x + kr.w } else { kr.x }, kr.y + kr.h / 2.0, if left { kr.x + kr.w + 8.0 } else { kr.x - 8.0 }, kr.y + kr.h / 2.0, 2.0, Color::new(0.5, 0.52, 0.54, 1.0));
-            if clicked(kr) {
+        txt(&lab.l, scr.x + 4.0, yl, small, dim(lab.lc));
+        txt_c(&lab.c, cx_col, yl, small, dim(lab.cc));
+        txt_r(&lab.r, scr.x + scr.w - 4.0, yl, small, dim(lab.rc));
+        txt(&dat.l, scr.x + 4.0, yd, fs, dim(dat.lc));
+        txt_c(&dat.c, cx_col, yd, fs * 0.8, dim(dat.cc));
+        txt_r(&dat.r, scr.x + scr.w - 4.0, yd, fs, dim(dat.rc));
+        // Touches de ligne (LSK) avec leur trait vers l'écran
+        for (left, x) in [(true, b.x + 10.0), (false, b.x + b.w - 10.0 - lsk_w)] {
+            let kr = Rect::new(x, yd - rowh * 0.75, lsk_w, rowh * 0.95);
+            let m1 = if left { kr.x + kr.w + 3.0 } else { kr.x - 12.0 };
+            draw_line(m1, kr.y + kr.h / 2.0, m1 + 9.0, kr.y + kr.h / 2.0, 2.0, Color::new(0.85, 0.86, 0.87, 1.0));
+            if mkey(kr, "", false, false) {
                 out = Some(McduKey::Lsk(left, k));
             }
         }
     }
-    // Ligne de saisie / message
+    // Ligne de saisie
     let ys = scr.y + rowh * 13.7;
     let cursor = if f.focus && (time * 2.0).fract() < 0.5 { "_" } else { "" };
     if !f.msg.is_empty() && f.scratch.is_empty() {
-        txt(&f.msg, scr.x + 4.0, ys, fs, AMB_M);
+        txt(&f.msg, scr.x + 4.0, ys, fs, dim(AMB_M));
     } else {
-        txt(&format!("{}{cursor}", f.scratch), scr.x + 4.0, ys, fs, WHITE_M);
+        txt(&format!("{}{cursor}", f.scratch), scr.x + 4.0, ys, fs, dim(WHITE_M));
     }
-    let _ = COLS;
-    // Touches de page
+    // Touches de page (3 rangées de 6) + BRT / DIM
     let ky = scr.y + scr.h + 14.0;
-    let keys: [(&str, Option<Page>); 8] = [("INIT", Some(Page::Init)), ("F-PLN", Some(Page::Fpln)), ("PERF", Some(Page::Perf)), ("PROG", Some(Page::Prog)), ("FUEL", Some(Page::Fuel)), ("RAD NAV", Some(Page::RadNav)), ("CLR", None), ("^ v", None)];
-    let kw = (b.w - 24.0) / 4.0 - 6.0;
-    for (i, (k, p)) in keys.iter().enumerate() {
-        let (c, rw) = (i % 4, i / 4);
-        let kr = Rect::new(b.x + 12.0 + c as f32 * (kw + 6.0), ky + rw as f32 * 36.0, kw, 30.0);
-        let on = p.is_some_and(|p| p == f.page);
-        rrect(kr, 4.0, if hovered(kr) { Color::new(0.3, 0.32, 0.34, 1.0) } else { Color::new(0.22, 0.23, 0.24, 1.0) });
-        rrect_lines(kr, 4.0, 1.0, if on { CYAN_M } else { Color::new(0.4, 0.42, 0.44, 1.0) });
-        txt_c(k, kr.x + kr.w / 2.0, kr.y + 20.0, 13.0, WHITE_M);
-        if clicked(kr) {
-            out = Some(match (p, *k) {
-                (Some(p), _) => McduKey::Page(*p),
-                (None, "CLR") => McduKey::Clr,
-                _ => McduKey::Slew(mouse_position().0 > kr.x + kr.w / 2.0),
+    let kw = (b.w - 2.0 * lsk_w - 70.0) / 6.0;
+    // 9 rangées sous l'écran (touches de page, AIRPORT, flèches, pavé / clavier) : hauteur adaptée
+    let kh = (((b.y + b.h - 8.0) - ky) / 9.0 - 6.0).clamp(16.0, 30.0);
+    let x0 = b.x + lsk_w + 8.0;
+    let page_keys: [[(&str, Option<McduKey>); 6]; 2] = [
+        [("DIR", Some(McduKey::Page(Page::Dir))), ("PROG", Some(McduKey::Page(Page::Prog))), ("PERF", Some(McduKey::Page(Page::Perf))), ("INIT", Some(McduKey::Page(Page::Init))), ("DATA", Some(McduKey::Page(Page::Fuel))), ("", None)],
+        [("F-PLN", Some(McduKey::Page(Page::Fpln))), ("RAD NAV", Some(McduKey::Page(Page::RadNav))), ("FUEL PRED", Some(McduKey::Page(Page::Fuel))), ("SEC F-PLN", Some(McduKey::Inop("SEC F-PLN"))), ("ATC COMM", Some(McduKey::Inop("ATC COMM"))), ("MCDU MENU", Some(McduKey::Page(Page::Init)))],
+    ];
+    for (row, keys) in page_keys.into_iter().enumerate() {
+        for (c, (lbl, act)) in keys.into_iter().enumerate() {
+            let kr = Rect::new(x0 + c as f32 * (kw + 4.0), ky + row as f32 * (kh + 6.0), kw, kh);
+            if mkey(kr, lbl, false, false) {
+                if let Some(a) = act {
+                    out = Some(a);
+                }
+            }
+        }
+    }
+    for (k, (lbl, d)) in [("BRT", 1), ("DIM", -1)].into_iter().enumerate() {
+        let kr = Rect::new(b.x + b.w - lsk_w - 10.0, ky + k as f32 * (kh + 6.0), lsk_w + 4.0, kh);
+        if mkey(kr, lbl, false, false) {
+            out = Some(McduKey::Bright(d));
+        }
+    }
+    // AIRPORT, flèches
+    let ly = ky + 2.0 * (kh + 6.0);
+    if mkey(Rect::new(x0, ly, ((3.0 * (kh + 10.0) - 4.0) / 2.0).min(kw), kh), "AIR PORT", false, false) {
+        out = Some(McduKey::Airport);
+    }
+    let arrows = [("<", McduKey::Slew(false)), ("^", McduKey::Slew(false)), (">", McduKey::Slew(true)), ("v", McduKey::Slew(true))];
+    // Largeur limitée à la colonne du pavé numérique (le clavier alphabétique est à droite)
+    let aw = ((3.0 * (kh + 10.0) - 4.0) / 2.0).min(kw);
+    for (k, (lbl, a)) in arrows.into_iter().enumerate() {
+        let kr = Rect::new(x0 + (k % 2) as f32 * (aw + 4.0), ly + (1 + k / 2) as f32 * (kh + 6.0), aw, kh);
+        if mkey(kr, lbl, false, false) {
+            out = Some(a);
+        }
+    }
+    // Pavé numérique (ronds) et clavier alphabétique (carrés)
+    let ny = ly + 3.0 * (kh + 6.0);
+    let nd = kh;
+    let nums = ["1", "2", "3", "4", "5", "6", "7", "8", "9", ".", "0", "+/-"];
+    for (k, n) in nums.iter().enumerate() {
+        let kr = Rect::new(x0 + (k % 3) as f32 * (nd + 10.0), ny + (k / 3) as f32 * (nd + 6.0), nd, nd);
+        if mkey(kr, n, true, false) {
+            out = Some(if *n == "+/-" { McduKey::PlusMinus } else { McduKey::Char(n.chars().next().unwrap()) });
+        }
+    }
+    let ax0 = x0 + 3.0 * (nd + 10.0) + 14.0;
+    let akw = ((b.x + b.w - lsk_w - 10.0) - ax0 - 4.0 * 5.0) / 5.0;
+    let alpha_y = ly;
+    let letters = ["A", "B", "C", "D", "E", "F", "G", "H", "I", "J", "K", "L", "M", "N", "O", "P", "Q", "R", "S", "T", "U", "V", "W", "X", "Y", "Z", "/", "SP", "OVFY", "CLR"];
+    for (k, l) in letters.iter().enumerate() {
+        let kr = Rect::new(ax0 + (k % 5) as f32 * (akw + 5.0), alpha_y + (k / 5) as f32 * (kh + 6.0), akw, kh);
+        let framed = matches!(*l, "E" | "N" | "S" | "W");
+        if mkey(kr, l, false, framed) {
+            out = Some(match *l {
+                "CLR" => McduKey::Clr,
+                "SP" => McduKey::Char(' '),
+                "OVFY" => McduKey::Inop("OVFY"),
+                _ => McduKey::Char(l.chars().next().unwrap()),
             });
         }
     }
-    let hy = ky + 84.0;
-    txt(if f.focus { "CLAVIER : SAISIE MCDU (ECHAP pour rendre le clavier au vol)" } else { "CLIC SUR L'ECRAN POUR SAISIR" }, b.x + 12.0, hy, 11.0, if f.focus { CYAN_M } else { LBL_M });
-    txt("FROM/TO : KPMD/PHNL > LSK1G   SIMBRIEF ID > LSK1D   IMPORT OFP : LSK2D", b.x + 12.0, hy + 16.0, 10.0, LBL_M);
-    txt("F-PLN : saisie + LSK = insertion, CLR + LSK = suppression, LSK seule = DIRECT", b.x + 12.0, hy + 30.0, 10.0, LBL_M);
-    txt("F-PLN : LSK sur l'aeroport de depart / d'arrivee = DEPARTURES / ARRIVAL (piste, SID/STAR, TRANS, ILS)", b.x + 12.0, hy + 44.0, 10.0, LBL_M);
+    let _ = (COLS, CYAN_M, MAG_M);
     out
 }
 

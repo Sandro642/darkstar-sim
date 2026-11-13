@@ -711,3 +711,9 @@ Le SR-72 est un avion de reconnaissance : sa charge utile est simulée.
   déroutement motorisé vers le terrain le plus proche puis autoland (au lieu d'imposer
   l'éjection) ; pendant une urgence, le VNAV du FMS ne pilote plus et l'avion actionne lui-même
   train et aérofreins.
+- v1.49.0 : MCDU façon A320 — boîtier gris, 6 touches de ligne de chaque côté avec leurs traits,
+  touches DIR / PROG / PERF / INIT / DATA, F-PLN / RAD NAV / FUEL PRED / SEC F-PLN / ATC COMM /
+  MCDU MENU, AIRPORT, flèches, BRT / DIM (luminosité), pavé numérique rond (+/-), clavier
+  alphabétique (E N S W encadrés), SP, OVFY, CLR — tout est cliquable. Page F-PLN au format
+  Airbus : voie au-dessus du point, distance de branche, point vert (actif blanc, temporaire
+  jaune), heure UTC estimée, VITESSE/ALTITUDE, ligne DEST / UTC / DIST / EFOB.
