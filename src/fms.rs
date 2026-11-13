@@ -196,6 +196,9 @@ pub struct Wpt {
     pub name: String,
     pub wind: String,
     pub mora: f64,
+    /// Contrainte d'altitude de la procédure (ARINC) : desc (+ au-dessus, - au-dessous, B entre,
+    /// espace « à »), altitudes (ft) ; desc nul si aucune contrainte publiée
+    pub cstr: (char, f64, f64),
 }
 
 #[derive(Clone, Default)]
@@ -505,6 +508,7 @@ pub fn from_simbrief(j: &Json, crz_fl: f64, crz_mach: f64, crz_max: bool) -> Res
                 name: gs("name"),
                 wind,
                 mora: f.get("mora").and_then(|x| x.f()).unwrap_or(0.0),
+                cstr: ('\0', 0.0, 0.0),
             });
         }
     }
@@ -1019,6 +1023,183 @@ impl Fms {
 
     /// Calage automatique de l'ILS : piste de départ au sol et en montée, ILS de destination à
     /// 250 NM de l'arrivée ou dès le début de descente. Renvoie un message au changement.
+    /// Informations IFR pour l'horizon : départ (piste, SID, contraintes, altitude de transition),
+    /// arrivée (STAR, contraintes, niveau de transition, ILS) et approche (ILS, profil 3°,
+    /// minimums, Vapp, vent sur la piste, remises des gaz possibles).
+    pub fn ifr_panel(&self, ac: &Aircraft, da_ft: f64) -> Option<crate::pfd_plus::IfrPanel> {
+        use crate::pfd_plus::IfrPanel;
+        let p = self.fpln.as_ref()?;
+        let org = crate::procs::airport(&p.origin);
+        let dst = crate::procs::airport(&p.dest);
+        let alt = ac.alt / FT;
+        let vs = ac.d.vs / FT * 60.0;
+        let gs = ac.ground_speed().max(30.0);
+        let gs_kt = gs / KT;
+        let d_org = org.map(|a| dist_brg(ac.lat, ac.lon, a.lat, a.lon).0).unwrap_or(f64::MAX);
+        let d_dst = dst.map(|a| dist_brg(ac.lat, ac.lon, a.lat, a.lon).0).unwrap_or(f64::MAX);
+        let act = p.wpts.get(p.active);
+        let act_proc = act.map(|w| w.proc).unwrap_or(0);
+        if ac.on_ground && d_dst < 5.0 * NM && ac.ground_speed() < 3.0 {
+            return None;
+        }
+        let phase = if ac.autoland.is_some() || (ac.approach.is_some() && d_dst < 60.0 * NM) || act_proc == 3 {
+            "APPROCHE"
+        } else if act_proc == 2 || (!ac.on_ground && d_dst < 150.0 * NM && d_dst < d_org) {
+            "ARRIVEE"
+        } else if (ac.on_ground && d_org < 5.0 * NM) || act_proc == 1 || (d_org < 40.0 * NM && alt < 20_000.0) {
+            "DEPART"
+        } else {
+            return None;
+        };
+        let ta: f64 = p.trans_alt.parse().unwrap_or(18_000.0);
+        let tl: f64 = p.trans_lvl.parse().unwrap_or(18_000.0);
+        let fa = |ft: f64| if ft >= tl.min(ta) { format!("FL{:03.0}", ft / 100.0) } else { format!("{ft:.0}") };
+        let mut rows: Vec<(String, String, u8)> = Vec::new();
+        let mmss = |s: f64| format!("{:02.0}:{:02.0}", (s / 60.0).floor(), s % 60.0);
+        // Prochain point de procédure, contrainte et vitesse verticale requise
+        let fix_rows = |rows: &mut Vec<(String, String, u8)>| {
+            let Some(w) = act else { return };
+            let (d, _) = dist_brg(ac.lat, ac.lon, w.lat, w.lon);
+            let ete = d / gs;
+            rows.push(("PROCHAIN".into(), format!("{}  {:.1} NM  {}", w.ident, d / NM, mmss(ete)), 4));
+            let c = match w.cstr.0 {
+                '\0' if w.proc > 0 && w.sb_alt > 0.0 => Some((format!("{}", fa(w.sb_alt)), w.sb_alt, w.sb_alt, "PREVUE")),
+                '+' => Some((format!("+{}", fa(w.cstr.1)), w.cstr.1, f64::MAX, "A OU AU-DESSUS")),
+                '-' => Some((format!("-{}", fa(w.cstr.1)), f64::MIN, w.cstr.1, "A OU AU-DESSOUS")),
+                'B' => Some((format!("{} / {}", fa(w.cstr.2), fa(w.cstr.1)), w.cstr.2, w.cstr.1, "ENTRE")),
+                '\0' => None,
+                _ => Some((fa(w.cstr.1), w.cstr.1, w.cstr.1, "A")),
+            };
+            if let Some((txt, lo, hi, kind)) = c {
+                let ok = alt >= lo - 150.0 && alt <= hi + 150.0;
+                if ok {
+                    rows.push(("CONTRAINTE".into(), format!("{txt}  {kind}  OK"), 1));
+                } else {
+                    let tgt = if alt < lo { lo } else { hi };
+                    let req = (tgt - alt) / (ete / 60.0).max(0.1);
+                    let able = req.signum() == vs.signum() && vs.abs() >= req.abs() * 0.85;
+                    rows.push(("CONTRAINTE".into(), format!("{txt}  {kind}"), if able { 3 } else { 2 }));
+                    rows.push(("VS REQUISE".into(), format!("{req:+.0} FPM  (ACT {vs:+.0})"), if able { 1 } else { 2 }));
+                }
+            }
+            if let Some(n) = p.wpts.get(p.active + 1) {
+                let c = match n.cstr.0 {
+                    '+' => format!("  +{}", fa(n.cstr.1)),
+                    '-' => format!("  -{}", fa(n.cstr.1)),
+                    'B' => format!("  {}/{}", fa(n.cstr.2), fa(n.cstr.1)),
+                    '\0' => String::new(),
+                    _ => format!("  {}", fa(n.cstr.1)),
+                };
+                rows.push(("PUIS".into(), format!("{}{c}", n.ident), 0));
+            }
+            if w.mora > 0.0 {
+                rows.push(("MORA".into(), format!("{:.0} FT", w.mora), if alt < w.mora { 2 } else { 0 }));
+            }
+        };
+        let rwy_info = |icao: &str, rwy: &str| -> Option<(f64, f64, f64, f64, f64)> {
+            let a = crate::procs::airport(icao)?;
+            let e = crate::procs::find_end(a, rwy)?;
+            let (la, lo) = crate::procs::threshold(a, &e);
+            Some((la, lo, e.hdg, a.elev, e.len))
+        };
+        let wind_txt = |hdg: f64| -> (String, u8) {
+            let (we, wn) = ac.wind;
+            let (s, c) = (hdg.to_radians().sin(), hdg.to_radians().cos());
+            let head = (we * s + wn * c) / KT * -1.0;
+            let cross = (we * c - wn * s) / KT;
+            (format!("FACE {head:+.0} KT  TRAV {:.0} KT {}", cross.abs(), if cross > 0.0 { "D>G" } else { "G>D" }), if cross.abs() > 25.0 || head < -10.0 { 2 } else { 0 })
+        };
+        let title;
+        match phase {
+            "DEPART" => {
+                // Piste du plan, sinon celle sur laquelle l'avion est aligné
+                let dep_rwy = if p.dep_rwy.is_empty() { org.map(|a| a.end_ident(ac.hdg_deg(), Some((ac.lat, ac.lon)))).unwrap_or_default() } else { p.dep_rwy.clone() };
+                title = format!("SID {}  RWY {}", if p.sid.is_empty() { "----" } else { &p.sid }, if dep_rwy.is_empty() { "--" } else { &dep_rwy });
+                if ac.on_ground {
+                    if let Some((_, _, hdg, _, len)) = rwy_info(&p.origin, &dep_rwy) {
+                        rows.push(("PISTE".into(), format!("{dep_rwy}  {len:.0} M  CRS {hdg:03.0}"), 0));
+                        let (w, c) = wind_txt(hdg);
+                        rows.push(("VENT".into(), w, c));
+                    }
+                    rows.push(("ROTATION".into(), format!("VR {:.0} KT  ASSIETTE 10  MAX 12", ac.vr_keas()), 3));
+                }
+                fix_rows(&mut rows);
+                if alt > ta - 1_500.0 && alt < ta + 1_500.0 && vs > 0.0 {
+                    rows.push(("TRANS ALT".into(), format!("{ta:.0} FT  CALAGE STANDARD", ), if alt > ta { 2 } else { 3 }));
+                } else {
+                    rows.push(("TRANS ALT".into(), format!("{ta:.0} FT"), 0));
+                }
+                if let Some(t) = self.ils.as_ref().filter(|t| t.apt == p.origin) {
+                    rows.push(("ILS RETOUR".into(), format!("{} {:.2} CRS {:03.0}", t.id, t.mhz, t.crs), 0));
+                }
+            }
+            "ARRIVEE" => {
+                title = format!("STAR {}  RWY {}", if p.star.is_empty() { "----" } else { &p.star }, if p.arr_rwy.is_empty() { "--" } else { &p.arr_rwy });
+                fix_rows(&mut rows);
+                rows.push(("DESTINATION".into(), format!("{}  {:.0} NM  {}", p.dest, d_dst / NM, mmss(d_dst / gs)), 0));
+                if alt < tl + 2_000.0 && alt > tl - 1_500.0 && vs < 0.0 {
+                    rows.push(("TRANS LVL".into(), format!("{}  CALAGE QNH", fa(tl)), if alt < tl { 2 } else { 3 }));
+                } else {
+                    rows.push(("TRANS LVL".into(), fa(tl), 0));
+                }
+                match self.ils.as_ref().filter(|t| t.apt == p.dest) {
+                    Some(t) => rows.push(("ILS".into(), format!("{} {:.2} CRS {:03.0}  CALE", t.id, t.mhz, t.crs), 1)),
+                    None => rows.push(("ILS".into(), "CALAGE AUTO A 80 NM".into(), 0)),
+                }
+                if let Some((_, _, hdg, _, len)) = rwy_info(&p.dest, &p.arr_rwy) {
+                    let (w, c) = wind_txt(hdg);
+                    rows.push(("PISTE".into(), format!("{}  {len:.0} M", p.arr_rwy), 0));
+                    rows.push(("VENT".into(), w, c));
+                }
+            }
+            _ => {
+                let thr = ac
+                    .approach
+                    .map(|(_, la, lo, h, e)| (la, lo, h, e, 0.0))
+                    .or_else(|| ac.autoland.as_ref().map(|a| (a.thr_lat, a.thr_lon, a.hdg, a.elev, a.len)))
+                    .or_else(|| rwy_info(&p.dest, &p.arr_rwy));
+                let via = act.filter(|w| w.proc == 3).map(|w| w.via.clone()).unwrap_or_default();
+                let rwy = ac
+                    .autoland
+                    .as_ref()
+                    .map(|a| a.rwy.clone())
+                    .filter(|r| !r.is_empty())
+                    .or_else(|| Some(p.arr_rwy.clone()).filter(|r| !r.is_empty()))
+                    .or_else(|| ac.approach.map(|(ai, la, lo, h, _)| AIRPORTS[ai].end_ident(h, Some((la, lo)))))
+                    .unwrap_or_default();
+                title = format!("{}  {}", if via.is_empty() { format!("ILS{rwy}") } else { via }, p.dest);
+                match self.ils.as_ref().filter(|t| t.apt == p.dest) {
+                    Some(t) => rows.push(("ILS".into(), format!("{} {:.2} CRS {:03.0}", t.id, t.mhz, t.crs), 1)),
+                    None => rows.push(("ILS".into(), "NON CALE".into(), 2)),
+                }
+                if act_proc == 3 {
+                    fix_rows(&mut rows);
+                }
+                if let Some((la, lo, hdg, el, _)) = thr {
+                    let along = along_before(la, lo, hdg, ac.lat, ac.lon).max(0.0);
+                    let len = rwy_info(&p.dest, &rwy).map(|r| r.4).unwrap_or(0.0);
+                    rows.push(("SEUIL".into(), format!("{:.1} NM  {}  ELEV {:.0} FT{}", along / NM, mmss(along / gs), el / FT, if len > 0.0 { format!("  {len:.0} M") } else { String::new() }), 0));
+                    if !ac.on_ground && along < 20.0 * NM {
+                        let tgt = el / FT + (along * 3f64.to_radians().tan() + 15.0) / FT;
+                        let dev = alt - tgt;
+                        rows.push(("PROFIL 3".into(), format!("{tgt:.0} FT  ECART {dev:+.0}", ), if dev.abs() < 150.0 { 1 } else if dev.abs() < 500.0 { 3 } else { 2 }));
+                        let vs3 = -gs_kt * 5.31;
+                        rows.push(("VS 3".into(), format!("{vs3:.0} FPM  (ACT {vs:+.0})"), if (vs - vs3).abs() < 300.0 { 1 } else { 3 }));
+                    }
+                    let (w, c) = wind_txt(hdg);
+                    rows.push(("VENT".into(), w, c));
+                    rows.push(("MINIMUMS".into(), format!("DA {:.0} FT  (RA {da_ft:.0})", el / FT + da_ft), 4));
+                }
+                let vapp = crate::autoflight::vapp(ac);
+                let fast = ac.d.keas > vapp + 20.0 && d_dst < 8.0 * NM;
+                rows.push(("VAPP".into(), format!("{vapp:.0} KT  (ACT {:.0})", ac.d.keas), if fast { 2 } else { 0 }));
+                let ga = ac.autoland.as_ref().map(|a| a.go_arounds).unwrap_or(0);
+                rows.push(("REMISES".into(), if self.ga_ok { format!("2 POSSIBLES  ({ga} FAITE{})", if ga > 1 { "S" } else { "" }) } else { "CARBURANT LIMITE".into() }, if self.ga_ok { 1 } else { 2 }));
+            }
+        }
+        Some(IfrPanel { phase, title, rows })
+    }
+
     pub fn autotune(&mut self, ac: &Aircraft) -> Option<String> {
         use crate::procs::*;
         let p = self.fpln.as_ref()?;
@@ -1026,8 +1207,19 @@ impl Fms {
         let to_dest = rem < 250.0 * NM || self.desc_started;
         let (icao, rwy) = if to_dest { (&p.dest, &p.arr_rwy) } else { (&p.origin, &p.dep_rwy) };
         let apt = airport(icao)?;
-        // Sans piste choisie : piste la plus longue
-        let e = if rwy.is_empty() { ends(apt).into_iter().max_by(|a, b| a.len.partial_cmp(&b.len).unwrap())? } else { find_end(apt, rwy)? };
+        // Sans piste choisie : l'approche en cours sur ce terrain, sinon parmi les plus longues
+        // pistes l'extrémité la mieux alignée sur l'arrivée (cap avion → terrain)
+        let e = if rwy.is_empty() {
+            let all = ends(apt);
+            let lmax = all.iter().map(|e| e.len).fold(0.0, f64::max);
+            let want = match ac.approach.filter(|a| AIRPORTS.get(a.0).is_some_and(|x| x.icao == apt.icao)) {
+                Some(a) => a.3,
+                None => dist_brg(ac.lat, ac.lon, apt.lat, apt.lon).1,
+            };
+            all.into_iter().filter(|e| e.len >= 0.9 * lmax).min_by(|a, b| wrap180(a.hdg - want).abs().total_cmp(&wrap180(b.hdg - want).abs()))?
+        } else {
+            find_end(apt, rwy)?
+        };
         let (id, mhz) = ils(apt, &e);
         let t = IlsTune { apt: apt.icao.to_string(), rwy: e.ident.clone(), id, mhz, crs: e.hdg };
         if self.ils.as_ref() != Some(&t) {
@@ -2172,6 +2364,35 @@ mod tests {
         }
         println!("ILS destination cale {tuned_dest}, autoland piste {landed_rwy}, sol {} crash {:?} t {t:.0}", ac.on_ground, ac.crashed);
         assert!(tuned_dest && landed_rwy == arr_rwy && ac.on_ground && ac.crashed.is_none());
+    }
+
+    /// Panneau IFR de l'horizon : départ au sol, arrivée, approche.
+    #[test]
+    fn ifr_panel_phases() {
+        let mut f = Fms::new();
+        f.dispatch_now("KPMD", "KLAS", 350.0, 0.9).unwrap();
+        let mut ac = Aircraft::new_on_runway(0);
+        let dep = f.ifr_panel(&ac, 200.0).expect("depart");
+        f.dispatch_now("KLAS", "KEDW", 350.0, 0.9).unwrap();
+        println!("{} {} {:?}", dep.phase, dep.title, dep.rows);
+        assert_eq!(dep.phase, "DEPART");
+        let edw = crate::procs::airport("KEDW").unwrap();
+        let (la, lo) = destination(edw.lat, edw.lon, 231.0, 11.0 * NM);
+        ac.on_ground = false;
+        ac.lat = la;
+        ac.lon = lo;
+        ac.alt = edw.elev + 3_500.0 * FT;
+        ac.tas = 90.0;
+        let p = f.ifr_panel(&ac, 200.0).expect("arrivee");
+        println!("{} {} {:?}", p.phase, p.title, p.rows);
+        assert!(p.phase == "ARRIVEE" || p.phase == "APPROCHE");
+        let ai = AIRPORTS.iter().position(|a| a.icao == "KEDW").unwrap();
+        let rw = &edw.runways()[0];
+        let (tla, tlo) = rw.threshold(rw.hdg);
+        ac.approach = Some((ai, tla, tlo, rw.hdg, edw.elev));
+        let p = f.ifr_panel(&ac, 200.0).expect("approche");
+        println!("{} {} {:?}", p.phase, p.title, p.rows);
+        assert!(p.rows.iter().any(|r| r.0 == "SEUIL" && !r.1.starts_with("0.0")));
     }
 
     /// Procédures réelles FAA CIFP (base installée, DARKSTAR_REALDB=1) : KLAX 25R SID → KSFO 28L

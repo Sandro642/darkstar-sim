@@ -41,7 +41,7 @@ pub struct PfdInfo<'a> {
 
 
 thread_local! {
-    static STYLE: std::cell::Cell<u8> = const { std::cell::Cell::new(2) };
+    static STYLE: std::cell::Cell<u8> = const { std::cell::Cell::new(0) };
 }
 
 /// Style de l'horizon : 0 Darkstar (échelles, blanc), 1 F-35 (casque : valeurs encadrées, vert),
@@ -191,7 +191,9 @@ pub fn geo(r: Rect) -> Geo {
     let top = r.y + 30.0 + 36.0;
     let bot = r.y + r.h - 94.0;
     let tw = (r.w * 0.075).clamp(72.0, 92.0);
-    let spd = Rect::new(r.x + 10.0, top, tw, bot - top);
+    // Style Darkstar : échelle G à gauche du ruban de vitesse
+    let gx = if green() { 10.0 } else { 62.0 };
+    let spd = Rect::new(r.x + gx, top, tw, bot - top);
     let vsi = Rect::new(r.x + r.w - 40.0, top, 30.0, bot - top);
     let alt = Rect::new(vsi.x - 4.0 - (tw + 16.0), top, tw + 16.0, bot - top);
     let hw = (r.w * 0.36).min(420.0);
@@ -253,6 +255,9 @@ pub fn draw_pfd(ac: &Aircraft, v: &View, r: Rect, info: &PfdInfo) {
         f35_altitude(ac, &g, info.da_ft);
     } else {
         draw_speed(ac, &g, info.time);
+        if !green() {
+            draw_g_bracket(ac, &g);
+        }
         draw_altitude(ac, &g, info.da_ft);
         draw_vsi(ac.d.vs, g.vsi);
     }
@@ -430,7 +435,6 @@ fn draw_svs_overlay(ac: &Aircraft, v: &View, s: Rect, info: &PfdInfo) {
         draw_line(b0.x - tg.x * 8.0, b0.y - tg.y * 8.0, b0.x + tg.x * 8.0, b0.y + tg.y * 8.0, 3.0, bc);
     }
 
-    crate::pfd_plus::terrain_warning(clr, s, info.time);
     if !ac.on_ground {
         let reveal = s.contains(vec2(mouse_position().0, mouse_position().1));
         crate::pfd_plus::fuel_alert(ac, &info.fuel, s, info.time, info.fuel_since, reveal && info.fuel.level != crate::fuel::Level::Ok);
@@ -545,6 +549,16 @@ fn draw_svs_overlay(ac: &Aircraft, v: &View, s: Rect, info: &PfdInfo) {
         txt(&format!("DECEL {dec:.2} G"), s.x + 10.0, oy - 2.0, 11.0, WHITE);
     }
 
+    // Coin gauche : récupération automatique (prioritaire), sinon panneau IFR départ / arrivée / approche
+    let left_y = s.y + s.h * 0.36;
+    let pw = (s.w * 0.30).clamp(250.0, 300.0);
+    if recovery_panel(ac, s.x + 8.0, left_y, pw, info.time) <= 0.0 {
+        let h = crate::pfd_plus::ifr_height();
+        // Au-dessus des panneaux du bas (couloir, ligne de saisie)
+        let low = if on_ils || ac.on_ground { 64.0 } else { 130.0 };
+        let y = (s.y + s.h - low - h).max(oy + 4.0);
+        crate::pfd_plus::ifr_draw(s.x + 8.0, y, pw, info.time);
+    }
     // Graphe de survitesse (prédiction de q, droite de rupture, braquage des gouvernes)
     overspeed_graph(ac, Rect::new(s.x + s.w - 250.0, s.y + s.h * 0.40, 240.0, 132.0), info.time);
     // Demandes de configuration de l'autoland : c'est l'opérateur qui exécute
@@ -555,6 +569,10 @@ fn draw_svs_overlay(ac: &Aircraft, v: &View, s: Rect, info: &PfdInfo) {
     // Au-dessus de la bannière d'approche / des barres ILS quand elles sont affichées
     let floor = if crate::appr::visible(ac) { s.y + s.h - crate::appr::BANNER_H - 64.0 } else { s.y + s.h - 60.0 };
     alarm_window(ac, info, cx, (cy + 118.0).min(floor - 10.0));
+    // Alarme relief au premier plan (au-dessus des blocs carburant) ; pas en finale train sorti
+    if !ac.landing_config() && !ac.gcas_active && !(ac.gcas_on && ac.gcas_t < 8.0) {
+        crate::pfd_plus::terrain_warning(clr, s, info.time);
+    }
     scissor(None);
 }
 
@@ -614,6 +632,123 @@ fn overspeed_graph(ac: &Aircraft, r: Rect, time: f64) {
     draw_rectangle(r.x + 9.0, by + 3.0, (bw - 2.0) * f, 6.0, if f > 0.95 / 1.2 { AMBER } else { CYAN_S });
     let xr = r.x + 8.0 + bw / 1.2;
     draw_line(xr, by, xr, by + 12.0, 2.0, RED);
+}
+
+/// Panneau de données de la récupération automatique (coin gauche) : avant déclenchement
+/// (Auto-GCAS armé : délai, marge prévue), pendant (étapes AILES A PLAT / RESSOURCE / MONTEE,
+/// inclinaison, g commandé / réel / max, pente, vario, hauteur sol, temps avant impact, marge,
+/// perte d'altitude, q et gouvernes en survitesse, libération du manche), puis bilan 8 s.
+/// Renvoie la hauteur occupée (0 si rien).
+fn recovery_panel(ac: &Aircraft, x: f32, y: f32, w: f32, time: f64) -> f32 {
+    if ac.on_ground || ac.crashed.is_some() {
+        return 0.0;
+    }
+    let r = &ac.rec;
+    let armed = !r.active && ac.gcas_on && ac.gcas_t < 8.0;
+    let done = !r.active && r.done_age < 8.0;
+    if !(r.active || armed || done) {
+        return 0.0;
+    }
+    let d = &ac.d;
+    let fast = (time * 3.0).fract() < 0.6;
+    let mut rows: Vec<(&str, String, Color)> = Vec::new();
+    let ft = |m: f64| m / FT;
+    let vs = d.vs / FT * 60.0;
+    let sink = -d.vs;
+    let tti = if sink > 0.5 { format!("{:.1} S", d.agl / sink) } else { "--".into() };
+    let marge = |m: f64| if m.is_finite() { format!("{:+.0} FT", ft(m)) } else { "--".into() };
+    let (title, col) = if r.active {
+        (if r.kind == 1 { "AUTO-GCAS  RECUPERATION" } else { "AUTO RECOVERY  SURVITESSE" }, RED)
+    } else if armed {
+        ("AUTO-GCAS  ARME", if ac.gcas_t < 3.0 { RED } else { AMBER })
+    } else {
+        ("BILAN RECUPERATION", GREEN_S)
+    };
+    // Étape courante (1 ailes à plat, 2 ressource, 3 montée / stabilisation)
+    let phi = ac.phi.to_degrees();
+    let step = if !r.active {
+        0
+    } else if phi.abs() > 15.0 {
+        1
+    } else if (r.kind == 1 && ac.gamma < 3f64.to_radians()) || (r.kind == 2 && ac.osr_clear_t <= 0.0) {
+        2
+    } else {
+        3
+    };
+    if r.active || armed {
+        let nz_cmd = if ac.gcas_ovr { 5.0 } else { ac.nz_law_max() * 0.95 };
+        rows.push(("INCLINAISON", format!("{phi:+.0} DEG  -> 0"), if phi.abs() > 15.0 { AMBER } else { GREEN_S }));
+        rows.push(("CHARGE", format!("{:.1} G  CMD {:.1}  MAX {:.1}", d.nz, nz_cmd, if r.active { r.g_max } else { d.nz }), if ac.gcas_ovr { RED } else { WHITE }));
+        rows.push(("PENTE / VARIO", format!("{:+.1} DEG  {vs:+.0} FPM", ac.gamma.to_degrees()), if ac.gamma < 0.0 { AMBER } else { GREEN_S }));
+        rows.push(("HAUTEUR SOL", format!("{:.0} FT{}", ft(d.agl), if r.active { format!("  MINI {:.0}", ft(r.min_agl)) } else { String::new() }), if d.agl < 500.0 * FT { RED } else { WHITE }));
+        rows.push(("AVANT IMPACT", tti, if sink > 0.5 && d.agl / sink < 10.0 { RED } else { WHITE }));
+        rows.push(("MARGE PREVUE", marge(ac.gcas_m), if ac.gcas_m < 0.0 { RED } else { GREEN_S }));
+        if armed {
+            rows.push(("DECLENCHEMENT", format!("DANS {:.1} S", ac.gcas_t.max(0.0)), if ac.gcas_t < 3.0 { RED } else { AMBER }));
+            rows.push(("ACTION", "AILES A PLAT PUIS TIRER".into(), CYAN_S));
+        }
+        if r.active {
+            rows.push(("PERTE ALT", format!("{:.0} FT  DUREE {:.1} S", ft(r.alt0 - r.alt_min), r.t), WHITE));
+            if ac.gcas_ovr {
+                rows.push(("FCS", "PROTECTIONS DEPASSEES 5 G".into(), RED));
+            }
+        }
+        if r.kind == 2 && r.active || ac.osr_active {
+            let rupt = Q_RUPTURE / 1000.0;
+            let peak = ac.osr_curve.iter().copied().fold(0.0f32, f32::max) as f64;
+            rows.push(("PRESSION q", format!("{:.0}  PIC {:.0}  RUPT {:.0} kPa", d.q / 1000.0, peak, rupt), if peak > rupt * 0.97 { RED } else { AMBER }));
+            let (dc, dr) = ac.osr_defl;
+            rows.push(("GOUVERNES", format!("{dc:.0} / {dr:.0} DEG ({:.0} %)", if dr > 0.0 { dc / dr * 100.0 } else { 0.0 }), CYAN_S));
+            rows.push(("CONFIG", format!("MANETTE IDLE  AEROFREINS {}", if ac.speedbrake { "EXT" } else { "RET" }), CYAN_S));
+        }
+    } else {
+        rows.push(("TYPE", if r.kind == 1 { "AUTO-GCAS".into() } else { "SURVITESSE".into() }, WHITE));
+        rows.push(("DUREE", format!("{:.1} S", r.t), WHITE));
+        rows.push(("PERTE ALT", format!("{:.0} FT", ft(r.alt0 - r.alt_min)), WHITE));
+        rows.push(("SOL MINI", format!("{:.0} FT", ft(r.min_agl)), if r.min_agl < 300.0 * FT { AMBER } else { GREEN_S }));
+        rows.push(("CHARGE MAX", format!("{:.1} G", r.g_max), if r.g_max > ac.nz_law_max() + 0.3 { AMBER } else { GREEN_S }));
+        rows.push(("q MAX", format!("{:.0} kPa", r.q_max / 1000.0), if r.q_max > Q_LIMIT { AMBER } else { GREEN_S }));
+        rows.push(("ETAT", "PILOTE A VOUS".into(), GREEN_S));
+    }
+    let steps_h = if r.active { 22.0 } else { 0.0 };
+    let rel_h = if r.active { 22.0 } else { 0.0 };
+    let h = 24.0 + steps_h + rows.len() as f32 * 15.0 + rel_h + 6.0;
+    let b = Rect::new(x, y, w, h);
+    rrect(b, 0.0, Color::new(0.0, 0.0, 0.0, 0.66));
+    rrect_lines(b, 0.0, 1.5, col);
+    draw_rectangle(b.x, b.y, b.w, 19.0, Color::new(col.r, col.g, col.b, 0.25));
+    if !r.active || fast || armed {
+        txt(title, b.x + 6.0, b.y + 14.0, 11.0, col);
+    }
+    let mut yy = b.y + 24.0;
+    if r.active {
+        // Étapes de la manœuvre
+        let names = ["AILES A PLAT", "RESSOURCE", if r.kind == 1 { "MONTEE" } else { "STABILISE" }];
+        let sw = (b.w - 12.0) / 3.0;
+        for (k, n) in names.iter().enumerate() {
+            let bx = b.x + 6.0 + k as f32 * sw;
+            let st = k + 1;
+            let (bg, fg) = if st == step { (Color::new(0.0, 0.85, 1.0, 0.35), WHITE) } else if st < step { (Color::new(0.2, 0.8, 0.3, 0.25), GREEN_S) } else { (Color::new(0.3, 0.32, 0.35, 0.25), Color::new(0.6, 0.62, 0.65, 0.8)) };
+            draw_rectangle(bx + 1.0, yy, sw - 2.0, 16.0, bg);
+            txt_c(&format!("{st} {n}"), bx + sw / 2.0, yy + 12.0, 9.0, fg);
+        }
+        yy += steps_h;
+    }
+    for (l, v, c) in &rows {
+        txt(l, b.x + 6.0, yy + 10.0, 9.0, Color::new(0.6, 0.65, 0.7, 0.9));
+        txt(v, b.x + 98.0, yy + 10.0, 10.0, *c);
+        yy += 15.0;
+    }
+    if r.active {
+        // Libération du manche : critère tenu (montée et marge) pendant 1,5 s (GCAS) / 2 s (survitesse)
+        let (t, need) = if r.kind == 1 { (ac.gcas_clear_t, 1.5) } else { (ac.osr_clear_t, 2.0) };
+        let f = (t / need).clamp(0.0, 1.0) as f32;
+        let bw = b.w - 12.0;
+        txt(&if f > 0.0 { format!("PILOTE A VOUS DANS {:.1} S", (need - t).max(0.0)) } else { "MANCHE INHIBE — CRITERE DE SORTIE NON ATTEINT".into() }, b.x + 6.0, yy + 9.0, 9.0, if f > 0.0 { GREEN_S } else { CYAN_S });
+        draw_rectangle_lines(b.x + 6.0, yy + 12.0, bw, 6.0, 1.0, Color::new(0.5, 0.55, 0.6, 0.8));
+        draw_rectangle(b.x + 7.0, yy + 13.0, (bw - 2.0) * f, 4.0, GREEN_S);
+    }
+    h
 }
 
 thread_local! {
@@ -913,6 +1048,35 @@ fn tape_bg(t: Rect) {
         rrect(t, 6.0, PANEL);
         rrect_lines(t, 6.0, 1.0, EDGE);
     }
+}
+
+/// Échelle G Darkstar (à gauche du ruban de vitesse) : +3.5 / +1.0 / -2.5 G, facteur de charge
+/// courant (triangle), mémoires G max / min (repères ambre).
+fn draw_g_bracket(ac: &Aircraft, g: &Geo) {
+    let nz = ac.d.nz;
+    let x = g.spd.x - 48.0;
+    let top = g.spd.y + g.spd.h * 0.12;
+    let bot = g.spd.y + g.spd.h * 0.62;
+    let gy = |v: f32| top + (3.5 - v) / 6.0 * (bot - top);
+    for (w, c) in [(3.5, Color::new(0.0, 0.0, 0.0, 0.5)), (1.5, line())] {
+        draw_line(x, top, x, bot, w, c);
+        for v in [3.5f32, 1.0, -2.5] {
+            draw_line(x, gy(v), x + 6.0, gy(v), w, c);
+        }
+    }
+    for v in [3.5f32, 1.0, -2.5] {
+        ht(&format!("{v:+.1}G"), x + 8.0, gy(v) + 5.0, 12.0, label_c());
+    }
+    for m in [ac.g_max, ac.g_min] {
+        if (m - 1.0).abs() > 0.05 {
+            let y = gy(m.clamp(-2.6, 3.6) as f32);
+            draw_line(x - 9.0, y, x + 4.0, y, 2.5, AMBER);
+        }
+    }
+    let gc = if !(-0.5..=2.5).contains(&nz) { AMBER } else { GREEN_S };
+    let y = gy(nz.clamp(-2.6, 3.6) as f32);
+    draw_triangle(vec2(x, y), vec2(x - 8.0, y - 5.0), vec2(x - 8.0, y + 5.0), gc);
+    ht(&format!("G {nz:+.2}"), x - 6.0, top - 12.0, 12.0, gc);
 }
 
 fn draw_speed(ac: &Aircraft, g: &Geo, time: f64) {

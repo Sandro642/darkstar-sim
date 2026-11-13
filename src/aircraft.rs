@@ -180,6 +180,22 @@ pub struct Derived {
     pub gamma_dot: f64,
 }
 
+/// Récupération automatique (Auto-GCAS / survitesse) : type (1 GCAS, 2 survitesse), durée (s),
+/// altitude d'entrée et minimale (m), hauteur sol minimale (m), g max, q max (Pa), temps écoulé
+/// depuis la fin (s).
+#[derive(Clone, Copy, Debug, Default)]
+pub struct RecStats {
+    pub active: bool,
+    pub kind: u8,
+    pub t: f64,
+    pub alt0: f64,
+    pub alt_min: f64,
+    pub min_agl: f64,
+    pub g_max: f64,
+    pub q_max: f64,
+    pub done_age: f64,
+}
+
 #[derive(Clone)]
 pub struct Aircraft {
     pub lat: f64,
@@ -209,14 +225,18 @@ pub struct Aircraft {
     pub gcas_ovr: bool,
     /// Temps (s) avant déclenchement de la récupération (alerte chevrons sur l'horizon)
     pub gcas_t: f64,
-    gcas_clear_t: f64,
-    gcas_g_max: f64,
+    pub gcas_clear_t: f64,
+    pub gcas_g_max: f64,
+    /// Marge (m) prévue au-dessus du relief en fin de ressource (négative : récupération requise)
+    pub gcas_m: f64,
+    /// Données de la récupération automatique en cours / de la dernière (bilan sur l'horizon)
+    pub rec: RecStats,
     /// Auto recovery survitesse (q) : récupération active, prédiction de q (kPa) de 0 à 10 s,
     /// braquage commandé et braquage de rupture des gouvernes (deg) pour le graphe de l'horizon
     pub osr_active: bool,
     pub osr_curve: [f32; 11],
     pub osr_defl: (f64, f64),
-    osr_clear_t: f64,
+    pub osr_clear_t: f64,
     /// Refroidissement carburant (FTMS) : 0 AUTO (échangeur H2 + air dynamique), 1 RAM AIR, 2 OFF
     pub fuel_cool: u8,
     /// Limiteur de g : false NORM (3 g / 2 g au-delà de Mach 4), true HIGH (4 g / 2,5 g)
@@ -395,6 +415,8 @@ impl Aircraft {
             gcas_t: f64::INFINITY,
             gcas_clear_t: 0.0,
             gcas_g_max: 0.0,
+            gcas_m: f64::INFINITY,
+            rec: RecStats { done_age: f64::INFINITY, ..Default::default() },
             osr_active: false,
             osr_curve: [0.0; 11],
             osr_defl: (0.0, 0.0),
@@ -791,6 +813,14 @@ impl Aircraft {
         }
     }
 
+    /// Configuration d'atterrissage : train sorti en vol, en approche (ILS / autoland) ou à moins
+    /// de 12 NM d'un aérodrome. Les alarmes de rapprochement du sol (PULL UP) y sont inhibées.
+    pub fn landing_config(&self) -> bool {
+        self.gear_down
+            && !self.on_ground
+            && (self.approach.is_some() || self.autoland.is_some() || crate::airports::near(self.lat, self.lon).iter().any(|a| dist_brg(self.lat, self.lon, a.lat, a.lon).0 < 12.0 * NM))
+    }
+
     /// Auto-GCAS : marge (m) entre la hauteur disponible et la hauteur nécessaire pour une
     /// récupération (remise à plat puis ressource à `n` g), relief devant compris, et temps avant
     /// déclenchement. Négatif : il faut récupérer maintenant.
@@ -1144,6 +1174,7 @@ impl Aircraft {
             let inhibit = !self.gcas_on || self.gear_down || self.autoland.is_some();
             let (m, t) = if inhibit { (f64::INFINITY, f64::INFINITY) } else { self.gcas_margin(self.nz_law_max() * 0.95) };
             self.gcas_t = t;
+            self.gcas_m = m;
             if self.gcas_active && !self.gcas_on {
                 self.gcas_active = false;
                 self.gcas_ovr = false;
@@ -1229,6 +1260,37 @@ impl Aircraft {
                         self.msg(Level::Info, format!("AUTO RECOVERY SURVITESSE TERMINEE — q {:.0} kPa, PILOTE A VOUS", q / 1000.0));
                     }
                 }
+            }
+        }
+        // Statistiques de la récupération automatique (panneau de l'horizon, bilan)
+        {
+            let kind = if self.gcas_active { 1 } else if self.osr_active { 2 } else { 0 };
+            let r = &mut self.rec;
+            if kind != 0 {
+                if !r.active {
+                    *r = RecStats { active: true, kind, alt0: self.alt, alt_min: self.alt, min_agl: self.d.agl, g_max: self.d.nz, q_max: q, done_age: f64::INFINITY, ..Default::default() };
+                }
+                r.kind = kind;
+                r.t += dt;
+                r.alt_min = r.alt_min.min(self.alt);
+                r.min_agl = r.min_agl.min(self.d.agl);
+                r.g_max = r.g_max.max(self.d.nz);
+                r.q_max = r.q_max.max(q);
+            } else if r.active {
+                r.active = false;
+                r.done_age = 0.0;
+                let m = format!(
+                    "BILAN {} : {:.1} S, PERTE {:.0} FT, SOL MINI {:.0} FT, {:.1} G MAX, q MAX {:.0} kPa",
+                    if r.kind == 1 { "AUTO-GCAS" } else { "AUTO RECOVERY" },
+                    r.t,
+                    (r.alt0 - r.alt_min) / FT,
+                    r.min_agl / FT,
+                    r.g_max,
+                    r.q_max / 1000.0
+                );
+                self.msg(Level::Info, m);
+            } else {
+                r.done_age += dt;
             }
         }
         // Réchauffage sondes coupé par air froid : givrage progressif

@@ -66,6 +66,8 @@ fn window_conf() -> macroquad::conf::Conf {
             window_height: 1000,
             high_dpi: true,
             window_resizable: true,
+            // Plein écran à chaque lancement (fenêtre pour les captures d'essai ou DARKSTAR_WINDOW)
+            fullscreen: std::env::var("DARKSTAR_SHOT").is_err() && std::env::var("DARKSTAR_WINDOW").is_err(),
             sample_count: 4,
             ..Default::default()
         },
@@ -152,6 +154,8 @@ struct Game {
     taxi: Option<(Vec<(f64, f64)>, usize, f64)>,
     /// Terrain du point d'attente occupé.
     hold_apt: Option<usize>,
+    /// Aérodrome de départ choisi au lancement
+    dep_apt: usize,
     /// Ressenti de vol (mouvements de vue, vibrations, voile).
     feel: feel::Feel,
     bingo_manual: Option<f64>,
@@ -319,6 +323,7 @@ impl Game {
             onboard: false,
             taxi: None,
             hold_apt: None,
+            dep_apt: 0,
             feel: feel::Feel::new(),
             bingo_manual: None,
             fuel_plan: fuel::Plan::default(),
@@ -824,7 +829,27 @@ impl Game {
         }
     }
 
+    /// Place l'appareil choisi sur l'aérodrome `ai`, aligné au seuil de la piste `rwy`.
+    fn place_at(&mut self, fleet: usize, ai: usize, rwy: &str) {
+        link::set_tail(fleet);
+        let mut ac = Aircraft::new_on_runway(ai);
+        let a = &AIRPORTS[ai];
+        if let Some(e) = procs::find_end(a, rwy) {
+            let (tla, tlo) = procs::threshold(a, &e);
+            let (la, lo) = destination(tla, tlo, e.hdg, 120.0);
+            ac.lat = la;
+            ac.lon = lo;
+            ac.psi = e.hdg.to_radians();
+        }
+        self.taxi = None;
+        self.hold_apt = None;
+        self.ac = ac;
+        self.stale = None;
+        self.dep_apt = ai;
+    }
+
     /// Place l'appareil choisi sur son terrain : aligné sur la piste ou au point d'attente.
+    #[allow(dead_code)]
     fn place(&mut self, fleet: usize, hold: bool) {
         link::set_tail(fleet);
         let ai = apt_index(link::FLEET[fleet].1);
@@ -855,7 +880,7 @@ impl Game {
         a.extend(ac.fire.alerts());
         let agl_ft = d.agl / FT;
         let fpm = d.vs / FT * 60.0;
-        if !ac.on_ground && agl_ft < 2500.0 && -fpm > agl_ft * 1.4 + 800.0 {
+        if !ac.on_ground && !ac.landing_config() && agl_ft < 2500.0 && -fpm > agl_ft * 1.4 + 800.0 {
             a.push((Level::Warning, "PULL UP".to_string()));
         }
         if !ac.on_ground && d.alpha.to_degrees() > 17.0 && d.mach < 1.2 {
@@ -1237,6 +1262,7 @@ impl Game {
             self.push(Level::Info, m);
         }
         pfd_plus::set_ils(self.fms.ils.as_ref().map(|t| format!("{} {:.2} {} {}", t.id, t.mhz, t.apt, t.rwy)));
+        pfd_plus::set_ifr(self.fms.ifr_panel(&self.ac, self.da_ft));
         pfd_plus::set_lnav(self.fms.fpln.as_ref().and_then(|p| p.wpts.get(p.active)).map(|w| w.ident.clone()));
         // Piste d'arrivée du plan de vol (SimBrief) pour l'autoland
         self.ac.rwy_pref = self.fms.fpln.as_ref().map(|p| p.arr_rwy.clone()).unwrap_or_default();
@@ -2591,12 +2617,21 @@ async fn main() {
     // Lancement normal : établir d'abord la liaison avec un Darkstar de la flotte
     if (scenario.is_empty() && shot.is_none()) || std::env::var("DARKSTAR_CONNECT").is_ok() {
         let ui = connect::ConnectUi::new();
-        g.place(ui.sel, ui.hold);
+        g.place_at(ui.sel, ui.apt, &ui.rwy);
         g.link.state = link::State::Idle;
         g.log.clear();
         g.connect = Some(ui);
     }
+    // Départ imposé (essais) : DARKSTAR_START="EGLL 27L"
+    if let Ok(st) = std::env::var("DARKSTAR_START") {
+        let mut it = st.split_whitespace();
+        if let Some(i) = it.next().and_then(|c| AIRPORTS.iter().position(|a| a.icao == c)) {
+            let r = it.next().map(str::to_string).unwrap_or_else(|| connect::default_rwy(i));
+            g.place_at(0, i, &r);
+        }
+    }
     let mut show_help = scenario.is_empty() && g.connect.is_none();
+    let mut fullscreen = std::env::var("DARKSTAR_SHOT").is_err() && std::env::var("DARKSTAR_WINDOW").is_err();
     let mut map_full = false;
     let mut frame = 0u64;
 
@@ -2613,14 +2648,21 @@ async fn main() {
             g.exec_command(c);
         }
 
-        if is_key_pressed(KeyCode::Tab) {
+        // Écran de lancement : le clavier sert à la saisie de l'aérodrome (Tab = première suggestion)
+        let in_connect = g.connect.is_some();
+        // F11 : plein écran / fenêtre
+        if is_key_pressed(KeyCode::F11) {
+            fullscreen = !fullscreen;
+            set_fullscreen(fullscreen);
+        }
+        if is_key_pressed(KeyCode::Tab) && !in_connect {
             show_help = !show_help;
         }
-        if is_key_pressed(KeyCode::V) && g.console.is_none() {
+        if is_key_pressed(KeyCode::V) && g.console.is_none() && !in_connect {
             map_full = !map_full;
         }
         let shift = is_key_down(KeyCode::LeftShift) || is_key_down(KeyCode::RightShift);
-        let enter = is_key_pressed(KeyCode::Enter) || is_key_pressed(KeyCode::KpEnter);
+        let enter = (is_key_pressed(KeyCode::Enter) || is_key_pressed(KeyCode::KpEnter)) && !in_connect;
         if enter && (g.ac.crashed.is_some() || g.ended || (shift && g.console.is_none())) {
             let muted = g.muted;
             g.fdr.finalize();
@@ -2706,14 +2748,10 @@ async fn main() {
             if g.link.state == link::State::Connected {
                 g.connect = None;
                 let tail = link::tail();
-                let apt = AIRPORTS[apt_index(link::FLEET.iter().find(|f| f.0 == tail).map(|f| f.1).unwrap_or("KPMD"))].name;
+                let a = &AIRPORTS[g.dep_apt];
                 g.push(Level::Info, format!("GCS EN LIGNE — DARKSTAR {tail} CONTROLE PAR GCS-1"));
-                if let Some(ai) = g.hold_apt {
-                    let num = AIRPORTS[ai].end_ident(AIRPORTS[ai].hdg + 180.0, None);
-                    g.push(Level::Info, format!("TOUR {apt} : {tail}, MAINTENEZ AU POINT D'ATTENTE PISTE {num} (instruction ALIGNEMENT)"));
-                } else {
-                    g.push(Level::Info, format!("TOUR {apt} : {tail}, ALIGNE PISTE, PRET AU DECOLLAGE"));
-                }
+                let num = a.end_ident(g.ac.hdg_deg(), Some((g.ac.lat, g.ac.lon)));
+                g.push(Level::Info, format!("TOUR {} ({}) : {tail}, ALIGNE PISTE {num}, PRET AU DECOLLAGE", a.name, a.icao));
             }
         } else if !g.ended {
             g.update(real_dt);
@@ -3008,14 +3046,24 @@ async fn main() {
         if let Some(ui) = &g.connect {
             match connect::draw(ui, &g.link, &g.link_msg, sw, sh, time) {
                 Some(connect::ConnectAction::Select(i)) => {
-                    let hold = ui.hold;
-                    g.connect = Some(connect::ConnectUi { sel: i, hold });
-                    g.place(i, hold);
+                    // Appareil de la flotte : son terrain de base par défaut
+                    let apt = apt_index(link::FLEET[i].1);
+                    let u = connect::ConnectUi { sel: i, apt, rwy: connect::default_rwy(apt), query: String::new() };
+                    g.place_at(u.sel, u.apt, &u.rwy);
+                    g.connect = Some(u);
                 }
-                Some(connect::ConnectAction::Hold(h)) => {
-                    let sel = ui.sel;
-                    g.connect = Some(connect::ConnectUi { sel, hold: h });
-                    g.place(sel, h);
+                Some(connect::ConnectAction::Airport(a)) => {
+                    let u = connect::ConnectUi { sel: ui.sel, apt: a, rwy: connect::default_rwy(a), query: String::new() };
+                    g.place_at(u.sel, u.apt, &u.rwy);
+                    g.connect = Some(u);
+                }
+                Some(connect::ConnectAction::Runway(r)) => {
+                    let u = connect::ConnectUi { rwy: r, ..ui.clone() };
+                    g.place_at(u.sel, u.apt, &u.rwy);
+                    g.connect = Some(u);
+                }
+                Some(connect::ConnectAction::Query(q)) => {
+                    g.connect = Some(connect::ConnectUi { query: q, ..ui.clone() });
                 }
                 Some(connect::ConnectAction::Connect) => g.link.connect(link::Path::Los),
                 None => {}

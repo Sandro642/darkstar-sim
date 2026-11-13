@@ -211,7 +211,7 @@ fn to_wpts(mut v: Vec<&Leg>, code: u8, name: &str) -> Vec<Wpt> {
         if l.fix.starts_with("RW") || out.last().is_some_and(|w: &Wpt| w.ident == l.fix) {
             continue;
         }
-        out.push(Wpt { ident: l.fix.clone(), lat: l.lat, lon: l.lon, via: name.to_string(), proc: code, sb_alt: if l.desc == 'B' && l.alt2 > 0.0 { (l.alt1 + l.alt2) / 2.0 } else { l.alt1 }, kind: "PROC".into(), ..Default::default() });
+        out.push(Wpt { ident: l.fix.clone(), lat: l.lat, lon: l.lon, via: name.to_string(), proc: code, sb_alt: if l.desc == 'B' && l.alt2 > 0.0 { (l.alt1 + l.alt2) / 2.0 } else { l.alt1 }, cstr: if l.alt1 > 0.0 { (l.desc, l.alt1, l.alt2) } else { ('\0', 0.0, 0.0) }, kind: "PROC".into(), ..Default::default() });
     }
     out
 }

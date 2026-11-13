@@ -38,6 +38,63 @@ thread_local! {
     static ILS: std::cell::RefCell<Option<String>> = const { std::cell::RefCell::new(None) };
 }
 
+/// Panneau IFR de l'horizon : phase (DEPART / ARRIVEE / APPROCHE), titre (procédure, piste),
+/// lignes (libellé, valeur, couleur : 0 blanc, 1 vert, 2 ambre, 3 cyan, 4 magenta).
+#[derive(Clone, Debug)]
+pub struct IfrPanel {
+    pub phase: &'static str,
+    pub title: String,
+    pub rows: Vec<(String, String, u8)>,
+}
+
+thread_local! {
+    static IFR: std::cell::RefCell<Option<IfrPanel>> = const { std::cell::RefCell::new(None) };
+}
+
+pub fn set_ifr(p: Option<IfrPanel>) {
+    IFR.with(|c| *c.borrow_mut() = p);
+}
+
+/// Hauteur du panneau IFR (0 si aucun).
+pub fn ifr_height() -> f32 {
+    IFR.with(|c| c.borrow().as_ref().map(|p| 30.0 + p.rows.len() as f32 * 15.0).unwrap_or(0.0))
+}
+
+/// Panneau IFR (coin gauche de l'horizon), cadre net, valeurs alignées.
+pub fn ifr_draw(x: f32, y: f32, w: f32, time: f64) {
+    IFR.with(|c| {
+        let c = c.borrow();
+        let Some(p) = c.as_ref() else { return };
+        let h = 30.0 + p.rows.len() as f32 * 15.0;
+        let r = Rect::new(x, y, w, h);
+        rrect(r, 0.0, Color::new(0.0, 0.02, 0.04, 0.55));
+        let accent = match p.phase {
+            "DEPART" => CYAN_S,
+            "ARRIVEE" => GREEN_S,
+            _ => MAGENTA_S,
+        };
+        rrect_lines(r, 0.0, 1.0, Color::new(accent.r, accent.g, accent.b, 0.55));
+        draw_rectangle(r.x, r.y, r.w, 18.0, Color::new(accent.r, accent.g, accent.b, 0.22));
+        txt(p.phase, r.x + 6.0, r.y + 13.0, 11.0, accent);
+        txt_r(&p.title, r.x + r.w - 6.0, r.y + 13.0, 11.0, WHITE);
+        let blink = (time * 2.0).fract() < 0.65;
+        for (k, (l, v, col)) in p.rows.iter().enumerate() {
+            let yy = r.y + 32.0 + k as f32 * 15.0;
+            let c = match col {
+                1 => GREEN_S,
+                2 => AMBER,
+                3 => CYAN_S,
+                4 => MAGENTA_S,
+                _ => Color::new(0.88, 0.9, 0.92, 0.95),
+            };
+            txt(l, r.x + 6.0, yy, 9.0, Color::new(0.6, 0.65, 0.7, 0.9));
+            if *col != 2 || blink {
+                txt(v, r.x + 82.0, yy, 10.0, c);
+            }
+        }
+    });
+}
+
 /// ILS calé par le FMS (indicatif, fréquence, aéroport, piste) pour l'étiquette de l'horizon.
 pub fn set_ils(t: Option<String>) {
     ILS.with(|c| *c.borrow_mut() = t);

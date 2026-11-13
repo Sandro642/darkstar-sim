@@ -744,3 +744,12 @@ Le SR-72 est un avion de reconnaissance : sa charge utile est simulée.
   premier lancement), page DATA : cycle CIFP. Vraies désignations de piste (05R, 28L, 06L…)
   partout : bandeau d'approche, ILS du HUD, marquage peint, messages tour, écran de connexion.
   Carte et ND désencombrées (grands aérodromes en priorité).
+- v1.53.0 : horizon — panneau IFR (DEPART : piste, vent, rotation, SID, prochain point, contrainte
+  d'altitude et vario requis, altitude de transition ; ARRIVEE : STAR, contraintes, niveau de
+  transition, ILS, piste ; APPROCHE : ILS calé, seuil, profil 3° et écart, vario 3°, vent sur la
+  piste, minimums, Vapp, remises possibles). Auto recovery : panneau de données (armé : délai, marge
+  prévue, temps avant impact ; en cours : étapes AILES A PLAT / RESSOURCE / MONTEE, charge
+  commandée et max, pente, vario, hauteur sol, perte d'altitude, q, gouvernes, libération du
+  manche ; bilan après la manœuvre). PULL UP inhibé en finale train sorti. Retour aux couleurs
+  Darkstar avec l'échelle G. Choix de l'aérodrome (saisie OACI) et de la piste au lancement.
+  Plein écran au lancement (F11 : fenêtre). Calage ILS automatique sur la piste face à l'arrivée.
