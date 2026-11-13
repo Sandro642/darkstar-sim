@@ -6,6 +6,7 @@ mod fire;
 mod fms;
 mod procs;
 mod navdb;
+mod cifp;
 mod airports;
 mod atmosphere;
 mod elec;
@@ -1431,11 +1432,11 @@ impl Game {
                 let err = wrap180(*fin - ac.hdg_deg()).to_radians();
                 ac.psi = (ac.psi + err.clamp(-turn, turn)).rem_euclid(std::f64::consts::TAU);
                 if err.abs() < 0.5f64.to_radians() {
-                    let num = airports::Airport::runway_number(*fin);
+                    let num = match self.hold_apt { Some(ai) => AIRPORTS[ai].end_ident(*fin, Some((ac.lat, ac.lon))), None => format!("{:02}", airports::Airport::runway_number(*fin)) };
                     self.taxi = None;
                     self.hold_apt = None;
-                    self.flash(format!("ALIGNE PISTE {num:02} — PRET AU DECOLLAGE"), ui::GREEN_S);
-                    self.push(Level::Info, format!("TOUR : {}, ALIGNE PISTE {num:02}, AUTORISE DECOLLAGE A VOTRE CONVENANCE", link::tail()));
+                    self.flash(format!("ALIGNE PISTE {num} — PRET AU DECOLLAGE"), ui::GREEN_S);
+                    self.push(Level::Info, format!("TOUR : {}, ALIGNE PISTE {num}, AUTORISE DECOLLAGE A VOTRE CONVENANCE", link::tail()));
                 }
             }
         }
@@ -1811,7 +1812,7 @@ impl Game {
                     let entry = a.point(along, 0.0);
                     let fin = wrap360(a.hdg + 180.0);
                     self.taxi = Some((vec![entry], 0, fin));
-                    reply = Ok(format!("ROULAGE VERS LA PISTE {:02} — ALIGNEMENT", airports::Airport::runway_number(fin)));
+                    reply = Ok(format!("ROULAGE VERS LA PISTE {} — ALIGNEMENT", a.end_ident(fin, None)));
                 }
                 _ => reply = Err("PAS AU POINT D'ATTENTE".into()),
             },
@@ -2563,7 +2564,7 @@ async fn main() {
     let mut last_upd_msg = String::new();
     let mut g = Game::new(&scenario);
     // Premier lancement : téléchargement de la base mondiale (appliquée au lancement suivant)
-    if navdb::installed_at().is_none() {
+    if navdb::installed_at().is_none() || cifp::cycle().is_none() {
         g.fms.navupd = Some(navdb::update());
         g.push(Level::Info, "NAVDATA : PREMIER LANCEMENT — TELECHARGEMENT DE LA BASE MONDE (OURAIRPORTS, GRATUITE)");
     }
@@ -2708,8 +2709,8 @@ async fn main() {
                 let apt = AIRPORTS[apt_index(link::FLEET.iter().find(|f| f.0 == tail).map(|f| f.1).unwrap_or("KPMD"))].name;
                 g.push(Level::Info, format!("GCS EN LIGNE — DARKSTAR {tail} CONTROLE PAR GCS-1"));
                 if let Some(ai) = g.hold_apt {
-                    let num = airports::Airport::runway_number(AIRPORTS[ai].hdg + 180.0);
-                    g.push(Level::Info, format!("TOUR {apt} : {tail}, MAINTENEZ AU POINT D'ATTENTE PISTE {num:02} (instruction ALIGNEMENT)"));
+                    let num = AIRPORTS[ai].end_ident(AIRPORTS[ai].hdg + 180.0, None);
+                    g.push(Level::Info, format!("TOUR {apt} : {tail}, MAINTENEZ AU POINT D'ATTENTE PISTE {num} (instruction ALIGNEMENT)"));
                 } else {
                     g.push(Level::Info, format!("TOUR {apt} : {tail}, ALIGNE PISTE, PRET AU DECOLLAGE"));
                 }

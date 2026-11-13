@@ -111,7 +111,8 @@ pub fn draw(ac: &Aircraft, r: Rect, time: f64) {
         }
     };
     let title = if ac.autoland.is_some() { "AUTOLAND" } else { "ILS" };
-    txt(&format!("{title} {:02}", crate::airports::Airport::runway_number(thdg)), b.x + 8.0, b.y + 12.0, 9.0, Color::new(0.5, 0.85, 1.0, 0.75));
+    let rid = ac.approach.map(|(ai, tla, tlo, _, _)| crate::airports::AIRPORTS[ai].end_ident(thdg, Some((tla, tlo)))).unwrap_or_else(|| format!("{:02}", crate::airports::Airport::runway_number(thdg)));
+    txt(&format!("{title} {rid}"), b.x + 8.0, b.y + 12.0, 9.0, Color::new(0.5, 0.85, 1.0, 0.75));
     let cx0 = b.x + 78.0;
     let cw = (b.w - 86.0) / labels.len() as f32;
     let pulse = 0.6 + 0.4 * ((time * 4.0).sin() as f32 * 0.5 + 0.5);

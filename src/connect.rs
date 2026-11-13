@@ -71,8 +71,8 @@ pub fn draw(ui: &ConnectUi, link: &crate::link::Link, last: &str, sw: f32, sh: f
     let y = r.y + 244.0;
     txt("POINT DE DEPART", r.x + 24.0, y, 13.0, WHITE);
     let apt = AIRPORTS.iter().find(|a| a.icao == FLEET[ui.sel].1).expect("terrain");
-    let num = crate::airports::Airport::runway_number(apt.hdg + 180.0);
-    for (k, (hold, label, sub)) in [(true, "POINT D'ATTENTE", format!("Bretelle, piste {num:02} — instruction ALIGNEMENT pour entrer sur la piste")), (false, "PISTE", format!("Aligne au seuil de la piste {num:02}, pret au decollage"))].iter().enumerate() {
+    let num = apt.end_ident(apt.hdg + 180.0, None);
+    for (k, (hold, label, sub)) in [(true, "POINT D'ATTENTE", format!("Bretelle, piste {num} — instruction ALIGNEMENT pour entrer sur la piste")), (false, "PISTE", format!("Aligne au seuil de la piste {num}, pret au decollage"))].iter().enumerate() {
         let b = Rect::new(r.x + 24.0 + k as f32 * ((r.w - 60.0) / 2.0 + 12.0), y + 10.0, (r.w - 60.0) / 2.0, 54.0);
         let on = ui.hold == *hold;
         rrect(b, 8.0, if on { Color::new(0.07, 0.16, 0.2, 1.0) } else { Color::new(0.08, 0.09, 0.11, 1.0) });

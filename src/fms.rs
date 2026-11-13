@@ -221,7 +221,9 @@ pub struct Fpln {
     pub crz_max: bool,
     /// Données AIRAC de l'OFP : cycle, dégagement, transitions, METAR / TAF, pistes réelles
     pub airac: String,
+    #[allow(dead_code)]
     pub altn: String,
+    #[allow(dead_code)]
     pub altn_rwy: String,
     pub trans_alt: String,
     pub trans_lvl: String,
@@ -1530,17 +1532,17 @@ fn page_lines(f: &Fms, ac: &Aircraft) -> (String, Color, Vec<(Line, Line)>) {
                 format!("{d:02}/{m:02}/{y}")
             });
             rows.push((ln(" BASE MONDE (PISTES REELLES)", LBL_M, "ABONNEMENT ", LBL_M), ln(if n > 0 { format!("{n} APT {}", date.unwrap_or_default()) } else { "NON INSTALLEE".into() }, if n > 0 { GREEN_M } else { AMB_M }, "GRATUIT", GREEN_M)));
+            let nc = crate::cifp::airports();
+            rows.push((ln(" PROCEDURES US (FAA CIFP)", LBL_M, "", LBL_M), ln(match crate::cifp::cycle() { Some(c) if nc > 0 => format!("CYCLE {c} {nc} APT"), Some(c) => format!("CYCLE {c} (REDEMARRER)"), None => "NON INSTALLEES".into() }, if nc > 0 { GREEN_M } else { AMB_M }, "GRATUIT", GREEN_M)));
             match p {
                 Some(p) if !p.airac.is_empty() => {
                     rows.push((ln(format!(" {} TRANS ALT", p.origin), LBL_M, format!("{} TRANS LVL ", p.dest), LBL_M), ln(p.trans_alt.clone(), CYAN_M, format!("FL{:03}", p.trans_lvl.parse::<f64>().map(|v| v / 100.0).unwrap_or(0.0)), CYAN_M)));
-                    rows.push((ln(" ALTN", LBL_M, "PISTES AIRAC ", LBL_M), ln(format!("{} {}", p.altn, p.altn_rwy), GREEN_M, format!("{}", p.rwys.len()), GREEN_M)));
                     let (lbl, txt0) = if ac.on_ground { (format!(" METAR {}", p.origin), p.metar_o.clone()) } else { (format!(" METAR {}", p.dest), p.metar_d.clone()) };
                     rows.push((ln(lbl, LBL_M, "", LBL_M), ln(txt0.chars().take(24).collect::<String>(), WHITE_M, "", WHITE_M)));
                 }
                 _ => {
                     rows.push((blank(), ln("AIRAC DU VOL : IMPORTER", LBL_M, "", WHITE_M)));
                     rows.push((blank(), ln("UN OFP SIMBRIEF", LBL_M, "", WHITE_M)));
-                    rows.push((blank(), blank()));
                 }
             }
             let st = f.navupd.as_ref().map(|u| u.lock().unwrap().clone());
@@ -2170,6 +2172,88 @@ mod tests {
         }
         println!("ILS destination cale {tuned_dest}, autoland piste {landed_rwy}, sol {} crash {:?} t {t:.0}", ac.on_ground, ac.crashed);
         assert!(tuned_dest && landed_rwy == arr_rwy && ac.on_ground && ac.crashed.is_none());
+    }
+
+    /// Procédures réelles FAA CIFP (base installée, DARKSTAR_REALDB=1) : KLAX 25R SID → KSFO 28L
+    /// STAR + approche réelle, vol LNAV/VNAV et autoland.
+    #[test]
+    #[ignore]
+    fn real_cifp_flight() {
+        let pick = |f: &mut Fms, ac: &Aircraft, icao: &str, rwy: &str, arr: bool| {
+            let apt = crate::procs::airport(icao).unwrap();
+            let ends = crate::procs::ends(apt);
+            println!("{icao} pistes : {:?}", ends.iter().map(|e| e.ident.as_str()).collect::<Vec<_>>());
+            f.page = if arr { Page::Arr } else { Page::Dep };
+            f.scroll = ends.iter().position(|e| e.ident == rwy).expect("piste");
+            f.lsk(true, 1, ac);
+            f.scroll = 0;
+            let (procs, _) = f.proc_lists(arr);
+            println!("{} : {:?}", if arr { "STAR" } else { "SID" }, procs.iter().map(|p| p.name.as_str()).collect::<Vec<_>>());
+            if !procs.is_empty() {
+                f.lsk(false, 1, ac);
+                let (_, tr) = f.proc_lists(arr);
+                println!("  transitions {:?}", tr.iter().map(|p| p.name.as_str()).collect::<Vec<_>>());
+                f.lsk(false, 1, ac); // NO TRANS
+            }
+            f.lsk(false, 5, ac);
+        };
+        let mut f = Fms::new();
+        f.dispatch_now("KLAX", "KSFO", 350.0, 0.9).unwrap();
+        let mut ac = Aircraft::new_on_runway(0);
+        pick(&mut f, &ac, "KLAX", "25R", false);
+        pick(&mut f, &ac, "KSFO", "28L", true);
+        let p = f.fpln.as_ref().unwrap();
+        println!("plan : {}", p.wpts.iter().map(|w| format!("{}:{}@{:.0}", w.ident, w.proc, w.sb_alt)).collect::<Vec<_>>().join(" "));
+        assert!(p.wpts.iter().any(|w| w.proc == 2) && p.wpts.iter().any(|w| w.proc == 3));
+        let lax = crate::procs::airport("KLAX").unwrap();
+        ac.on_ground = false;
+        ac.gear_down = false;
+        ac.gear_pos = 0.0;
+        ac.brakes = false;
+        ac.lat = lax.lat;
+        ac.lon = lax.lon;
+        ac.psi = 250f64.to_radians();
+        ac.alt = lax.elev + 1_500.0 * FT;
+        ac.tas = 120.0;
+        ac.set_turbines(TurbState::Running, 0.8);
+        ac.ap.on = true;
+        ac.ap.lat = LatMode::Nav;
+        f.fpln.as_mut().unwrap().active = 1;
+        ac.rwy_pref = "28L".into();
+        let dt = 1.0 / 120.0;
+        let mut t = 0.0;
+        let mut landed = String::new();
+        let mut last = -100.0;
+        while t < 4_000.0 && ac.crashed.is_none() && !(ac.on_ground && ac.tas < 3.0) {
+            if (t * 10.0f64).fract() < dt * 10.0 {
+                if let Some((b, _)) = f.guidance(&ac) {
+                    if ac.autoland.is_none() {
+                        ac.ap.hdg_tgt = b;
+                    }
+                }
+                let _ = f.autotune(&ac);
+                for o in f.vnav_update(&mut ac) {
+                    if let McduOut::Cmd(c) = o {
+                        if let Some(code) = c.strip_prefix("ATTERRIR ") {
+                            let i = AIRPORTS.iter().position(|a| a.icao == code).unwrap();
+                            ac.engage_autoland(i).unwrap();
+                            landed = ac.autoland.as_ref().unwrap().rwy.clone();
+                        }
+                    }
+                }
+            }
+            if t - last >= 120.0 {
+                last = t;
+                let p = f.fpln.as_ref().unwrap();
+                println!("t {t:4.0} alt {:6.0} ft M{:.2} vers {} ({})", ac.alt / FT, ac.d.mach, p.wpts.get(p.active).map(|w| w.ident.as_str()).unwrap_or("-"), p.active);
+            }
+            let c = ac.autoflight().unwrap_or((0.0, 0.0));
+            ac.step(dt, c.0, c.1);
+            ac.events.clear();
+            t += dt;
+        }
+        println!("autoland piste {landed}, sol {} crash {:?} t {t:.0}", ac.on_ground, ac.crashed);
+        assert!(landed == "28L" && ac.on_ground && ac.crashed.is_none());
     }
 
     /// Croisière MAX / Mach 11 : KPMD → EGLL, plafond suivant le couloir de q, posé à Londres.

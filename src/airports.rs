@@ -29,17 +29,23 @@ fn leak(s: &str) -> &'static str {
     Box::leak(s.to_string().into_boxed_str())
 }
 
+/// « 6L » → « 06L » (désignation normalisée, comme l'AIRAC / CIFP).
+fn pad(id: &str) -> String {
+    let n = id.chars().take_while(|c| c.is_ascii_digit()).count();
+    if n == 1 { format!("0{id}") } else { id.to_string() }
+}
+
 fn build_airports() -> Vec<Airport> {
     let mut v: Vec<Airport> = BUILTIN.to_vec();
     // (les essais automatiques restent sur la liste interne, indépendants du poste)
-    let Some(db) = (if cfg!(test) { None } else { crate::navdb::load() }) else { return v };
+    let Some(db) = (if cfg!(test) && std::env::var("DARKSTAR_REALDB").is_err() { None } else { crate::navdb::load() }) else { return v };
     for a in db {
         let rwys: Vec<Rwy> = a
             .rwys
             .iter()
             .map(|r| {
                 let (d, brg) = dist_brg(r.lo.0, r.lo.1, r.hi.0, r.hi.1);
-                Rwy { lat: (r.lo.0 + r.hi.0) / 2.0, lon: (r.lo.1 + r.hi.1) / 2.0, hdg: brg, len: d.max(500.0), width: r.width, id_lo: leak(&r.id_lo), id_hi: leak(&r.id_hi) }
+                Rwy { lat: (r.lo.0 + r.hi.0) / 2.0, lon: (r.lo.1 + r.hi.1) / 2.0, hdg: brg, len: d.max(500.0), width: r.width, id_lo: leak(&pad(&r.id_lo)), id_hi: leak(&pad(&r.id_hi)) }
             })
             .collect();
         let Some(p) = rwys.iter().copied().max_by(|x, y| x.len.total_cmp(&y.len)) else { continue };
@@ -62,6 +68,13 @@ static GRID: std::sync::LazyLock<std::collections::HashMap<(i32, i32), Vec<usize
         g.entry((a.lat.floor() as i32, a.lon.floor() as i32)).or_default().push(i);
     }
     g
+});
+
+/// Indices des aérodromes du plus grand au plus petit (piste la plus longue) : priorité d'affichage.
+pub static BY_SIZE: std::sync::LazyLock<Vec<usize>> = std::sync::LazyLock::new(|| {
+    let mut v: Vec<usize> = (0..AIRPORTS.len()).collect();
+    v.sort_by(|&a, &b| AIRPORTS[b].len.total_cmp(&AIRPORTS[a].len));
+    v
 });
 
 /// Aérodromes des cases voisines du point (≈ 100 km).
@@ -358,6 +371,31 @@ impl Airport {
 
     /// Désignation de l'extrémité de piste (« 28L ») pour la piste `k` et le cap d'approche `hdg` :
     /// numéro, puis gauche / centre / droite parmi les pistes parallèles vues dans ce sens.
+    /// Désignation réelle de l'extrémité dans le sens `hdg` : piste alignée (±20°) dont le seuil est
+    /// le plus proche de `near` (ou la plus longue), « 05R » ; numéro calculé à défaut.
+    pub fn end_ident(&self, hdg: f64, near: Option<(f64, f64)>) -> String {
+        let rws = self.runways();
+        let k = (0..rws.len())
+            .filter(|&i| {
+                let d = wrap180(hdg - rws[i].hdg).abs();
+                d < 20.0 || d > 160.0
+            })
+            .min_by(|&i, &j| {
+                let m = |i: usize| match near {
+                    Some((la, lo)) => {
+                        let t = rws[i].threshold(hdg);
+                        dist_brg(la, lo, t.0, t.1).0
+                    }
+                    None => -rws[i].len,
+                };
+                m(i).total_cmp(&m(j))
+            });
+        match k {
+            Some(k) => self.runway_ident(k, hdg),
+            None => format!("{:02}", Airport::runway_number(hdg)),
+        }
+    }
+
     pub fn runway_ident(&self, k: usize, hdg: f64) -> String {
         let rws = self.runways();
         // Désignation réelle (base OurAirports)

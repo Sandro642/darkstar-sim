@@ -196,7 +196,12 @@ pub fn update() -> Arc<Mutex<Upd>> {
             save(&v, &db_path()).map_err(|e| e.to_string())?;
             let _ = std::fs::remove_file(d.join("airports.csv"));
             let _ = std::fs::remove_file(d.join("runways.csv"));
-            Ok(format!("{} AERODROMES, {} PISTES", v.len(), v.iter().map(|a| a.rwys.len()).sum::<usize>()))
+            let base = format!("{} APT", v.len());
+            *s2.lock().unwrap() = Upd::Busy("PROCEDURES FAA CIFP".into());
+            Ok(match crate::cifp::download() {
+                Ok(c) => format!("{base}, {c}"),
+                Err(e) => format!("{base} ({e})"),
+            })
         })();
         *s2.lock().unwrap() = match res {
             Ok(m) => Upd::Done(m),

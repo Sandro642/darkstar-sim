@@ -98,6 +98,10 @@ pub fn ils(apt: &Airport, e: &RwyEnd) -> (String, f64) {
     if let Some(a) = AIRAC.with(|c| c.borrow().iter().find(|r| r.apt == apt.icao && r.ident == e.ident && r.ils_mhz > 100.0).cloned()) {
         return (format!("I{}", &tag(apt)), a.ils_mhz);
     }
+    // ILS réel FAA CIFP (États-Unis)
+    if let Some(r) = crate::cifp::ils(apt.icao, &e.ident) {
+        return r;
+    }
     let h: u32 = apt.icao.bytes().chain(e.ident.bytes()).fold(7u32, |a, b| a.wrapping_mul(31).wrapping_add(b as u32));
     // 40 canaux : 108 à 111 MHz, dixièmes impairs (.10 .15 .30 .35 ... .95)
     let idx = (h % 40) as usize;
@@ -120,6 +124,11 @@ pub struct Proc {
 
 /// SID de l'extrémité `e` : montée dans l'axe 5 NM (3000 ft sol), puis point de sortie à 40 NM.
 pub fn sids(apt: &Airport, e: &RwyEnd) -> Vec<Proc> {
+    // Procédures réelles FAA CIFP (États-Unis) si la base les couvre
+    // (aérodrome couvert : seulement les SID réelles de cette piste, éventuellement aucune)
+    if crate::cifp::has(apt.icao) {
+        return crate::cifp::procs_for(apt.icao, 'D', &e.ident);
+    }
     let (tla, tlo) = threshold(apt, e);
     // Fin de piste puis 5 NM dans l'axe
     let der = destination(tla, tlo, e.hdg, e.len);
@@ -138,6 +147,9 @@ pub fn sids(apt: &Airport, e: &RwyEnd) -> Vec<Proc> {
 
 /// Transitions d'une SID : prolongement vers 100 NM dans la direction de sortie.
 pub fn sid_trans(apt: &Airport, sid: &Proc) -> Vec<Proc> {
+    if crate::cifp::has(apt.icao) {
+        return crate::cifp::transitions(apt.icao, 'D', &sid.name);
+    }
     let Some(last) = sid.pts.last() else { return Vec::new() };
     let (_, brg) = dist_brg(apt.lat, apt.lon, last.lat, last.lon);
     let far = destination(apt.lat, apt.lon, brg, 100.0 * NM);
@@ -147,6 +159,9 @@ pub fn sid_trans(apt: &Airport, sid: &Proc) -> Vec<Proc> {
 
 /// Approche ILS de l'extrémité `e` : IAF 15 NM (4000 ft sol), FAF 6 NM (2000 ft sol).
 pub fn approach(apt: &Airport, e: &RwyEnd) -> Proc {
+    if let Some(p) = crate::cifp::approach(apt.icao, &e.ident) {
+        return p;
+    }
     let (tla, tlo) = threshold(apt, e);
     let back = wrap360(e.hdg + 180.0);
     let elev = apt.elev / FT;
@@ -158,7 +173,11 @@ pub fn approach(apt: &Airport, e: &RwyEnd) -> Proc {
 
 /// STAR vers l'approche `e` : point d'entrée à 60 NM (FL150 → 10000 ft) puis IAF.
 pub fn stars(apt: &Airport, e: &RwyEnd) -> Vec<Proc> {
+    if crate::cifp::has(apt.icao) {
+        return crate::cifp::procs_for(apt.icao, 'E', &e.ident);
+    }
     let iaf = approach(apt, e).pts[0].clone();
+    // (procédures générées : aérodrome hors CIFP)
     DIRS.iter()
         .map(|(d, brg)| {
             let name = format!("{}{d}1", tag(apt));
@@ -172,6 +191,9 @@ pub fn stars(apt: &Airport, e: &RwyEnd) -> Vec<Proc> {
 
 /// Transitions d'arrivée : point à 150 NM en amont de l'entrée de STAR.
 pub fn star_trans(apt: &Airport, star: &Proc) -> Vec<Proc> {
+    if crate::cifp::has(apt.icao) {
+        return crate::cifp::transitions(apt.icao, 'E', &star.name);
+    }
     let Some(first) = star.pts.first() else { return Vec::new() };
     let (_, brg) = dist_brg(apt.lat, apt.lon, first.lat, first.lon);
     let far = destination(apt.lat, apt.lon, brg, 150.0 * NM);

@@ -257,9 +257,13 @@ impl MapView {
         }
 
         // Aéroports
-        for (i, a) in AIRPORTS.iter().enumerate() {
+        // Désencombrement : un aérodrome par case de 24 px, les plus grands d'abord (destination toujours)
+        let mut used = std::collections::HashSet::new();
+        let order = std::iter::once(dest).filter(|&d| d < AIRPORTS.len()).chain(crate::airports::BY_SIZE.iter().copied().filter(|&i| i != dest));
+        for i in order {
+            let a = &AIRPORTS[i];
             let p = to_s(a.lat, a.lon);
-            if !r.contains(p) {
+            if !r.contains(p) || !used.insert(((p.x / 24.0) as i32, (p.y / 24.0) as i32)) {
                 continue;
             }
             let c = if i == dest { MAGENTA_S } else { CYAN_S };

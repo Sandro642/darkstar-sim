@@ -737,3 +737,10 @@ Le SR-72 est un avion de reconnaissance : sa charge utile est simulée.
   DATA : base active, base monde (nombre d'aérodromes, date), abonnement GRATUIT, bouton
   <MAJ NAVDATA (dernière version, appliquée au redémarrage) ; instruction NAVDATA. Index spatial
   pour l'aplanissement du relief autour des pistes.
+- v1.52.0 : procédures réelles des États-Unis — FAA CIFP (ARINC 424, domaine public, cycle de
+  28 jours) : SID, STAR, transitions, approches (ILS / LOC / RNAV) avec contraintes d'altitude et
+  vraies fréquences ILS, pour ~2900 aérodromes US, dans DEPARTURES / ARRIVAL du MCDU (procédures
+  générées ailleurs dans le monde). Téléchargement du cycle en vigueur avec MAJ NAVDATA (et au
+  premier lancement), page DATA : cycle CIFP. Vraies désignations de piste (05R, 28L, 06L…)
+  partout : bandeau d'approche, ILS du HUD, marquage peint, messages tour, écran de connexion.
+  Carte et ND désencombrées (grands aérodromes en priorité).

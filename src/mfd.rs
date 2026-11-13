@@ -298,12 +298,18 @@ fn draw_hsi(ac: &Aircraft, r: Rect, st: &mut MfdState, dest: usize) {
         vec2(cx + x as f32 * px_per_m, cy - y as f32 * px_per_m)
     };
     // Aérodromes
-    for (i, a) in AIRPORTS.iter().enumerate() {
+    let mut used = std::collections::HashSet::new();
+    let order = std::iter::once(dest).filter(|&d| d < AIRPORTS.len()).chain(crate::airports::BY_SIZE.iter().copied().filter(|&i| i != dest));
+    for i in order {
+        let a = &AIRPORTS[i];
         let (d, _) = dist_brg(ac.lat, ac.lon, a.lat, a.lon);
         if d > range * NM * 1.3 {
             continue;
         }
         let p = to_s(a.lat, a.lon);
+        if !used.insert(((p.x / 30.0) as i32, (p.y / 18.0) as i32)) {
+            continue;
+        }
         let c = if i == dest { MAGENTA_S } else { CYAN_S };
         draw_circle_lines(p.x, p.y, 4.0, 1.5, c);
         txt(a.icao, p.x + 6.0, p.y + 4.0, 11.0, c);

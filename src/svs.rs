@@ -465,7 +465,9 @@ pub fn draw_svs(world: &World, tiles: &mut Tiles, wx: &crate::weather::Weather, 
                     { let (a0, a1, c0, c1) = qa(6.0, 36.0, c0, c0 + 1.8); rw_quad(&mut mb, &f, a0, a1, c0, c1, true, white); }
                 }
                 // Numéro de piste
-                let num = crate::airports::Airport::runway_number(num_hdg);
+                // Numéro réel peint (base OurAirports), calculé sinon
+                let real = if s < 0.0 { rw.id_lo } else { rw.id_hi };
+                let num = real.chars().take_while(|c| c.is_ascii_digit()).collect::<String>().parse::<u32>().ok().filter(|n| (1..=36).contains(n)).unwrap_or_else(|| crate::airports::Airport::runway_number(num_hdg));
                 let digits: Vec<u32> = if num >= 10 { vec![num / 10, num % 10] } else { vec![0, num] };
                 let (dw, dh, gap) = (9.0, 18.0, 4.0);
                 let total = digits.len() as f64 * dw + gap;

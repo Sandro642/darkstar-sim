@@ -472,11 +472,11 @@ fn draw_svs_overlay(ac: &Aircraft, v: &View, s: Rect, info: &PfdInfo) {
                 draw_circle_lines(gx, cy + k * 36.0, 4.0, 1.5, line());
             }
             draw_poly(gx, cy + (gs_dev as f32 / 0.35 * 36.0).clamp(-80.0, 80.0), 4, 8.0, 0.0, MAGENTA_S);
-            let num = crate::airports::Airport::runway_number(thdg);
+            let rid = a.end_ident(thdg, Some((tla, tlo)));
             if !banner {
                 let lbl = match crate::pfd_plus::ils_label().filter(|l| l.contains(a.icao)) {
                     Some(l) => format!("ILS {l}  {:.1} NM", along / NM),
-                    None => format!("ILS {:02} {}  {:.1} NM", num, a.icao, along / NM),
+                    None => format!("ILS {rid} {}  {:.1} NM", a.icao, along / NM),
                 };
                 let w = txt_w(&lbl, 14.0) + 14.0;
                 rrect(Rect::new(cx - w / 2.0, ly + 10.0, w, 20.0), 5.0, BLOCK);
