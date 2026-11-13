@@ -1866,6 +1866,18 @@ impl Game {
                     reply = Err("AU SOL : DECOLLAGE D'ABORD (instruction DECOLLAGE), PUIS LNAV".into());
                 }
             }
+            // Touche de ligne du MCDU : LSK L1..L6 / R1..R6
+            "LSK" => {
+                let k = arg(1);
+                let left = k.starts_with('L');
+                match k.get(1..).and_then(|n| n.parse::<usize>().ok()).filter(|n| (1..=6).contains(n)) {
+                    Some(n) if left || k.starts_with('R') => {
+                        self.mcdu_key(fms::McduKey::Lsk(left, n - 1));
+                        reply = Ok(format!("LSK {k}"));
+                    }
+                    _ => reply = Err("LSK L1..L6 / R1..R6".into()),
+                }
+            }
             "NAVDATA" => {
                 self.fms.navupd = Some(navdb::update());
                 reply = Ok("NAVDATA : TELECHARGEMENT DE LA DERNIERE BASE MONDE (OURAIRPORTS)".into());

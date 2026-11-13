@@ -1713,6 +1713,124 @@ fn fmt_eta(s: f64) -> String {
     format!("{:02}{:02}", m / 60, m % 60)
 }
 
+/// Aperçu graphique de la SID / STAR sur l'écran du MCDU (faible opacité, sous le texte) :
+/// piste choisie, procédure sélectionnée (vert), transition (cyan), approche (magenta), points
+/// nommés, nord en haut. Sans procédure choisie : toutes celles de la piste, très atténuées.
+fn proc_preview(f: &Fms, scr: Rect, brt: f32) {
+    use crate::procs::*;
+    if !matches!(f.page, Page::Dep | Page::Arr) {
+        return;
+    }
+    let arr = f.page == Page::Arr;
+    let sel = if arr { &f.arr } else { &f.dep };
+    let Some(p) = f.plan() else { return };
+    let icao = if arr { &p.dest } else { &p.origin };
+    let Some(apt) = airport(icao) else { return };
+    let Some(e) = sel.rwy.as_ref().and_then(|r| find_end(apt, r)) else { return };
+    let (procs, trans) = f.proc_lists(arr);
+    let chosen = sel.proc.and_then(|i| procs.get(i));
+    let tr = match (sel.proc, sel.trans) {
+        (Some(_), Some(i)) if i > 0 => trans.get(i - 1),
+        _ => None,
+    };
+    let thr = threshold(apt, &e);
+    let rend = destination(thr.0, thr.1, e.hdg, e.len);
+    // Tracés : (points, couleur, épaisseur, noms affichés)
+    type Seg = (Vec<(f64, f64, String)>, Color, f32, bool);
+    let pts = |v: &[Wpt]| v.iter().map(|w| (w.lat, w.lon, w.ident.clone())).collect::<Vec<_>>();
+    let green = Color::new(0.2, 1.0, 0.35, 1.0);
+    let cyan = Color::new(0.3, 0.85, 1.0, 1.0);
+    let mag = Color::new(1.0, 0.35, 0.95, 1.0);
+    let mut segs: Vec<Seg> = Vec::new();
+    match chosen {
+        Some(pr) => {
+            if arr {
+                let mut v = Vec::new();
+                if let Some(t) = tr {
+                    v.extend(pts(&t.pts));
+                }
+                v.extend(pts(&pr.pts));
+                if let Some(t) = tr {
+                    segs.push((pts(&t.pts), cyan, 1.5, true));
+                }
+                segs.push((pts(&pr.pts), green, 2.0, true));
+                let mut ap = pts(&approach(apt, &e).pts);
+                if let Some(last) = v.last() {
+                    ap.insert(0, last.clone());
+                }
+                ap.push((thr.0, thr.1, String::new()));
+                segs.push((ap, mag, 1.5, true));
+            } else {
+                let mut v = vec![(rend.0, rend.1, String::new())];
+                v.extend(pts(&pr.pts));
+                segs.push((v, green, 2.0, true));
+                if let Some(t) = tr {
+                    let mut tv = pr.pts.last().map(|w| vec![(w.lat, w.lon, String::new())]).unwrap_or_default();
+                    tv.extend(pts(&t.pts));
+                    segs.push((tv, cyan, 1.5, true));
+                }
+            }
+        }
+        None => {
+            for pr in &procs {
+                let mut v = pts(&pr.pts);
+                if arr {
+                    v.push((thr.0, thr.1, String::new()));
+                } else {
+                    v.insert(0, (rend.0, rend.1, String::new()));
+                }
+                segs.push((v, Color::new(0.6, 0.65, 0.7, 1.0), 1.0, false));
+            }
+        }
+    }
+    // Emprise : piste + tous les points, projection locale (nord en haut)
+    let mut all: Vec<(f64, f64)> = vec![thr, rend];
+    for (v, ..) in &segs {
+        all.extend(v.iter().map(|x| (x.0, x.1)));
+    }
+    let lat0 = apt.lat.to_radians().cos();
+    let (mut x0, mut x1, mut y0, mut y1) = (f64::MAX, f64::MIN, f64::MAX, f64::MIN);
+    for (la, lo) in &all {
+        let x = lo * lat0;
+        x0 = x0.min(x);
+        x1 = x1.max(x);
+        y0 = y0.min(*la);
+        y1 = y1.max(*la);
+    }
+    let m = 18.0f32;
+    let (iw, ih) = (scr.w - 2.0 * m, scr.h - 2.0 * m - 16.0);
+    let span = ((x1 - x0) / iw as f64).max((y1 - y0) / ih as f64).max(1e-6);
+    let (cxm, cym) = ((x0 + x1) / 2.0, (y0 + y1) / 2.0);
+    let (sx, sy) = (scr.x + scr.w / 2.0, scr.y + 16.0 + m + ih / 2.0);
+    let to = |la: f64, lo: f64| vec2(sx + ((lo * lat0 - cxm) / span) as f32, sy - ((la - cym) / span) as f32);
+    let a = 0.38 * brt;
+    let fade = |c: Color, k: f32| Color::new(c.r, c.g, c.b, a * k);
+    // Piste
+    let (pa, pb) = (to(thr.0, thr.1), to(rend.0, rend.1));
+    draw_line(pa.x, pa.y, pb.x, pb.y, 4.0, fade(WHITE, 1.2));
+    for (v, c, w, named) in &segs {
+        let k = if *named { 1.0 } else { 0.45 };
+        for pair in v.windows(2) {
+            let (p0, p1) = (to(pair[0].0, pair[0].1), to(pair[1].0, pair[1].1));
+            draw_line(p0.x, p0.y, p1.x, p1.y, *w, fade(*c, k));
+        }
+        if *named {
+            for (la, lo, id) in v.iter().filter(|x| !x.2.is_empty()) {
+                let q = to(*la, *lo);
+                draw_poly_lines(q.x, q.y, 4, 3.5, 45.0, 1.2, fade(*c, 1.1));
+                // Nom à droite du point, ou à gauche s'il sortirait de l'écran
+                let w = txt_w(id, 9.0);
+                let tx = if q.x + 5.0 + w > scr.x + scr.w - 4.0 { q.x - 5.0 - w } else { q.x + 5.0 };
+                txt(id, tx, q.y - 3.0, 9.0, fade(*c, 1.0));
+            }
+        }
+    }
+    // Nord
+    let n = vec2(scr.x + scr.w - 14.0, scr.y + scr.h - 30.0);
+    draw_triangle(vec2(n.x, n.y - 9.0), vec2(n.x - 4.0, n.y + 2.0), vec2(n.x + 4.0, n.y + 2.0), fade(WHITE, 1.0));
+    txt_c("N", n.x, n.y + 13.0, 9.0, fade(WHITE, 1.0));
+}
+
 /// Contenu de la page : titre, 6 paires (étiquette, donnée).
 fn page_lines(f: &Fms, ac: &Aircraft) -> (String, Color, Vec<(Line, Line)>) {
     let blank = || ln("", WHITE_M, "", WHITE_M);
@@ -2060,6 +2178,8 @@ pub fn draw_mcdu(f: &Fms, ac: &Aircraft, r: Rect, time: f64) -> Option<McduKey> 
     if clicked(scr) {
         out = Some(McduKey::Focus);
     }
+    // Aperçu de la procédure (DEPARTURES / ARRIVAL), en fond d'écran sous le texte
+    proc_preview(f, scr, brt);
     let dim = |c: Color| Color::new(c.r * brt, c.g * brt, c.b * brt, c.a);
     let rowh = scr.h / 14.0;
     let fs = (rowh * 1.0).min(19.0);
