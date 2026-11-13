@@ -18,7 +18,10 @@
 ## Environnement
 - Toolchain : `export RUSTUP_HOME=~/Rust/toolchain/rustup CARGO_HOME=~/Rust/toolchain/cargo`.
 - Tests de vol headless : `cargo test --release -- --nocapture` (profil Mach 10, décollage + autoland).
-- Capture d'écran : `DARKSTAR_SHOT=/chemin.png DARKSTAR_SHOT_FRAME=300 ./target/release/darkstar_sim [hyper|approche|autoland]`.
+- Capture d'écran : `scripts/shot.sh target/shots/x.png 300 [hyper|approche|autoland] ["VAR=valeur" ...]`
+  (lance l'app via `open` dans un paquet .app de test, au nom de l'utilisateur de la session :
+  ne JAMAIS lancer `./target/release/darkstar_sim` directement depuis la session root, macOS
+  laisse alors une application fantôme « darkstar_sim » ouverte en arrière-plan).
 - Les sessions Claude tournent en root : remettre les fichiers à `sandrombp:staff` (`chown -R`).
 
 ## Pièges macroquad (GL sur Metal)

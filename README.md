@@ -775,3 +775,5 @@ Le SR-72 est un avion de reconnaissance : sa charge utile est simulée.
   choisie, toutes les procédures de la piste (pâles) puis la SID / STAR sélectionnée (vert),
   transition (cyan), approche (magenta), points nommés, nord ; INSERT confirme. Instruction
   LSK L1..L6 / R1..R6 (touches de ligne du MCDU).
+- v1.55.3 : outil de capture d'essai `scripts/shot.sh` (application de test indépendante, plus
+  d'application fantôme laissée ouverte en arrière-plan après les essais).
