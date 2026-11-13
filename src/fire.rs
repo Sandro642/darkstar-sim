@@ -92,6 +92,16 @@ impl Fire {
         if e.scram == ScramState::Lit {
             h[2] += 0.004 * over(e.scram_wall, systems::SCRAM_WALL_CAUTION, systems::SCRAM_WALL_BURST).powi(2);
         }
+        // Très haute vitesse en air dense : nacelles, chambres et soute H2 surchauffées
+        let x = ((ac.skin_temp - 273.15 - 1_150.0) / 100.0).max(0.0);
+        if x > 0.0 {
+            h[0] += 0.0012 * x * x;
+            h[1] += 0.0012 * x * x;
+            h[2] += 0.0018 * x * x;
+            if ac.skin_temp - 273.15 > 1_200.0 && ac.h2 > 50.0 {
+                h[3] += 0.0008 * x * x;
+            }
+        }
         if ac.fails.has(Fail::H2Leak) && ac.h2 > 50.0 {
             let hot = ac.skin_temp - 273.15 > 300.0 || e.scram == ScramState::Lit;
             h[3] += if hot { 0.02 } else { 0.002 };

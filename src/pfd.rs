@@ -191,7 +191,7 @@ pub fn geo(r: Rect) -> Geo {
     let bot = r.y + r.h - 94.0;
     let tw = (r.w * 0.075).clamp(72.0, 92.0);
     // Style Darkstar : échelle G à gauche du ruban de vitesse
-    let gx = if green() { 10.0 } else { 62.0 };
+    let gx = if green() { 10.0 } else { 74.0 };
     let spd = Rect::new(r.x + gx, top, tw, bot - top);
     let vsi = Rect::new(r.x + r.w - 40.0, top, 30.0, bot - top);
     let alt = Rect::new(vsi.x - 4.0 - (tw + 16.0), top, tw + 16.0, bot - top);
@@ -253,10 +253,11 @@ pub fn draw_pfd(ac: &Aircraft, v: &View, r: Rect, info: &PfdInfo) {
         f35_speed(ac, &g, info.time);
         f35_altitude(ac, &g, info.da_ft);
     } else {
-        draw_speed(ac, &g, info.time);
         if !green() {
+            draw_bezels(r, &g);
             draw_g_bracket(ac, &g);
         }
+        draw_speed(ac, &g, info.time);
         draw_altitude(ac, &g, info.da_ft);
         draw_vsi(ac.d.vs, g.vsi);
     }
@@ -524,7 +525,14 @@ fn draw_svs_overlay(ac: &Aircraft, v: &View, s: Rect, info: &PfdInfo) {
     let park = ac.on_ground && ac.brakes && gs < 3.0;
     let park_col = if ac.throttle > 0.5 { AMBER } else { GREEN_S };
     let braking = ac.on_ground && ac.brakes && gs >= 3.0;
-    let memos: [(bool, &str, Color, bool); 10] = [
+    let win_lbl = match ac.win_state {
+        2 => "VITRE ROMPUE",
+        1 => "VITRES FISSUREES",
+        _ => "VITRES CHAUDES",
+    };
+    let win_on = ac.win_state > 0 || ac.win_temp > 1_120.0;
+    let memos: [(bool, &str, Color, bool); 11] = [
+        (win_on, win_lbl, if ac.win_state > 0 { RED } else { AMBER }, true),
         (!ac.gcas_on && !ac.on_ground, "GCAS OFF", AMBER, false),
         (ac.pitot_iced(), "PITOT ICE", AMBER, true),
         (ac.g_lim_high, "G LIM HIGH", AMBER, false),
@@ -1049,33 +1057,52 @@ fn tape_bg(t: Rect) {
     }
 }
 
-/// Échelle G Darkstar (à gauche du ruban de vitesse) : +3.5 / +1.0 / -2.5 G, facteur de charge
-/// courant (triangle), mémoires G max / min (repères ambre).
+/// Bords noirs de l'afficheur Darkstar : colonne gauche (échelle G + vitesse) et colonne droite
+/// (altitude + vario), l'image de l'horizon au centre.
+fn draw_bezels(r: Rect, g: &Geo) {
+    let top = g.fma.y + g.fma.h;
+    let h = r.y + r.h - top;
+    let bg = Color::new(0.015, 0.017, 0.02, 1.0);
+    let edge = Color::new(0.30, 0.32, 0.34, 1.0);
+    let lx1 = g.spd.x + g.spd.w + 4.0;
+    draw_rectangle(r.x, top, lx1 - r.x, h, bg);
+    draw_line(lx1, top, lx1, r.y + r.h, 1.0, edge);
+    let rx0 = g.alt.x - 4.0;
+    draw_rectangle(rx0, top, r.x + r.w - rx0, h, bg);
+    draw_line(rx0, top, rx0, r.y + r.h, 1.0, edge);
+}
+
+/// Échelle G Darkstar (colonne gauche) : crochet +3.5 / +1.0 / -2.5 G, facteur de charge courant
+/// (triangle), mémoires G max / min (repères ambre), valeur numérique au-dessus.
 fn draw_g_bracket(ac: &Aircraft, g: &Geo) {
     let nz = ac.d.nz;
-    let x = g.spd.x - 48.0;
-    let top = g.spd.y + g.spd.h * 0.12;
-    let bot = g.spd.y + g.spd.h * 0.62;
+    let x = g.spd.x - 52.0;
+    let top = g.spd.y + g.spd.h * 0.16;
+    let bot = g.spd.y + g.spd.h * 0.66;
     let gy = |v: f32| top + (3.5 - v) / 6.0 * (bot - top);
-    for (w, c) in [(3.5, Color::new(0.0, 0.0, 0.0, 0.5)), (1.5, line())] {
-        draw_line(x, top, x, bot, w, c);
-        for v in [3.5f32, 1.0, -2.5] {
-            draw_line(x, gy(v), x + 6.0, gy(v), w, c);
-        }
-    }
+    let ln = Color::new(0.85, 0.87, 0.9, 1.0);
+    draw_line(x, top, x, bot, 1.5, ln);
     for v in [3.5f32, 1.0, -2.5] {
-        ht(&format!("{v:+.1}G"), x + 8.0, gy(v) + 5.0, 12.0, label_c());
+        let y = gy(v);
+        draw_line(x, y, x + 7.0, y, 1.5, ln);
+        txt(&format!("{v:+.1}G"), x + 10.0, y + 4.0, 11.0, label_c());
+    }
+    // Graduations intermédiaires
+    for v in [3.0f32, 2.0, 0.0, -1.0, -2.0] {
+        let y = gy(v);
+        draw_line(x, y, x + 4.0, y, 1.0, Color::new(0.6, 0.62, 0.65, 1.0));
     }
     for m in [ac.g_max, ac.g_min] {
         if (m - 1.0).abs() > 0.05 {
             let y = gy(m.clamp(-2.6, 3.6) as f32);
-            draw_line(x - 9.0, y, x + 4.0, y, 2.5, AMBER);
+            draw_line(x - 8.0, y, x, y, 2.5, AMBER);
         }
     }
     let gc = if !(-0.5..=2.5).contains(&nz) { AMBER } else { GREEN_S };
     let y = gy(nz.clamp(-2.6, 3.6) as f32);
-    draw_triangle(vec2(x, y), vec2(x - 8.0, y - 5.0), vec2(x - 8.0, y + 5.0), gc);
-    ht(&format!("G {nz:+.2}"), x - 6.0, top - 12.0, 12.0, gc);
+    draw_triangle(vec2(x - 1.0, y), vec2(x - 10.0, y - 6.0), vec2(x - 10.0, y + 6.0), gc);
+    txt_c("G", x + 10.0, top - 26.0, 11.0, label_c());
+    txt_c(&format!("{nz:+.1}"), x + 10.0, top - 11.0, 14.0, gc);
 }
 
 fn draw_speed(ac: &Aircraft, g: &Geo, time: f64) {
@@ -1163,15 +1190,17 @@ fn draw_speed(ac: &Aircraft, g: &Geo, time: f64) {
         None => txt(if ac.air_data_ovrd { "INS" } else { "KEAS" }, t.x + 2.0, t.y - 6.0, 12.0, label_c()),
     }
     // En dessous : Mach, vitesse sol, incidence, facteur de charge
+    // Style Darkstar : bloc logé dans la colonne noire de gauche
+    let bx = if green() { t.x } else { t.x + t.w + 4.0 - (t.w + 52.0) };
     let y = t.y + t.h + 24.0;
-    rrect(Rect::new(t.x, t.y + t.h + 4.0, t.w + 52.0, 86.0), 5.0, BLOCK);
+    rrect(Rect::new(bx, t.y + t.h + 4.0, t.w + 52.0, 86.0), 5.0, BLOCK);
     let m = if d.mach < 1.0 { format!("M {:.2}", d.mach).replace("M 0.", "M .") } else { format!("M {:.2}", d.mach) };
     let mc = if d.mach >= 5.0 { MAGENTA_S } else if d.mach >= 1.0 { CYAN_S } else { WHITE };
-    txt(&m, t.x + 2.0, y, 22.0, mc);
-    txt(&format!("GS {:.0}", ac.ground_speed() / KT), t.x + 2.0, y + 17.0, 13.0, label_c());
+    txt(&m, bx + 2.0, y, 22.0, mc);
+    txt(&format!("GS {:.0}", ac.ground_speed() / KT), bx + 2.0, y + 17.0, 13.0, label_c());
     let a = d.alpha.to_degrees();
     let ac_col = if a > 7.0 && ac.eng.scram == ScramState::Lit { AMBER } else { label_c() };
-    txt(&format!("a {a:+.1}°"), t.x + 2.0, y + 33.0, 13.0, ac_col);
+    txt(&format!("a {a:+.1}°"), bx + 2.0, y + 33.0, 13.0, ac_col);
     if ac.adc_degraded() {
         draw_rectangle(lx - 34.0, y + 21.0, 34.0, 16.0, Color::new(0.0, 0.0, 0.0, 0.8));
         draw_rectangle_lines(lx - 34.0, y + 21.0, 34.0, 16.0, 1.0, AMBER);
@@ -1179,11 +1208,11 @@ fn draw_speed(ac: &Aircraft, g: &Geo, time: f64) {
     }
     let nz = d.nz;
     let gc = if !(-0.5..=2.5).contains(&nz) { AMBER } else { GREEN_S };
-    txt(&format!("G {nz:+.2}"), t.x + 2.0, y + 49.0, 13.0, gc);
+    txt(&format!("G {nz:+.2}"), bx + 2.0, y + 49.0, 13.0, gc);
     let mc = if ac.g_max > 3.0 || ac.g_min < -1.0 { AMBER } else { DIM };
-    txt(&format!("MAX {:+.1}  MIN {:+.1}", ac.g_max, ac.g_min), t.x + 2.0, y + 64.0, 11.0, mc);
+    txt(&format!("MAX {:+.1}  MIN {:+.1}", ac.g_max, ac.g_min), bx + 2.0, y + 64.0, 11.0, mc);
     // Colonne droite façon HUD de chasse : vitesse vraie, pente, limite de g de la loi, énergie
-    let xr = t.x + t.w + 48.0;
+    let xr = bx + t.w + 48.0;
     txt_r(&format!("TAS {:.0}", ac.tas / KT), xr, y - 4.0, 12.0, label_c());
     txt_r(&format!("FPA {:+.1}", ac.gamma.to_degrees()), xr, y + 17.0, 12.0, label_c());
     let lim = ac.fcs.nz_max;

@@ -755,3 +755,9 @@ Le SR-72 est un avion de reconnaissance : sa charge utile est simulée.
   Plein écran au lancement (F11 : fenêtre). Calage ILS automatique sur la piste face à l'arrivée.
 - v1.53.1 : liaison de données sans portée radio ni latence (plus de bascule SATCOM ni de coupure
   selon la distance, plus d'affichage en ms) ; la liaison n'est perdue que sur panne ou dégâts.
+- v1.54.0 : horizon Darkstar avec bords noirs (colonne gauche : échelle G + vitesse + bloc Mach / G ;
+  colonne droite : altitude + vario), échelle G propre (graduations, triangle, mémoires max/min).
+  Infos IFR intégrées à l'horizon sans cadre. FCS plus robuste (charge de charnière admissible
+  +50 %, 1,5 s de dépassement toléré avant rupture). Très haute vitesse en air dense (peau
+  > 1150 C) : vitres chaudes puis fissurées, vitre avant rompue (centrale aéro perdue), usure
+  et surchauffe des moteurs, risque de feu moteurs / baie des chambres / soute H2.

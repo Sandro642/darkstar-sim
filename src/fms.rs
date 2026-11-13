@@ -2515,7 +2515,10 @@ mod tests {
             }
             let c = ac.autoflight().unwrap_or((0.0, 0.0));
             ac.step(dt, c.0, c.1);
-            ac.events.clear();
+            // Croisière nominale : ni surchauffe des vitres / moteurs ni casse FCS
+            for (_, m) in ac.events.drain(..) {
+                assert!(!m.contains("VITRE") && !m.contains("SURCHAUFFE MOTEURS") && !m.contains("GOUVERNES"), "{m}");
+            }
             mmax = mmax.max(ac.d.mach);
             altmax = altmax.max(ac.alt / FT);
             if t - lp > 600.0 {

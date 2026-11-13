@@ -883,6 +883,9 @@ impl Game {
         if !ac.on_ground && !ac.landing_config() && agl_ft < 2500.0 && -fpm > agl_ft * 1.4 + 800.0 {
             a.push((Level::Warning, "PULL UP".to_string()));
         }
+        if ac.win_state > 0 || ac.win_temp > 1_150.0 {
+            a.push((if ac.win_state > 0 { Level::Warning } else { Level::Caution }, "WINDOW HOT".to_string()));
+        }
         if !ac.on_ground && d.alpha.to_degrees() > 17.0 && d.mach < 1.2 {
             a.push((Level::Warning, "STALL".to_string()));
         }

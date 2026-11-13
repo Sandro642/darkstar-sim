@@ -267,6 +267,12 @@ pub struct Aircraft {
     pub on_ground: bool,
     pub eng: Engines,
     pub skin_temp: f64,
+    /// Vitres (fenêtres capteurs, carénage avant) : température (°C), temps de surchauffe (s),
+    /// état 0 intactes, 1 fissurées, 2 rompues ; surchauffe moteur annoncée
+    pub win_temp: f64,
+    pub win_hot_t: f64,
+    pub win_state: u8,
+    eng_hot_warned: bool,
     pub ap: Autopilot,
     pub d: Derived,
     pub crashed: Option<String>,
@@ -472,6 +478,10 @@ impl Aircraft {
                 scram_wall: 15.0,
             },
             skin_temp: 293.0,
+            win_temp: 20.0,
+            win_hot_t: 0.0,
+            win_state: 0,
+            eng_hot_warned: false,
             ap: Autopilot {
                 on: false,
                 lat: LatMode::Hdg,
@@ -1606,6 +1616,36 @@ impl Aircraft {
         }
         let teq = skin_equilibrium(self.alt, v);
         self.skin_temp += (teq - self.skin_temp) * (dt / 15.0).min(1.0);
+        // Très haute vitesse en air dense : vitres et moteurs au-delà de leur tenue thermique
+        {
+            let skin_c = self.skin_temp - 273.15;
+            self.win_temp += (skin_c * 0.98 - self.win_temp) * (dt / 20.0).min(1.0);
+            if self.win_temp > 1_150.0 {
+                self.win_hot_t += dt * (1.0 + (self.win_temp - 1_150.0) / 50.0);
+            } else {
+                self.win_hot_t = (self.win_hot_t - dt * 0.3).max(0.0);
+            }
+            if self.win_state == 0 && self.win_hot_t > 25.0 {
+                self.win_state = 1;
+                self.msg(Level::Warning, format!("VITRES FISSUREES — SURCHAUFFE {:.0} C : REDUIRE LE MACH OU MONTER", self.win_temp));
+            }
+            if self.win_state == 1 && self.win_temp > 1_210.0 && self.win_hot_t > 60.0 {
+                self.win_state = 2;
+                self.set_failure(Fail::Adc, true);
+                self.msg(Level::Warning, "VITRE AVANT ROMPUE — BAIE AVIONIQUE EXPOSEE, CENTRALE AERO PERDUE");
+            }
+            // Moteurs : nacelles et chambres chauffées par la cellule, usure accélérée
+            let x = ((skin_c - 1_150.0) / 100.0).max(0.0);
+            if x > 0.0 {
+                self.eng.health = (self.eng.health - dt * 0.0015 * x).max(0.0);
+                if !self.eng_hot_warned {
+                    self.eng_hot_warned = true;
+                    self.msg(Level::Caution, format!("SURCHAUFFE MOTEURS — PEAU {skin_c:.0} C : RISQUE DE FEU, REDUIRE LE MACH OU MONTER"));
+                }
+            } else if skin_c < 1_100.0 {
+                self.eng_hot_warned = false;
+            }
+        }
 
         // --- Dérivées pour l'affichage ---
         self.d = Derived {
@@ -1643,7 +1683,7 @@ impl Aircraft {
         if self.skin_temp - 273.15 > 1400.0 {
             self.crash("DÉFAILLANCE THERMIQUE DE LA STRUCTURE");
         }
-        if self.fcs_overload_t > 0.3 {
+        if self.fcs_overload_t > 1.5 {
             self.crash("DESTRUCTION DES GOUVERNES (FCS) — CHARGE AÉRODYNAMIQUE EXCESSIVE");
         }
         // Paroi au-delà de la limite de rupture : compte à rebours (8 s) avant la rupture
@@ -1949,6 +1989,35 @@ impl Aircraft {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Très haute vitesse en air dense (M11, q ~100 kPa) : vitres fissurées et surchauffe moteurs ;
+    /// le FCS, plus robuste, tient une petite ressource à cette pression dynamique.
+    #[test]
+    fn window_overheat() {
+        let mut ac = Aircraft::new_on_runway(0);
+        ac.on_ground = false;
+        ac.gear_down = false;
+        ac.gear_pos = 0.0;
+        ac.alt = 30_000.0;
+        let a = crate::atmosphere::isa(ac.alt);
+        ac.tas = 11.0 * a.a;
+        ac.skin_temp = skin_equilibrium(ac.alt, ac.tas);
+        ac.win_temp = ac.skin_temp - 273.15;
+        let dt = 1.0 / 120.0;
+        let mut msgs = Vec::new();
+        for _ in 0..(60 * 120) {
+            // Vitesse et altitude maintenues (essai thermique)
+            ac.alt = 30_000.0;
+            ac.tas = 11.0 * a.a;
+            ac.gamma = 0.0;
+            ac.step(dt, 0.0, 0.0);
+            msgs.extend(ac.events.drain(..).map(|(_, m)| m));
+        }
+        println!("{msgs:?}");
+        assert!(ac.crashed.is_none(), "{:?}", ac.crashed);
+        assert_eq!(ac.win_state, 1, "vitres {:.0} C", ac.win_temp);
+        assert!(msgs.iter().any(|m| m.contains("SURCHAUFFE MOTEURS")));
+    }
 
     /// Vol complet scripté : décollage, montée, stato, scram, Mach 10.
     #[test]

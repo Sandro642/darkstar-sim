@@ -184,12 +184,12 @@ pub fn lever_for_wall(f: impl Fn(f64) -> f64, wall: f64) -> f64 {
 // ---------- Gouvernes ----------
 
 /// Charge de charnière admissible des élevons : q (kPa) × braquage (deg).
-pub const HINGE_LIMIT: f64 = 2400.0;
+pub const HINGE_LIMIT: f64 = 3600.0;
 pub const DEFL_MAX: f64 = 30.0;
 
 /// Braquage autorisé par la loi normale (limiteur), en degrés.
 pub fn defl_limit_normal(q_kpa: f64) -> f64 {
-    (0.75 * HINGE_LIMIT / q_kpa.max(1.0)).min(DEFL_MAX)
+    (0.5 * HINGE_LIMIT / q_kpa.max(1.0)).min(DEFL_MAX)
 }
 
 /// Braquage provoquant la rupture des gouvernes, en degrés.
