@@ -717,3 +717,14 @@ Le SR-72 est un avion de reconnaissance : sa charge utile est simulée.
   alphabétique (E N S W encadrés), SP, OVFY, CLR — tout est cliquable. Page F-PLN au format
   Airbus : voie au-dessus du point, distance de branche, point vert (actif blanc, temporaire
   jaune), heure UTC estimée, VITESSE/ALTITUDE, ligne DEST / UTC / DIST / EFOB.
+- v1.50.0 : données AIRAC de SimBrief dans le FMS / MCDU.
+  - Import de l'OFP : cycle AIRAC, terrain de dégagement et sa piste, altitude / niveau de
+    transition, METAR / TAF, type et fréquence des balises de la route (VOR, NDB), nom des points,
+    vent prévu et MORA ; points TOC / TOD d'avion de ligne ignorés (profil Darkstar).
+  - Pistes réelles du départ et de l'arrivée (rapport décollage / atterrissage SimBrief) :
+    désignation magnétique, cap vrai, longueur, fréquence ILS. Les pistes du jeu sont réalignées
+    sur le cap vrai AIRAC, nommées comme dans l'AIRAC (DEPARTURES / ARRIVAL, autoland) et l'ILS
+    calé sur la vraie fréquence.
+  - MCDU : page DATA (base active AIRAC, transitions, dégagement, METAR / TAF), RAD NAV avec
+    VOR1 / VOR2 calés sur les prochaines balises du plan, PROG avec nom du point, vent prévu et
+    MORA.

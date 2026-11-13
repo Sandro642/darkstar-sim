@@ -275,6 +275,12 @@ impl Airport {
     pub fn runways(&self) -> Vec<Rwy> {
         let mut v = vec![Rwy { lat: self.lat, lon: self.lon, hdg: self.hdg, len: self.len, width: self.width }];
         v.extend(EXTRA_RWY.iter().filter(|r| r.0 == self.icao).map(|r| Rwy { lat: r.1, lon: r.2, hdg: r.3, len: r.4, width: r.5 }));
+        // Cap vrai exact des pistes d'après l'AIRAC de l'OFP SimBrief (départ / arrivée), à ±20°
+        for r in v.iter_mut() {
+            if let Some(tc) = crate::procs::airac_course(self.icao, r.hdg) {
+                r.hdg = tc;
+            }
+        }
         v
     }
 

@@ -1853,6 +1853,7 @@ impl Game {
                     "DEP" => Some(fms::Page::Dep),
                     "ARR" => Some(fms::Page::Arr),
                     "RADNAV" => Some(fms::Page::RadNav),
+                    "DATA" => Some(fms::Page::Data),
                     _ => None,
                 };
                 if let Some(p) = p {

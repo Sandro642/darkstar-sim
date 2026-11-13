@@ -190,6 +190,12 @@ pub struct Wpt {
     pub proc: u8,
     /// Altitude prévue par SimBrief au point (ft, 0 si inconnue) : contrainte des procédures
     pub sb_alt: f64,
+    /// AIRAC : type (VOR, NDB, WPT), fréquence de la balise, nom, vent prévu, MORA (ft)
+    pub kind: String,
+    pub freq: String,
+    pub name: String,
+    pub wind: String,
+    pub mora: f64,
 }
 
 #[derive(Clone, Default)]
@@ -213,6 +219,16 @@ pub struct Fpln {
     pub star: String,
     /// Croisière au plafond (FL MAX) : le niveau monte avec le Mach (couloir de q)
     pub crz_max: bool,
+    /// Données AIRAC de l'OFP : cycle, dégagement, transitions, METAR / TAF, pistes réelles
+    pub airac: String,
+    pub altn: String,
+    pub altn_rwy: String,
+    pub trans_alt: String,
+    pub trans_lvl: String,
+    pub metar_o: String,
+    pub metar_d: String,
+    pub taf_d: String,
+    pub rwys: Vec<crate::procs::AiracRwy>,
 }
 
 /// Altitude (ft) où la pression dynamique vaut `q` (Pa) à Mach `m` (atmosphère standard).
@@ -450,7 +466,8 @@ pub fn from_simbrief(j: &Json, crz_fl: f64, crz_mach: f64, crz_max: bool) -> Res
             let ident = f.get("ident").map(|x| x.s()).unwrap_or_default();
             let typ = f.get("type").map(|x| x.s()).unwrap_or_default();
             let (Some(la), Some(lo)) = (f.get("pos_lat").and_then(|x| x.f()), f.get("pos_long").and_then(|x| x.f())) else { continue };
-            if ident.is_empty() || ident == di || ident == oi || typ == "apt" {
+            // Points calculés par SimBrief pour un avion de ligne (TOC / TOD) : profil Darkstar à la place
+            if ident.is_empty() || ident == di || ident == oi || typ == "apt" || typ == "ltlg" {
                 continue;
             }
             // IFR : tous les points sont gardés (procédures comprises)
@@ -465,13 +482,72 @@ pub fn from_simbrief(j: &Json, crz_fl: f64, crz_mach: f64, crz_max: bool) -> Res
                 star = via.clone();
             }
             let sb_alt = f.get("altitude_feet").and_then(|x| x.f()).unwrap_or(0.0);
-            wpts.push(Wpt { ident: ident.chars().take(7).collect(), lat: la, lon: lo, alt_ft: 0.0, mach: 0.0, phase: "", via, proc, sb_alt });
+            let gs = |k: &str| f.get(k).map(|x| x.s()).unwrap_or_default();
+            let wind = match (f.get("wind_dir").and_then(|x| x.f()), f.get("wind_spd").and_then(|x| x.f())) {
+                (Some(d), Some(v)) => format!("{d:03.0}/{v:.0}"),
+                _ => String::new(),
+            };
+            wpts.push(Wpt {
+                ident: ident.chars().take(7).collect(),
+                lat: la,
+                lon: lo,
+                alt_ft: 0.0,
+                mach: 0.0,
+                phase: "",
+                via,
+                proc,
+                sb_alt,
+                kind: typ.to_uppercase(),
+                freq: gs("frequency"),
+                name: gs("name"),
+                wind,
+                mora: f.get("mora").and_then(|x| x.f()).unwrap_or(0.0),
+            });
         }
     }
     wpts.push(Wpt { ident: di.clone(), lat: dla, lon: dlo, alt_ft: 0.0, mach: 0.0, phase: "ARR", ..Default::default() });
     let flt = j.path(&["atc", "callsign"]).map(|x| x.s()).filter(|s| !s.is_empty()).unwrap_or("DKS01".into());
     // Le niveau de croisière SimBrief (avion de ligne) est remplacé par le profil Darkstar
-    let mut fp = Fpln { origin: oi, dest: di, wpts, active: 1, source: "SIMBRIEF", flt, crz_fl, crz_mach, jp7_req: 0.0, h2_req: 0.0, ete: 0.0, dep_rwy, arr_rwy, sid, star, crz_max };
+    // Pistes réelles (rapport décollage / atterrissage SimBrief) : désignation, cap vrai, longueur, ILS
+    let mut rwys = Vec::new();
+    for (sec, apt) in [("takeoff", oi.clone()), ("landing", di.clone())] {
+        if let Some(list) = j.path(&["tlr", sec, "runway"]) {
+            for r in list.items() {
+                let g = |k: &str| r.get(k).and_then(|x| x.f());
+                if let (Some(tc), Some(len)) = (g("true_course"), g("length")) {
+                    rwys.push(crate::procs::AiracRwy { apt: apt.clone(), ident: r.get("identifier").map(|x| x.s()).unwrap_or_default(), true_course: tc, len_m: len * 0.3048, ils_mhz: g("ils_frequency").unwrap_or(0.0) });
+                }
+            }
+        }
+    }
+    let gs = |p: &[&str]| j.path(p).map(|x| x.s()).unwrap_or_default();
+    let mut fp = Fpln {
+        origin: oi,
+        dest: di,
+        wpts,
+        active: 1,
+        source: "SIMBRIEF",
+        flt,
+        crz_fl,
+        crz_mach,
+        jp7_req: 0.0,
+        h2_req: 0.0,
+        ete: 0.0,
+        dep_rwy,
+        arr_rwy,
+        sid,
+        star,
+        crz_max,
+        airac: gs(&["params", "airac"]),
+        altn: gs(&["alternate", "icao_code"]),
+        altn_rwy: gs(&["alternate", "plan_rwy"]),
+        trans_alt: gs(&["origin", "trans_alt"]),
+        trans_lvl: gs(&["destination", "trans_level"]),
+        metar_o: gs(&["origin", "metar"]),
+        metar_d: gs(&["destination", "metar"]),
+        taf_d: gs(&["destination", "taf"]),
+        rwys,
+    };
     fp.compute();
     Ok(fp)
 }
@@ -541,6 +617,8 @@ pub enum Page {
     /// ARRIVAL : approche (ILS), STAR, transition
     Arr,
     RadNav,
+    /// DATA : base de données active (AIRAC SimBrief), terrains, transitions, METAR
+    Data,
 }
 
 /// Sélection en cours sur les pages DEPARTURES / ARRIVAL : piste (ou approche), procédure,
@@ -1009,6 +1087,7 @@ impl Fms {
             let res = r.and_then(|body| parse_json(&body)).and_then(|j| from_simbrief(&j, self.crz.0, self.crz.1, self.crz_max));
             return Some(match res {
                 Ok(fp) => {
+                    crate::procs::set_airac(fp.rwys.clone());
                     self.msg = format!("OFP {}-{} : {} PTS", fp.origin, fp.dest, fp.wpts.len());
                     self.from_to = (fp.origin.clone(), fp.dest.clone());
                     let m = format!("SIMBRIEF : OFP {} {}-{} IMPORTE ({} POINTS, {:.0} NM) — MCDU : ACTIVATE", fp.flt, fp.origin, fp.dest, fp.wpts.len(), fp.total() / NM);
@@ -1406,7 +1485,8 @@ fn page_lines(f: &Fms, ac: &Aircraft) -> (String, Color, Vec<(Line, Line)>) {
                     (Some(e), Some(a)) => {
                         let (id, mhz) = crate::procs::ils(a, e);
                         let _ = id;
-                        (format!("<{}{}", if arr { "ILS" } else { "" }, e.ident), format!(" {:.0}M CRS{:03.0} {:.2}", e.len, e.hdg, mhz))
+                        let len = crate::procs::airac_for(a, e.hdg, &e.ident).map(|r| r.len_m).unwrap_or(e.len);
+                        (format!("<{}{}", if arr { "ILS" } else { "" }, e.ident), format!(" {len:.0}M CRS{:03.0} {:.2}", e.hdg, mhz))
                     }
                     _ => (String::new(), String::new()),
                 };
@@ -1416,8 +1496,41 @@ fn page_lines(f: &Fms, ac: &Aircraft) -> (String, Color, Vec<(Line, Line)>) {
             }
             rows.push((blank(), ln("<RETURN", WHITE_M, "INSERT*", AMB_M)));
         }
+        Page::Data => {
+            title = "DATA INDEX".into();
+            match f.plan().filter(|p| !p.airac.is_empty()) {
+                Some(p) => {
+                    rows.push((ln(" ACTIVE DATA BASE", LBL_M, "SOURCE ", LBL_M), ln(format!("AIRAC {}", p.airac), CYAN_M, "SIMBRIEF", GREEN_M)));
+                    rows.push((ln(format!(" {} TRANS ALT", p.origin), LBL_M, format!("{} TRANS LVL ", p.dest), LBL_M), ln(p.trans_alt.clone(), CYAN_M, format!("FL{:03}", p.trans_lvl.parse::<f64>().map(|v| v / 100.0).unwrap_or(0.0)), CYAN_M)));
+                    rows.push((ln(" ALTN", LBL_M, "PISTES AIRAC ", LBL_M), ln(format!("{} {}", p.altn, p.altn_rwy), GREEN_M, format!("{}", p.rwys.len()), GREEN_M)));
+                    let md: String = p.metar_d.chars().take(48).collect();
+                    let (m1, m2) = md.split_at(md.len().min(24));
+                    rows.push((ln(format!(" METAR {}", p.dest), LBL_M, "", LBL_M), ln(m1.to_string(), WHITE_M, "", WHITE_M)));
+                    rows.push((blank(), ln(m2.to_string(), WHITE_M, "", WHITE_M)));
+                    // Au sol : METAR du départ ; en vol : TAF de la destination
+                    if ac.on_ground {
+                        let mo: String = p.metar_o.chars().take(24).collect();
+                        rows.push((ln(format!(" METAR {}", p.origin), LBL_M, "", LBL_M), ln(mo, WHITE_M, "", WHITE_M)));
+                    } else {
+                        let t: String = p.taf_d.chars().take(24).collect();
+                        rows.push((ln(format!(" TAF {}", p.dest), LBL_M, "", LBL_M), ln(t, WHITE_M, "", WHITE_M)));
+                    }
+                }
+                None => {
+                    rows.push((ln(" ACTIVE DATA BASE", LBL_M, "", LBL_M), ln("DARKSTAR INTERNE", CYAN_M, "", WHITE_M)));
+                    rows.push((blank(), ln("IMPORTER UN OFP SIMBRIEF", AMB_M, "", WHITE_M)));
+                    rows.push((blank(), ln("POUR L'AIRAC", AMB_M, "", WHITE_M)));
+                    while rows.len() < 6 {
+                        rows.push((blank(), blank()));
+                    }
+                }
+            }
+        }
         Page::RadNav => {
             title = "RAD NAV".into();
+            // VOR1 / VOR2 : prochaines balises du plan (fréquences AIRAC)
+            let navs: Vec<&Wpt> = f.fpln.as_ref().map(|p| p.wpts[p.active.min(p.wpts.len())..].iter().filter(|w| (w.kind == "VOR" || w.kind == "NDB") && !w.freq.is_empty()).take(2).collect()).unwrap_or_default();
+            let nav = |k: usize| navs.get(k).map(|w| format!("{}/{}", w.ident, w.freq)).unwrap_or("[ ]/[ ]".into());
             match &f.ils {
                 Some(t) => {
                     rows.push((ln(" ILS / FREQ", LBL_M, "CRS ", LBL_M), ln(format!("{}/{:.2}", t.id, t.mhz), CYAN_M, format!("{:03.0}", t.crs), CYAN_M)));
@@ -1425,6 +1538,7 @@ fn page_lines(f: &Fms, ac: &Aircraft) -> (String, Color, Vec<(Line, Line)>) {
                 }
                 None => rows.push((ln(" ILS / FREQ", LBL_M, "", LBL_M), ln("[ ]/[ ]", AMB_M, "", WHITE_M))),
             }
+            rows.push((ln(" VOR1/FREQ", LBL_M, "FREQ/VOR2 ", LBL_M), ln(nav(0), CYAN_M, nav(1), CYAN_M)));
             rows.push((ln(" CALAGE AUTO", LBL_M, "", LBL_M), ln("DEP PUIS DEST A 250NM", LBL_M, "", WHITE_M)));
             while rows.len() < 6 {
                 rows.push((blank(), blank()));
@@ -1526,7 +1640,10 @@ fn page_lines(f: &Fms, ac: &Aircraft) -> (String, Color, Vec<(Line, Line)>) {
                     let w = &p.wpts[p.active];
                     let (d, b) = dist_brg(ac.lat, ac.lon, w.lat, w.lon);
                     let gs = ac.ground_speed().max(50.0);
-                    rows.push((ln(" TO", LBL_M, "BRG   DIST  ETE", LBL_M), ln(w.ident.clone(), MAG_M, format!("{b:03.0} {:.0} {}", d / NM, fmt_eta(d / gs)), GREEN_M)));
+                    rows.push((ln(format!(" TO {}", w.name.chars().take(12).collect::<String>()), LBL_M, "BRG   DIST  ETE", LBL_M), ln(w.ident.clone(), MAG_M, format!("{b:03.0} {:.0} {}", d / NM, fmt_eta(d / gs)), GREEN_M)));
+                    if !w.wind.is_empty() || w.mora > 0.0 {
+                        rows.push((ln(" VENT PREVU (OFP)", LBL_M, "MORA ", LBL_M), ln(w.wind.clone(), CYAN_M, format!("{:.0}", w.mora), CYAN_M)));
+                    }
                     let rem = p.remaining(ac.lat, ac.lon);
                     rows.push((ln(" DEST", LBL_M, "DIST  ETE", LBL_M), ln(p.dest.clone(), WHITE_M, format!("{:.0} {}", rem / NM, fmt_eta(rem / gs)), GREEN_M)));
                     let tod = rem - p.tod();
@@ -1711,7 +1828,7 @@ pub fn draw_mcdu(f: &Fms, ac: &Aircraft, r: Rect, time: f64) -> Option<McduKey> 
     let kh = (((b.y + b.h - 8.0) - ky) / 9.0 - 6.0).clamp(16.0, 30.0);
     let x0 = b.x + lsk_w + 8.0;
     let page_keys: [[(&str, Option<McduKey>); 6]; 2] = [
-        [("DIR", Some(McduKey::Page(Page::Dir))), ("PROG", Some(McduKey::Page(Page::Prog))), ("PERF", Some(McduKey::Page(Page::Perf))), ("INIT", Some(McduKey::Page(Page::Init))), ("DATA", Some(McduKey::Page(Page::Fuel))), ("", None)],
+        [("DIR", Some(McduKey::Page(Page::Dir))), ("PROG", Some(McduKey::Page(Page::Prog))), ("PERF", Some(McduKey::Page(Page::Perf))), ("INIT", Some(McduKey::Page(Page::Init))), ("DATA", Some(McduKey::Page(Page::Data))), ("", None)],
         [("F-PLN", Some(McduKey::Page(Page::Fpln))), ("RAD NAV", Some(McduKey::Page(Page::RadNav))), ("FUEL PRED", Some(McduKey::Page(Page::Fuel))), ("SEC F-PLN", Some(McduKey::Inop("SEC F-PLN"))), ("ATC COMM", Some(McduKey::Inop("ATC COMM"))), ("MCDU MENU", Some(McduKey::Page(Page::Init)))],
     ];
     for (row, keys) in page_keys.into_iter().enumerate() {
@@ -1910,6 +2027,9 @@ mod tests {
         let body = std::fs::read_to_string(path).unwrap();
         let fp = from_simbrief(&parse_json(&body).unwrap(), 950.0, 6.0, false).unwrap();
         println!("{}-{} RWY {} / {} SID {} STAR {} : {} points", fp.origin, fp.dest, fp.dep_rwy, fp.arr_rwy, fp.sid, fp.star, fp.wpts.len());
+        println!("AIRAC {} ALTN {} {} TA {} TL {} ; pistes {:?}", fp.airac, fp.altn, fp.altn_rwy, fp.trans_alt, fp.trans_lvl, fp.rwys.iter().map(|r| format!("{} {} {:.0} {:.2}", r.apt, r.ident, r.true_course, r.ils_mhz)).collect::<Vec<_>>());
+        println!("balises {:?}", fp.wpts.iter().filter(|w| !w.freq.is_empty()).map(|w| format!("{} {} {}", w.ident, w.kind, w.freq)).take(6).collect::<Vec<_>>());
+        assert!(!fp.wpts.iter().any(|w| w.ident == "TOC" || w.ident == "TOD"));
     }
 
     /// OFP IFR avec SID et STAR : procédures reconnues, T/D avant l'entrée de STAR.

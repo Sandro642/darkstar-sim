@@ -16,11 +16,63 @@ pub struct RwyEnd {
     pub len: f64,
 }
 
+/// Piste issue des données AIRAC de l'OFP SimBrief (rapport décollage / atterrissage) :
+/// désignation magnétique, cap vrai, longueur (m), fréquence ILS (MHz, 0 si aucune).
+#[derive(Clone, Debug)]
+pub struct AiracRwy {
+    pub apt: String,
+    pub ident: String,
+    pub true_course: f64,
+    pub len_m: f64,
+    pub ils_mhz: f64,
+}
+
+thread_local! {
+    static AIRAC: std::cell::RefCell<Vec<AiracRwy>> = const { std::cell::RefCell::new(Vec::new()) };
+}
+
+/// Données de pistes AIRAC de l'OFP actif (origine et destination).
+pub fn set_airac(v: Vec<AiracRwy>) {
+    AIRAC.with(|c| *c.borrow_mut() = v);
+}
+
+/// Cap vrai AIRAC (sens « bas », 0-180°) le plus proche de `hdg` pour l'aérodrome, à ±20°.
+pub fn airac_course(icao: &str, hdg: f64) -> Option<f64> {
+    AIRAC.with(|c| {
+        let v = c.borrow();
+        v.iter()
+            .filter(|r| r.apt == icao)
+            .map(|r| {
+                let low = if wrap180(r.true_course - hdg).abs() <= 90.0 { r.true_course } else { wrap360(r.true_course + 180.0) };
+                (low, wrap180(low - hdg).abs())
+            })
+            .filter(|(_, d)| *d <= 20.0)
+            .min_by(|a, b| a.1.total_cmp(&b.1))
+            .map(|(c, _)| wrap360(c))
+    })
+}
+
+/// Piste AIRAC correspondant à l'extrémité (même aérodrome, cap vrai à ±20°, même lettre L/C/R).
+pub fn airac_for(apt: &Airport, hdg: f64, calc_ident: &str) -> Option<AiracRwy> {
+    let letter: String = calc_ident.chars().filter(|c| c.is_alphabetic()).collect();
+    AIRAC.with(|c| {
+        let v = c.borrow();
+        let mut cands: Vec<&AiracRwy> = v.iter().filter(|r| r.apt == apt.icao && wrap180(r.true_course - hdg).abs() <= 20.0).collect();
+        if cands.len() > 1 && !letter.is_empty() {
+            cands.retain(|r| r.ident.ends_with(&letter));
+        }
+        cands.first().map(|r| (*r).clone())
+    })
+}
+
 pub fn ends(apt: &Airport) -> Vec<RwyEnd> {
     let mut v = Vec::new();
     for (k, r) in apt.runways().iter().enumerate() {
         for hdg in [r.hdg, wrap360(r.hdg + 180.0)] {
-            v.push(RwyEnd { k, hdg, ident: apt.runway_ident(k, hdg), len: r.len });
+            let calc = apt.runway_ident(k, hdg);
+            // Désignation magnétique réelle (AIRAC SimBrief) quand elle est connue
+            let ident = airac_for(apt, hdg, &calc).map(|a| a.ident).unwrap_or(calc);
+            v.push(RwyEnd { k, hdg, ident, len: r.len });
         }
     }
     v.sort_by(|a, b| a.ident.cmp(&b.ident));
@@ -42,6 +94,10 @@ fn tag(apt: &Airport) -> String {
 
 /// Fréquence ILS stable (108,10 à 111,95 MHz, dixièmes impairs) et indicatif.
 pub fn ils(apt: &Airport, e: &RwyEnd) -> (String, f64) {
+    // Fréquence ILS réelle (AIRAC SimBrief) si disponible
+    if let Some(a) = AIRAC.with(|c| c.borrow().iter().find(|r| r.apt == apt.icao && r.ident == e.ident && r.ils_mhz > 100.0).cloned()) {
+        return (format!("I{}", &tag(apt)), a.ils_mhz);
+    }
     let h: u32 = apt.icao.bytes().chain(e.ident.bytes()).fold(7u32, |a, b| a.wrapping_mul(31).wrapping_add(b as u32));
     // 40 canaux : 108 à 111 MHz, dixièmes impairs (.10 .15 .30 .35 ... .95)
     let idx = (h % 40) as usize;
