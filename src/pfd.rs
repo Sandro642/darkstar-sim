@@ -550,7 +550,8 @@ fn draw_svs_overlay(ac: &Aircraft, v: &View, s: Rect, info: &PfdInfo) {
     // Demandes de configuration de l'autoland : c'est l'opérateur qui exécute
     config_cues(ac, cx, s.y + s.h * 0.30, info.time);
     // Alarmes façon F/A-18 / Rafale
-    hud_cues(ac, cx, cy, bank_rad, info.time);
+    hud_cues(ac, cx, cy, bank_rad, info.time, fpv);
+    takeoff_pitch(ac, v, cx, cy, info.time);
     // Au-dessus de la bannière d'approche / des barres ILS quand elles sont affichées
     let floor = if crate::appr::visible(ac) { s.y + s.h - crate::appr::BANNER_H - 64.0 } else { s.y + s.h - 60.0 };
     alarm_window(ac, info, cx, (cy + 118.0).min(floor - 10.0));
@@ -613,6 +614,75 @@ fn overspeed_graph(ac: &Aircraft, r: Rect, time: f64) {
     draw_rectangle(r.x + 9.0, by + 3.0, (bw - 2.0) * f, 6.0, if f > 0.95 / 1.2 { AMBER } else { CYAN_S });
     let xr = r.x + 8.0 + bw / 1.2;
     draw_line(xr, by, xr, by + 12.0, 2.0, RED);
+}
+
+thread_local! {
+    static GCAS_END: std::cell::Cell<(bool, f64)> = const { std::cell::Cell::new((false, -100.0)) };
+}
+
+/// Vrai pendant 4 s après la fin d'une récupération automatique.
+fn gcas_done_recently(ac: &Aircraft, time: f64) -> bool {
+    let rec = ac.gcas_active || ac.osr_active;
+    GCAS_END.with(|c| {
+        let (was, t_end) = c.get();
+        let t_end = if was && !rec { time } else { t_end };
+        c.set((rec, t_end));
+        !rec && time - t_end < 4.0
+    })
+}
+
+/// Guide d'assiette au décollage (anti tail strike) : cible 10° (crochets verts), limite de
+/// contact arrière 12° (chevron « V » ambre puis rouge), assiette courante, consigne ROTATE à VR.
+fn takeoff_pitch(ac: &Aircraft, v: &View, cx: f32, cy: f32, time: f64) {
+    let d = &ac.d;
+    let vr = ac.vr_keas();
+    let rolling = ac.on_ground && d.keas > 60.0 && ac.throttle > 0.4;
+    let just_off = !ac.on_ground && ac.gear_down && d.agl < 150.0 * FT && d.vs > 0.0;
+    if !(rolling || just_off) || ac.crashed.is_some() {
+        return;
+    }
+    let th = ac.theta.to_degrees();
+    let blink = (time * 3.0).fract() < 0.6;
+    const TARGET: f64 = 10.0;
+    const LIMIT: f64 = 12.0;
+    let near = th > LIMIT - 1.5;
+    let pc = |deg: f64| v.project_dir(dir(ac.psi, deg.to_radians()));
+    // Cible 10° : crochets verts de part et d'autre
+    if let Some(p) = pc(TARGET) {
+        let c = GREEN_S;
+        for sgn in [-1.0f32, 1.0] {
+            let x = p.x + sgn * 70.0;
+            stroke(&[vec2(x + sgn * 22.0, p.y - 8.0), vec2(x, p.y - 8.0), vec2(x, p.y + 8.0), vec2(x + sgn * 22.0, p.y + 8.0)], false, 3.0, c);
+        }
+        ht("10", p.x + 100.0, p.y + 5.0, 13.0, c);
+    }
+    // Limite de contact arrière 12° : chevron « V » pointé vers le bas
+    if let Some(p) = pc(LIMIT) {
+        let c = if near { RED } else { AMBER };
+        if !near || blink {
+            for (w, col) in [(6.0, Color::new(0.0, 0.0, 0.0, 0.6)), (3.5, c)] {
+                stroke(&[vec2(p.x - 30.0, p.y - 18.0), vec2(p.x, p.y), vec2(p.x + 30.0, p.y - 18.0)], false, w, col);
+            }
+        }
+        ht("TAIL 12", p.x + 36.0, p.y - 4.0, 12.0, c);
+    }
+    // Assiette courante (barre sur l'axe)
+    if let Some(p) = pc(th) {
+        let c = if near { RED } else { CYAN_S };
+        draw_line(p.x - 46.0, p.y, p.x - 14.0, p.y, 4.0, c);
+        draw_line(p.x + 14.0, p.y, p.x + 46.0, p.y, 4.0, c);
+    }
+    // Annonce
+    let y = cy + 150.0;
+    if ac.on_ground && d.keas < vr - 10.0 {
+        tag(cx, y, "DECOLLAGE", &format!("ROTATION A {vr:.0} KT  ({:.0})", d.keas), WHITE, 15.0, false, true);
+    } else if near {
+        tag(cx, y, "TAIL STRIKE", &format!("ASSIETTE {th:.1}°  MAX {LIMIT:.0}° — RELACHER"), RED, 17.0, false, blink);
+    } else if ac.on_ground && th < 1.0 {
+        tag(cx, y, "DECOLLAGE", &format!("ROTATE  ^  CIBLE {TARGET:.0}°  ({:.0} KT)", d.keas), CYAN_S, 17.0, false, blink);
+    } else {
+        tag(cx, y, "ASSIETTE", &format!("{th:.1}°  CIBLE {TARGET:.0}°  MAX {LIMIT:.0}°"), if th > TARGET + 0.5 { AMBER } else { GREEN_S }, 16.0, false, true);
+    }
 }
 
 /// Consignes au pilote pour éviter la casse des gouvernes / la survitesse / l'impact :
@@ -689,7 +759,7 @@ fn config_cues(ac: &Aircraft, cx: f32, y: f32, time: f64) {
 
 /// Repères critiques au-dessus de la maquette : FEU, GCAS (chevrons, PULL UP, FLY UP), limites
 /// (OVER G, AOA, OVERSPEED, SPEED). Rouge clignotant, ambre fixe.
-fn hud_cues(ac: &Aircraft, cx: f32, cy: f32, bank_rad: f32, time: f64) {
+fn hud_cues(ac: &Aircraft, cx: f32, cy: f32, bank_rad: f32, time: f64, fpv: Option<Vec2>) {
     if ac.on_ground || ac.crashed.is_some() {
         return;
     }
@@ -702,29 +772,51 @@ fn hud_cues(ac: &Aircraft, cx: f32, cy: f32, bank_rad: f32, time: f64) {
         tag(cx, y - 24.0, "FEU", &names.join("  "), RED, 22.0, false, fast);
         return;
     }
-    if ac.gcas_active {
-        if fast {
-            for k in 0..3 {
-                let yy = y + 26.0 - k as f32 * 13.0;
-                stroke(&[vec2(cx - 34.0, yy + 12.0), vec2(cx, yy), vec2(cx + 34.0, yy + 12.0)], false, 3.0, RED);
-            }
+    // Auto-GCAS / récupération survitesse, façon F-16 : chevrons qui se referment sur le vecteur
+    // vitesse, « Break-X » à l'instant du déclenchement et pendant la ressource, flèche FLY UP
+    let f = fpv.unwrap_or(vec2(cx, cy));
+    let recovering = ac.gcas_active || ac.osr_active;
+    let break_x = |c: Color| {
+        for (w, col) in [(7.0, Color::new(0.0, 0.0, 0.0, 0.6)), (4.0, c)] {
+            draw_line(f.x - 70.0, f.y - 70.0, f.x + 70.0, f.y + 70.0, w, col);
+            draw_line(f.x - 70.0, f.y + 70.0, f.x + 70.0, f.y - 70.0, w, col);
         }
-        tag(cx, y - 24.0, "GCAS", if ac.gcas_ovr { "FLY UP  5G" } else { "FLY UP" }, RED, 22.0, false, fast);
+    };
+    if recovering {
+        if fast {
+            break_x(RED);
+        }
+        // Grande flèche de ressource au-dessus du vecteur vitesse
+        let ay = f.y - 95.0;
+        draw_triangle(vec2(f.x, ay - 34.0), vec2(f.x - 26.0, ay), vec2(f.x + 26.0, ay), RED);
+        draw_rectangle(f.x - 8.0, ay, 16.0, 28.0, RED);
+        let what = if ac.osr_active { "SURVITESSE" } else { "GCAS" };
+        let body = if ac.gcas_ovr { format!("FLY UP  5G  {:.1} G", ac.d.nz) } else { format!("FLY UP  {:.1} G", ac.d.nz) };
+        tag(cx, y - 24.0, what, &body, RED, 22.0, false, true);
+        tag(cx, y + 6.0, "AUTO", "RECUPERATION EN COURS — MANCHE INHIBE", CYAN_S, 13.0, false, true);
         return;
     }
-    if ac.gcas_on && ac.gcas_t < 6.0 {
-        // Chevrons convergents : l'écart se ferme au déclenchement
-        let k = (ac.gcas_t / 6.0).clamp(0.0, 1.0) as f32;
-        let gap = 20.0 + 90.0 * k;
-        let c = if ac.gcas_t < 2.5 { RED } else { AMBER };
+    if ac.gcas_on && ac.gcas_t < 8.0 {
+        let k = ((ac.gcas_t - 1.0) / 7.0).clamp(0.0, 1.0) as f32;
+        let gap = 18.0 + 130.0 * k;
+        let c = if ac.gcas_t < 3.0 { RED } else { AMBER };
+        // Chevrons autour du vecteur vitesse (pointes vers lui)
         for sgn in [-1.0f32, 1.0] {
-            let x = cx + sgn * gap;
-            stroke(&[vec2(x + sgn * 16.0, y - 14.0), vec2(x, y), vec2(x + sgn * 16.0, y + 14.0)], false, 3.0, c);
+            let x = f.x + sgn * gap;
+            for (w, col) in [(6.0, Color::new(0.0, 0.0, 0.0, 0.6)), (3.5, c)] {
+                stroke(&[vec2(x + sgn * 20.0, f.y - 18.0), vec2(x, f.y), vec2(x + sgn * 20.0, f.y + 18.0)], false, w, col);
+            }
         }
-        if ac.gcas_t < 2.5 {
-            tag(cx, y - 26.0, "GCAS", "PULL UP", RED, 20.0, false, fast);
+        if ac.gcas_t < 1.2 && fast {
+            break_x(RED);
         }
+        let label = if ac.gcas_t < 3.0 { "PULL UP" } else { "TERRAIN" };
+        tag(cx, y - 26.0, "GCAS", &format!("{label}  {:.0} S", ac.gcas_t.max(0.0)), c, 20.0, false, ac.gcas_t >= 3.0 || fast);
         return;
+    }
+    // Récupération terminée : confirmation verte quelques secondes
+    if gcas_done_recently(ac, time) {
+        tag(cx, y - 24.0, "AGCAS", "RECUPERATION TERMINEE — PILOTE A VOUS", GREEN_S, 16.0, false, true);
     }
     let nmax = ac.fcs.nz_max.max(1.5);
     let amax = ac.fcs.alpha_max.max(1.0);

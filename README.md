@@ -687,3 +687,15 @@ Le SR-72 est un avion de reconnaissance : sa charge utile est simulée.
     DATA LINK, LOCK, MISSILE ; file d'attente sans chevauchement, répétition limitée.
   - RWR façon F-16 : « deedle » à chaque nouvel émetteur, tonalité continue d'accrochage,
     warble de tir de missile.
+- v1.47.0 : décollage et auto recovery.
+  - Guide d'assiette au décollage (anti tail strike) : crochets verts de la cible 10°, chevron
+    « V » de la limite de contact arrière 12° (ambre, rouge clignotant à l'approche), barre
+    d'assiette courante ; étiquettes ROTATION A xxx KT, ROTATE, ASSIETTE x° / CIBLE / MAX,
+    TAIL STRIKE — RELACHER ; voix « Rotate » à VR et « Pitch, pitch » avant le contact.
+  - Auto-GCAS / récupération survitesse façon F-16 : chevrons qui se referment sur le vecteur
+    vitesse avec décompte, « Break-X » au déclenchement et pendant la ressource, grande flèche
+    FLY UP avec facteur de charge, bandeau RECUPERATION EN COURS puis RECUPERATION TERMINEE ;
+    voix « Auto recovery », « Fly up » répété, « Recovery complete ».
+  - Ressenti du décollement des roues : roulement de piste sonore qui s'arrête net, détente des
+    amortisseurs (à-coup de la vue + clac sourd), roues qui ralentissent (vibration résiduelle et
+    sifflement descendant).

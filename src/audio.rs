@@ -122,6 +122,8 @@ pub struct Sfx {
     gear_hum: Sound,
     config: Sound,
     modem: Sound,
+    liftoff: Sound,
+    runway: Sound,
     rwr_new: Sound,
     rwr_lock: Sound,
     rwr_launch: Sound,
@@ -382,6 +384,24 @@ impl Sfx {
             sine(f, t) * 0.4
         }))
         .await;
+        // Décollement : détente des amortisseurs (clac sourd) puis roues qui ralentissent (sifflement
+        // descendant) ; roulement de piste en boucle (pneus, joints)
+        let mut lpo = Lp::new(500.0);
+        let mut ph_w = 0.0f32;
+        let liftoff = load(synth(2.2, false, move |t, r| {
+            let clunk = lpo.run(r.next()) * (-t * 18.0).exp() * 2.0 + sine(70.0, t) * (-t * 10.0).exp();
+            ph_w += (520.0 * (-t * 1.1).exp() + 60.0) / SR;
+            let whine = (std::f32::consts::TAU * ph_w).sin() * 0.25 * (-t * 1.4).exp() * (t * 8.0).min(1.0);
+            clunk + whine
+        }))
+        .await;
+        let mut lpr = Lp::new(180.0);
+        let mut lpr2 = Lp::new(900.0);
+        let runway = load(synth(2.0, true, move |t, r| {
+            let n = r.next();
+            lpr.run(n) * 2.2 + lpr2.run(n) * 0.35 + sine(38.0, t) * 0.2
+        }))
+        .await;
         // Reconnexion Iridium : gazouillis de modem
         let modem = load(synth(2.0, true, |t, r| {
             let slot = (t * 12.0) as u32;
@@ -392,7 +412,7 @@ impl Sfx {
 
         let sfx = Sfx {
             turb_lo, turb_hi, roar, ab, ram, scram, wind, rumble, warn, siren, shaker, clacker, horn,
-            caution, ap_disc, bang, thump, blip, buzz, click, key, switch, ap_on, athr_off, alt_alert, mins, seq, whoosh, link_lost, link_ok, fire_bell, gcas, gear_hum, config, modem, rwr_new, rwr_lock, rwr_launch,
+            caution, ap_disc, bang, thump, blip, buzz, click, key, switch, ap_on, athr_off, alt_alert, mins, seq, whoosh, link_lost, link_ok, fire_bell, gcas, gear_hum, config, modem, liftoff, runway, rwr_new, rwr_lock, rwr_launch,
             voice: Voice::new(),
             muted: false,
             prev: Prev::default(),
@@ -403,8 +423,8 @@ impl Sfx {
         sfx
     }
 
-    fn loops(&self) -> [&Sound; 20] {
-        [&self.turb_lo, &self.turb_hi, &self.roar, &self.ab, &self.ram, &self.scram, &self.wind, &self.rumble, &self.warn, &self.siren, &self.shaker, &self.clacker, &self.horn, &self.fire_bell, &self.gcas, &self.gear_hum, &self.config, &self.modem, &self.rwr_lock, &self.rwr_launch]
+    fn loops(&self) -> [&Sound; 21] {
+        [&self.runway, &self.turb_lo, &self.turb_hi, &self.roar, &self.ab, &self.ram, &self.scram, &self.wind, &self.rumble, &self.warn, &self.siren, &self.shaker, &self.clacker, &self.horn, &self.fire_bell, &self.gcas, &self.gear_hum, &self.config, &self.modem, &self.rwr_lock, &self.rwr_launch]
     }
 
     /// RWR et voix de menace : `level` 0 rien, 1 veille, 2 poursuite, 3 accrochage, 4 tir ;
@@ -480,6 +500,9 @@ impl Sfx {
         set_sound_volume(&self.shaker, k * if has("STALL") { 0.6 } else { 0.0 });
         set_sound_volume(&self.clacker, k * if has("OVERSPEED — q LIMIT") { 0.4 } else { 0.0 });
         set_sound_volume(&self.horn, k * if has("TOO LOW — GEAR") { 0.4 } else { 0.0 });
+        // Roulement sur la piste : croît avec la vitesse, s'arrête net au décollement
+        let gs = (ac.ground_speed() / 90.0).clamp(0.0, 1.0) as f32;
+        set_sound_volume(&self.runway, k * if ac.on_ground { gs * 0.45 } else { 0.0 });
         set_sound_volume(&self.fire_bell, k * if ac.fire.any() { 0.4 } else { 0.0 });
         let gcas_tone = ac.gcas_active || ac.osr_active || (ac.gcas_on && ac.gcas_t < 2.5);
         set_sound_volume(&self.gcas, k * if gcas_tone { 0.35 } else { 0.0 });
@@ -502,6 +525,9 @@ impl Sfx {
             }
             if !p.ground && ac.on_ground && alive {
                 play.push((&self.thump, 0.7));
+            }
+            if p.ground && !ac.on_ground && alive {
+                play.push((&self.liftoff, 0.6));
             }
             let unstart = e.scram == ScramState::Unstart;
             if unstart && !p.unstart {
@@ -529,8 +555,23 @@ impl Sfx {
             }
             // --- Voix d'alerte (F-16 / F-35) ---
             let gcas_imminent = ac.gcas_on && ac.gcas_t < 2.5 && !ac.gcas_active;
-            if ac.gcas_active && !p.gcas {
-                vq.push(("fly_up", 2.0));
+            let rec = ac.gcas_active || ac.osr_active;
+            if rec && !p.gcas {
+                vq.push(("auto_rec", 2.0));
+            }
+            if rec {
+                // F-16 : annonce répétée tant que la ressource dure
+                vq.push(("fly_up", 3.0));
+            }
+            if !rec && p.gcas && alive {
+                vq.push(("rec_done", 4.0));
+            }
+            // Décollage : ROTATE à VR, PITCH avant le contact arrière
+            if ac.on_ground && ac.throttle > 0.4 && ac.d.keas >= ac.vr_keas() && ac.d.keas < ac.vr_keas() + 15.0 && ac.theta < 1f64.to_radians() {
+                vq.push(("rotate", 20.0));
+            }
+            if ac.on_ground && ac.d.keas > 80.0 && ac.theta.to_degrees() > 10.5 {
+                vq.push(("pitch", 2.0));
             }
             if gcas_imminent || has("PULL UP") {
                 vq.push(("pull_up", 2.5));
@@ -541,6 +582,7 @@ impl Sfx {
             if ac.osr_active && !p.osr {
                 vq.push(("overspeed", 3.0));
             }
+            let _ = p.osr;
             let warns = alerts.iter().filter(|(l, s)| *l == Level::Warning && !acked.contains(s)).count();
             if warns > p.warns && !ac.fire.any() && !gcas_imminent && !ac.gcas_active {
                 vq.push(("warning", 4.0));
@@ -597,7 +639,7 @@ impl Sfx {
             scram_lit: e.scram == ScramState::Lit,
             ram_lit: e.ram == RamState::Lit,
             alt_err: (ac.ap.alt_tgt_ft - ac.alt / crate::geo::FT).abs(),
-            gcas: ac.gcas_active,
+            gcas: ac.gcas_active || ac.osr_active,
             fire: ac.fire.any(),
             osr: ac.osr_active,
             warns: alerts.iter().filter(|(l, s)| *l == Level::Warning && !acked.contains(s)).count(),
@@ -648,7 +690,7 @@ impl Sfx {
 // ---------- Voix d'alerte (façon « Bitching Betty » F-16 / F-35) ----------
 
 /// Phrases de la voix d'alerte : (identifiant, texte prononcé).
-const PHRASES: [(&str, &str); 18] = [
+const PHRASES: [(&str, &str); 22] = [
     ("pull_up", "Pull up. Pull up."),
     ("fly_up", "Fly up."),
     ("warning", "Warning. Warning."),
@@ -667,6 +709,10 @@ const PHRASES: [(&str, &str); 18] = [
     ("missile", "Missile. Missile."),
     ("lock", "Lock."),
     ("fuel_low", "Fuel low."),
+    ("rotate", "Rotate."),
+    ("pitch", "Pitch. Pitch."),
+    ("auto_rec", "Auto recovery."),
+    ("rec_done", "Recovery complete."),
 ];
 
 fn voice_dir() -> std::path::PathBuf {

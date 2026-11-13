@@ -27,6 +27,8 @@ pub struct Feel {
     pub boom: bool,
     /// Distance roulée (m) : joints de dalles de la piste
     roll_dist: f64,
+    /// Vibration résiduelle des roues qui tournent encore après l'envol (0..1)
+    spin: f32,
 }
 
 struct Prev {
@@ -54,7 +56,7 @@ fn wobble(t: f64, f: f64, seed: f64) -> f32 {
 
 impl Feel {
     pub fn new() -> Feel {
-        Feel { on: true, pos: Vec3::ZERO, vel: Vec3::ZERO, noise: Vec3::ZERO, t: 0.0, prev: None, veil: 0.0, rumble: 0.0, boom: false, roll_dist: 0.0 }
+        Feel { on: true, pos: Vec3::ZERO, vel: Vec3::ZERO, noise: Vec3::ZERO, t: 0.0, prev: None, veil: 0.0, rumble: 0.0, boom: false, roll_dist: 0.0, spin: 0.0 }
     }
 
     pub fn reset(&mut self) {
@@ -81,11 +83,14 @@ impl Feel {
         let buffet = stall.max(transonic).max(q_buf).max(g_buf).max(scram);
         let gs = ac.ground_speed();
         let roll = if ac.on_ground && alive { (smooth(gs / 90.0) * 1.1).min(1.0) } else { 0.0 };
+        // Après l'envol : légère vibration des roues qui ralentissent (≈1,5 s)
+        self.spin = (self.spin - dt / 1.5).max(0.0);
+        let spin = if ac.on_ground { 0.0 } else { self.spin * self.spin * 0.35 };
         let turb = ac.turb as f32;
 
         // --- Bruit direct (haute fréquence) ---
         let hi = buffet * 0.30;
-        let gr = roll * 0.22;
+        let gr = roll * 0.22 + spin * 0.22;
         let lo = turb * 0.9;
         let n = if self.on && alive {
             vec3(
@@ -142,9 +147,12 @@ impl Feel {
                 if ac.on_ground && p.theta < 0.01 && ac.theta >= 0.01 {
                     self.vel.y += 6.0;
                 }
-                // Décollage : fin du grondement, léger enfoncement
+                // Décollement des roues : le grondement de piste s'arrête net, les amortisseurs se
+                // détendent (à-coup vers le haut puis flottement), les roues tournent encore un instant
                 if p.ground && !ac.on_ground {
-                    self.vel.y -= 4.0;
+                    self.vel.y += 14.0;
+                    self.vel.z += 3.0 * if (t * 13.0).sin() > 0.0 { 1.0 } else { -1.0 };
+                    self.spin = 1.0;
                 }
                 // Train verrouillé (rentré ou sorti) : claquement des trappes
                 if (p.gear > 0.02 && ac.gear_pos <= 0.02) || (p.gear < 0.98 && ac.gear_pos >= 0.98) {
