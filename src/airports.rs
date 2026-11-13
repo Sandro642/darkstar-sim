@@ -22,6 +22,10 @@ macro_rules! apt {
     };
 }
 
+/// Désignations réelles des pistes internes (aérodrome, indice de piste, sens « bas », sens « haut »)
+/// quand la base mondiale ne les positionne pas : la numérotation suit le cap magnétique.
+const BUILTIN_IDS: &[(&str, usize, &str, &str)] = &[("KXTA", 0, "14L", "32R"), ("KXTA", 1, "14R", "32L")];
+
 /// Aérodromes : base mondiale OurAirports (si installée) complétée par la liste interne.
 pub static AIRPORTS: std::sync::LazyLock<Vec<Airport>> = std::sync::LazyLock::new(build_airports);
 
@@ -76,6 +80,27 @@ pub static BY_SIZE: std::sync::LazyLock<Vec<usize>> = std::sync::LazyLock::new(|
     v.sort_by(|&a, &b| AIRPORTS[b].len.total_cmp(&AIRPORTS[a].len));
     v
 });
+
+/// Piste sous l'avion (au sol) : aérodrome, désignation dans le sens `hdg`, longueur totale et
+/// longueur restante devant l'avion (m). None hors des pistes (taxiway, parking).
+pub fn runway_under(lat: f64, lon: f64, hdg: f64) -> Option<(&'static Airport, String, f64, f64)> {
+    for a in near(lat, lon) {
+        for (k, r) in a.runways().iter().enumerate() {
+            let (e, n) = enu_offset(r.lat, r.lon, lat, lon);
+            let h = r.hdg.to_radians();
+            let along = e * h.sin() + n * h.cos();
+            let cross = e * h.cos() - n * h.sin();
+            if along.abs() <= r.len / 2.0 + 30.0 && cross.abs() <= r.width / 2.0 + 8.0 {
+                // Sens de roulage : extrémité basse si l'avion pointe dans le sens de la piste
+                let fwd = wrap180(hdg - r.hdg).abs() < 90.0;
+                let ahead = if fwd { r.len / 2.0 - along } else { r.len / 2.0 + along };
+                let dir = if fwd { r.hdg } else { wrap360(r.hdg + 180.0) };
+                return Some((a, a.runway_ident(k, dir), r.len, ahead.clamp(0.0, r.len)));
+            }
+        }
+    }
+    None
+}
 
 /// Aérodromes des cases voisines du point (≈ 100 km).
 pub fn near(lat: f64, lon: f64) -> Vec<&'static Airport> {
@@ -360,6 +385,13 @@ impl Airport {
         }
         let mut v = vec![Rwy { lat: self.lat, lon: self.lon, hdg: self.hdg, len: self.len, width: self.width, id_lo: "", id_hi: "" }];
         v.extend(EXTRA_RWY.iter().filter(|r| r.0 == self.icao).map(|r| Rwy { lat: r.1, lon: r.2, hdg: r.3, len: r.4, width: r.5, id_lo: "", id_hi: "" }));
+        // Désignations réelles (magnétiques) des pistes internes absentes de la base mondiale
+        for (k, r) in v.iter_mut().enumerate() {
+            if let Some(&(_, _, lo, hi)) = BUILTIN_IDS.iter().find(|x| x.0 == self.icao && x.1 == k) {
+                r.id_lo = lo;
+                r.id_hi = hi;
+            }
+        }
         // Cap vrai exact des pistes d'après l'AIRAC de l'OFP SimBrief (départ / arrivée), à ±20°
         for r in v.iter_mut() {
             if let Some(tc) = crate::procs::airac_course(self.icao, r.hdg) {

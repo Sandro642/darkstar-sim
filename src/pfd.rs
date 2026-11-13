@@ -573,6 +573,7 @@ fn draw_svs_overlay(ac: &Aircraft, v: &View, s: Rect, info: &PfdInfo) {
     // Alarmes façon F/A-18 / Rafale
     hud_cues(ac, cx, cy, bank_rad, info.time, fpv);
     takeoff_pitch(ac, v, cx, cy, info.time);
+    runway_hud(ac, cx, cy);
     // Au-dessus de la bannière d'approche / des barres ILS quand elles sont affichées
     let floor = if crate::appr::visible(ac) { s.y + s.h - crate::appr::BANNER_H - 64.0 } else { s.y + s.h - 60.0 };
     alarm_window(ac, info, cx, (cy + 118.0).min(floor - 10.0));
@@ -771,6 +772,32 @@ fn gcas_done_recently(ac: &Aircraft, time: f64) -> bool {
         c.set((rec, t_end));
         !rec && time - t_end < 4.0
     })
+}
+
+/// Piste sous l'avion (au sol), façon HUD : désignation, terrain, longueur totale et restante.
+fn runway_hud(ac: &Aircraft, cx: f32, cy: f32) {
+    if !ac.on_ground || ac.crashed.is_some() {
+        return;
+    }
+    let Some((a, id, len, ahead)) = crate::airports::runway_under(ac.lat, ac.lon, ac.hdg_deg()) else { return };
+    let y = cy + 64.0;
+    let c = line();
+    let main = format!("RWY {id}  {}", a.icao);
+    let sub = format!("{len:.0} M  ({:.0} FT)   RESTANT {ahead:.0} M", len / FT);
+    let w = txt_w(&main, 18.0).max(txt_w(&sub, 12.0)) + 24.0;
+    // Crochets d'encadrement façon HUD
+    for (x0, s) in [(cx - w / 2.0, 1.0f32), (cx + w / 2.0, -1.0)] {
+        draw_line(x0, y - 18.0, x0, y + 22.0, 1.5, c);
+        draw_line(x0, y - 18.0, x0 + s * 8.0, y - 18.0, 1.5, c);
+        draw_line(x0, y + 22.0, x0 + s * 8.0, y + 22.0, 1.5, c);
+    }
+    let txt_cs = |s: &str, y: f32, size: f32, col: Color| {
+        txt_c(s, cx + 1.0, y + 1.0, size, Color::new(0.0, 0.0, 0.0, 0.75));
+        txt_c(s, cx, y, size, col);
+    };
+    txt_cs(&main, y, 18.0, c);
+    let rc = if ahead < 1_000.0 { AMBER } else { label_c() };
+    txt_cs(&sub, y + 17.0, 12.0, rc);
 }
 
 /// Guide d'assiette au décollage (anti tail strike) : cible 10° (crochets verts), limite de

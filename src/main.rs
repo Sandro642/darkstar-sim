@@ -2630,7 +2630,7 @@ async fn main() {
             g.place_at(0, i, &r);
         }
     }
-    let mut show_help = scenario.is_empty() && g.connect.is_none();
+    let mut show_help = scenario.is_empty() && g.connect.is_none() && std::env::var("DARKSTAR_SHOT").is_err();
     let mut fullscreen = std::env::var("DARKSTAR_SHOT").is_err() && std::env::var("DARKSTAR_WINDOW").is_err();
     let mut map_full = false;
     let mut frame = 0u64;

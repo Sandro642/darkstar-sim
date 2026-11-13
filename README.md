@@ -768,3 +768,6 @@ Le SR-72 est un avion de reconnaissance : sa charge utile est simulée.
   OACI ou le plus proche), piste de départ présélectionnée, SID, zone ESSAI au-delà de la sortie
   de SID, puis enchaînement sur ARRIVAL (piste, STAR, approche) ; croisière FL250 / M0.9
   modifiable ; vol LNAV / VNAV et autoland sur la piste choisie.
+- v1.55.1 : horizon — au sol sur une piste, indication façon HUD : désignation (sens de l'avion),
+  terrain, longueur (m / ft) et longueur restante devant l'avion (ambre sous 1000 m). KXTA :
+  désignations réelles 14L/32R et 14R/32L.
