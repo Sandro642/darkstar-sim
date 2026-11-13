@@ -168,7 +168,7 @@ struct Game {
 const BEZEL_PAGES: [gcs::Tab; 6] = [gcs::Tab::Moteurs, gcs::Tab::Alarmes, gcs::Tab::Fcs, gcs::Tab::Limites, gcs::Tab::Elec, gcs::Tab::Thermique];
 
 /// Données de l'horizon (PFD) : alarmes, liaison, objectif, météo, menaces avec missiles simulés, carburant.
-fn pfd_info<'a>(g: &Game, alerts: &'a [(Level, String)], ln: &'a str, lat: f64, warp: f64, time: f64) -> pfd::PfdInfo<'a> {
+fn pfd_info<'a>(g: &Game, alerts: &'a [(Level, String)], ln: &'a str, _lat: f64, warp: f64, time: f64) -> pfd::PfdInfo<'a> {
     let cue = {
         let t = &g.recon.targets[g.recon.selected];
         (!t.done()).then(|| pfd_plus::Cue { lat: t.lat, lon: t.lon, elev: 0.0, label: format!("CIBLE {}", t.code), color: Color::new(1.0, 0.85, 0.2, 1.0) })
@@ -182,7 +182,7 @@ fn pfd_info<'a>(g: &Game, alerts: &'a [(Level, String)], ln: &'a str, lat: f64, 
         }
     }
     let mishap = g.mishap.as_ref().map(|m| (m.decay(), m.elapsed() - m.t_los));
-    pfd::PfdInfo { da_ft: if in_approach(&g.ac) { Some(g.da_ft) } else { None }, mishap, alerts, link_name: ln, latency_ms: lat, dest: g.dest, warp, time, cue, wx: g.wx.info.clone(), threats, fuel: g.fuel_plan.clone(), fuel_since: get_time() - g.fuel_change_t }
+    pfd::PfdInfo { da_ft: if in_approach(&g.ac) { Some(g.da_ft) } else { None }, mishap, alerts, link_name: ln, dest: g.dest, warp, time, cue, wx: g.wx.info.clone(), threats, fuel: g.fuel_plan.clone(), fuel_since: get_time() - g.fuel_change_t }
 }
 
 /// Actions demandées sur l'écran Darkstar (vidange, zoom caméra, boutons de lunette).
@@ -270,7 +270,7 @@ impl Game {
             ac,
             mission,
             map: map::MapView::new(),
-            log: vec![(0.0, Level::Info, "GCS EN LIGNE — LIAISON LOS ÉTABLIE AVEC DARKSTAR FTV-01".into())],
+            log: vec![(0.0, Level::Info, "GCS EN LIGNE — DATALINK ÉTABLI AVEC DARKSTAR FTV-01".into())],
             warp_idx: 0,
             dest,
             sim_time: 0.0,
@@ -674,7 +674,7 @@ impl Game {
 
     fn link(&self) -> (String, f64) {
         match self.link.state {
-            link::State::Connected if self.link.path == link::Path::Emerg => ("IRIDIUM".into(), 2_500.0),
+            link::State::Connected if self.link.path == link::Path::Emerg => ("IRIDIUM".into(), 0.0),
             link::State::Connected => (self.link.path.name(), self.link.latency(&self.ac)),
             link::State::Connecting { .. } => ("CONNEXION".into(), 0.0),
             _ => ("PERDUE".into(), 0.0),
@@ -1822,7 +1822,7 @@ impl Game {
                 };
                 match p {
                     Some(_) if self.link.state == link::State::Connected && self.link.path != link::Path::Emerg && w[0] == "LIAISON" => {
-                        reply = Ok(format!("LIAISON {} {:.0} ms", self.link.path.name(), self.link.latency(&self.ac)));
+                        reply = Ok(format!("LIAISON {} ETABLIE", self.link.path.name()));
                     }
                     Some(p) => {
                         self.link.connect(p);
@@ -2546,9 +2546,6 @@ impl Game {
         } else if !self.atc[4] && ac.d.mach > 10.0 {
             self.atc[4] = true;
             say = Some("CONTRÔLE ESSAIS : MACH 10 ! L'AVION LE PLUS RAPIDE DU MONDE.");
-        } else if !self.atc[5] && self.link().0 == "SATCOM" && false {
-            self.atc[5] = true;
-            say = Some("GCS : HORS PORTÉE LOS — BASCULE SUR LIAISON SATCOM, LATENCE ACCRUE.");
         }
         if let Some(s) = say {
             self.push(Level::Info, s);
@@ -3018,7 +3015,6 @@ async fn main() {
                 warp: warp_eff,
                 warp_capped,
                 link: &ln,
-                latency_ms: lat,
                 master_warn,
                 master_caut,
                 muted: g.muted,

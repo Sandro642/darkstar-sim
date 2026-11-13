@@ -1,6 +1,6 @@
 //! Liaison de données station sol ↔ Darkstar, et flotte :
 //! - flotte de plusieurs Darkstar ; l'opérateur établit la liaison avec l'appareil à contrôler ;
-//! - chemins : LOS direct depuis Edwards, stations sol relais, avions relais BACN (E-11A), SATCOM,
+//! - liaison mondiale sans portee radio ni latence ; relais (sol, BACN, SATCOM) au choix en reconnexion,
 //!   et canal de secours Iridium (urgence seulement, latence élevée) ;
 //! - en exploitation normale la liaison est permanente (SATCOM couvre le globe, bascules
 //!   automatiques sans coupure) ; elle n'est perdue que sur incident : panne de l'émetteur ou du
@@ -10,8 +10,6 @@
 //!   secondes, réussite incertaine en limite de portée).
 
 use crate::aircraft::{Aircraft, Level};
-use crate::airports::AIRPORTS;
-use crate::geo::*;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 /// Flotte : (immatriculation, terrain de stationnement, disponibilité).
@@ -51,7 +49,7 @@ pub enum Path {
 impl Path {
     pub fn name(&self) -> String {
         match self {
-            Path::Los => "LOS".into(),
+            Path::Los => "DATALINK".into(),
             Path::Ground(i) => format!("SOL {}", STATIONS[*i]),
             Path::Bacn(i) => BACN[*i].0.into(),
             Path::Satcom => "SATCOM".into(),
@@ -94,10 +92,6 @@ pub struct Link {
 
 pub const STEPS: [&str; 5] = ["RECHERCHE DE LA PORTEUSE", "SYNCHRONISATION DES TRAMES", "AUTHENTIFICATION CRYPTO", "TELEMESURE VERROUILLEE", "VOIE DE COMMANDE ETABLIE"];
 
-/// Portée radio (m) entre deux altitudes au-dessus du sol (horizon radio, facteur 4/3).
-fn radio_range(h1: f64, h2: f64) -> f64 {
-    4_120.0 * (h1.max(0.0).sqrt() + h2.max(0.0).sqrt())
-}
 
 
 impl Link {
@@ -115,7 +109,7 @@ impl Link {
     /// Disponibilité d'un chemin : latence (ms) et marge (0..1), ou la raison de l'indisponibilité.
     pub fn avail(&self, p: Path, ac: &Aircraft) -> Result<(f64, f64), &'static str> {
         if p == Path::Emerg {
-            return Ok((2_500.0, 1.0));
+            return Ok((0.0, 1.0));
         }
         if !ac.elec.bus_ok {
             return Err("EMETTEUR HORS TENSION");
@@ -123,40 +117,12 @@ impl Link {
         if self.tx_fail {
             return Err("EMETTEUR EN PANNE");
         }
-        let agl = (ac.alt - ac.d.elev).max(2.0);
-        let geo = |icao: &str, ant: f64| {
-            let a = AIRPORTS.iter().find(|a| a.icao == icao).expect("station");
-            let (d, _) = dist_brg(ac.lat, ac.lon, a.lat, a.lon);
-            (d, radio_range(agl, ant).min(450_000.0))
-        };
-        let (d, max, lat) = match p {
-            Path::Los => {
-                // Antennes LOS de la station : Edwards et Palmdale (Plant 42)
-                let (d1, m) = geo("KEDW", 30.0);
-                let (d2, _) = geo("KPMD", 30.0);
-                (d1.min(d2), m, 45.0)
-            }
-            Path::Ground(i) => {
-                let (d, m) = geo(STATIONS[i], 30.0);
-                (d, m, 90.0)
-            }
-            Path::Bacn(i) => {
-                let (d, _) = dist_brg(ac.lat, ac.lon, BACN[i].1, BACN[i].2);
-                (d, radio_range(agl, 13_700.0).min(700_000.0), 120.0)
-            }
-            Path::Satcom => {
-                if self.sat_fail {
-                    return Err("TERMINAL SATCOM EN PANNE");
-                }
-                return Ok((380.0, 1.0));
-            }
-            Path::Emerg => unreachable!(),
-        };
-        if d > max {
-            Err("HORS PORTEE RADIO")
-        } else {
-            Ok((lat, (1.0 - d / max).clamp(0.0, 1.0)))
+        // Pas de portée radio ni de latence : la liaison couvre tout le globe sans délai ;
+        // elle n'est perdue que sur panne (émetteur, terminal, bus électrique) ou dégâts
+        if p == Path::Satcom && self.sat_fail {
+            return Err("TERMINAL SATCOM EN PANNE");
         }
+        Ok((0.0, 1.0))
     }
 
     /// Estimation côté station sol (portée et couverture d'après la dernière position connue) :
@@ -266,7 +232,7 @@ impl Link {
                         self.state = State::Connected;
                         self.path = path;
                         self.events.push((Level::Info, if path == Path::Emerg {
-                            "LIAISON DE SECOURS IRIDIUM ETABLIE — INSTRUCTIONS SEULEMENT (LATENCE 2,5 S), PAS DE MANCHE".to_string()
+                            "LIAISON DE SECOURS IRIDIUM ETABLIE — INSTRUCTIONS SEULEMENT, PAS DE MANCHE".to_string()
                         } else {
                             format!("LIAISON ETABLIE AVEC DARKSTAR {} VIA {}", tail(), path.name())
                         }));
@@ -309,7 +275,7 @@ pub fn draw_lost(link: &Link, last: &Aircraft, r: macroquad::prelude::Rect, time
         txt_c(&title, b.x + b.w / 2.0, b.y + 20.0, 14.0, if emerg { CYAN_S } else { AMBER });
     }
     let sub = if emerg {
-        "INSTRUCTIONS POSSIBLES (LATENCE 2,5 S), MANCHE INDISPONIBLE"
+        "INSTRUCTIONS POSSIBLES, MANCHE INDISPONIBLE"
     } else {
         "TELEMESURE FIGEE — PROCEDURE AUTONOME : MAINTIEN CAP / ALTITUDE"
     };
@@ -319,8 +285,8 @@ pub fn draw_lost(link: &Link, last: &Aircraft, r: macroquad::prelude::Rect, time
         let row = Rect::new(b.x + 10.0, b.y + 50.0 + k as f32 * 21.0, b.w - 20.0, 19.0);
         let est = link.estimate(*p, last);
         let (state, c) = match (&est, p) {
-            (_, Path::Emerg) => ("LENT, SANS MANCHE".to_string(), CYAN_S),
-            (Ok((lat, m)), _) => (format!("POSSIBLE  {lat:.0} ms{}", if *m < 0.15 { "  LIMITE" } else { "" }), GREEN_S),
+            (_, Path::Emerg) => ("SANS MANCHE".to_string(), CYAN_S),
+            (Ok(_), _) => ("POSSIBLE".to_string(), GREEN_S),
             (Err(why), _) => (format!("{why} (estime)"), DIM),
         };
         let cur = matches!(link.state, State::Connecting { path, .. } if path == *p);
@@ -340,30 +306,21 @@ mod tests {
     use super::*;
 
     #[test]
-    fn handover_and_loss() {
+    fn no_range_loss() {
         let mut ac = Aircraft::new_on_runway(crate::airports::AIRPORTS.iter().position(|a| a.icao == "KEDW").unwrap());
         ac.alt += 10_000.0;
         ac.on_ground = false;
         let mut l = Link::new();
-        assert!(l.avail(Path::Los, &ac).is_ok());
-        // Loin de tout relais sol, au-dessus du Pacifique : bascule SATCOM
-        ac.lat = 30.0;
-        ac.lon = -135.0;
-        assert!(!l.update(&ac, 0.016, 0.016));
-        assert_eq!(l.path, Path::Satcom);
-        // Vol normal : pôle, hypersonique dense — la liaison n'est jamais perdue
-        for (lat, lon) in [(80.0, 0.0), (-70.0, 120.0), (10.0, 60.0)] {
+        // Partout dans le monde : liaison directe, sans latence ni bascule
+        for (lat, lon) in [(30.0, -135.0), (80.0, 0.0), (-70.0, 120.0), (10.0, 60.0)] {
             ac.lat = lat;
             ac.lon = lon;
-            ac.d.mach = 9.5;
-            ac.d.q = 45_000.0;
-            assert!(!l.update(&ac, 0.016, 0.016), "perte en vol normal a {lat},{lon}");
-            assert_eq!(l.state, State::Connected);
+            assert!(!l.update(&ac, 0.016, 0.016), "perte a {lat},{lon}");
+            assert_eq!((l.state, l.path), (State::Connected, Path::Los));
+            assert_eq!(l.latency(&ac), 0.0);
         }
-        ac.lat = 30.0;
-        ac.lon = -135.0;
-        // Panne SATCOM : perte de liaison, seul le secours reste
-        l.sat_fail = true;
+        // Panne de l'émetteur : perte de liaison, seul le secours reste
+        l.tx_fail = true;
         assert!(l.update(&ac, 0.016, 0.016));
         assert_eq!(l.state, State::Lost);
         assert!(l.avail(Path::Emerg, &ac).is_ok());

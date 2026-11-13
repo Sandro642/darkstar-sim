@@ -163,7 +163,7 @@ pub fn draw(ui: &ConnectUi, link: &crate::link::Link, last: &str, sw: f32, sh: f
 
     // --- Liaison ---
     let y = r.y + 380.0;
-    txt(&format!("LIAISON DE DONNEES — {} VIA LOS (antenne de la base)", FLEET[ui.sel].0), r.x + 24.0, y, 13.0, WHITE);
+    txt(&format!("LIAISON DE DONNEES — DARKSTAR {}", FLEET[ui.sel].0), r.x + 24.0, y, 13.0, WHITE);
     let (step, prog) = match link.state {
         State::Connecting { t, dur, .. } => (link.step, (t / dur) as f32),
         State::Connected => (STEPS.len(), 1.0),

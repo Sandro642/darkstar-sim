@@ -12,7 +12,6 @@ pub struct TopBar<'a> {
     pub warp: f64,
     pub warp_capped: bool,
     pub link: &'a str,
-    pub latency_ms: f64,
     pub master_warn: bool,
     pub master_caut: bool,
     pub muted: bool,
@@ -57,8 +56,8 @@ pub fn draw_topbar(r: Rect, t: &TopBar) -> TopActions {
         act.warp = true;
     }
     x += ww + 8.0;
-    let lc = if t.latency_ms > 200.0 { AMBER } else { GREEN_S };
-    chip(x, y, "LINK", &format!("{} {:.0}ms", t.link, t.latency_ms), lc);
+    let lc = if t.link == "PERDUE" || t.link == "IRIDIUM" { AMBER } else { GREEN_S };
+    chip(x, y, "LINK", t.link, lc);
 
     // Droite : alarmes maîtres, son, aide
     let blink = (t.time * 2.5).fract() < 0.6;

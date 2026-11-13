@@ -753,3 +753,5 @@ Le SR-72 est un avion de reconnaissance : sa charge utile est simulée.
   manche ; bilan après la manœuvre). PULL UP inhibé en finale train sorti. Retour aux couleurs
   Darkstar avec l'échelle G. Choix de l'aérodrome (saisie OACI) et de la piste au lancement.
   Plein écran au lancement (F11 : fenêtre). Calage ILS automatique sur la piste face à l'arrivée.
+- v1.53.1 : liaison de données sans portée radio ni latence (plus de bascule SATCOM ni de coupure
+  selon la distance, plus d'affichage en ms) ; la liaison n'est perdue que sur panne ou dégâts.

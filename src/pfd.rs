@@ -19,7 +19,6 @@ fn rrect_lines(r: Rect, _rad: f32, th: f32, c: Color) {
 pub struct PfdInfo<'a> {
     pub alerts: &'a [(Level, String)],
     pub link_name: &'a str,
-    pub latency_ms: f64,
     pub dest: usize,
     pub warp: f64,
     pub time: f64,
@@ -1033,8 +1032,8 @@ fn draw_fma_bar(ac: &Aircraft, r: Rect, g: &Geo, info: &PfdInfo) {
     draw_line(x1, b.y + 4.0, x1, b.y + b.h - 4.0, 1.0, Color::new(0.5, 0.52, 0.55, 0.7));
     let mode = ac.mode_name();
     txt_c(&format!("TBCC {mode}"), x1 + 90.0, b.y + 14.0, 13.0, tbcc_color(mode));
-    let lc = if info.latency_ms > 200.0 { AMBER } else { GREEN_S };
-    txt_c(&format!("{} {:.0}ms  x{:.0}", info.link_name, info.latency_ms, info.warp), x1 + 90.0, b.y + 26.0, 10.0, lc);
+    let lc = if info.link_name == "PERDUE" || info.link_name == "IRIDIUM" { AMBER } else { GREEN_S };
+    txt_c(&format!("{}  x{:.0}", info.link_name, info.warp), x1 + 90.0, b.y + 26.0, 10.0, lc);
 }
 
 /// Fond d'échelle translucide.
