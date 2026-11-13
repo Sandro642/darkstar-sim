@@ -728,3 +728,12 @@ Le SR-72 est un avion de reconnaissance : sa charge utile est simulée.
   - MCDU : page DATA (base active AIRAC, transitions, dégagement, METAR / TAF), RAD NAV avec
     VOR1 / VOR2 calés sur les prochaines balises du plan, PROG avec nom du point, vent prévu et
     MORA.
+- v1.51.0 : base de navigation mondiale OurAirports (gratuite, domaine public, mise à jour
+  quotidienne) — environ 3700 aérodromes dans le monde avec pistes d'au moins 6000 ft, seuils
+  réels (position des deux extrémités), désignations réelles, longueur, largeur, altitude.
+  Rendu des pistes, autoland, approche ILS, DEPARTURES / ARRIVAL, recherche du terrain le plus
+  proche (urgence, déroutement) sur ces données ; les aérodromes de la liste interne sont
+  remplacés par leur version réelle. Téléchargement automatique au premier lancement ; MCDU page
+  DATA : base active, base monde (nombre d'aérodromes, date), abonnement GRATUIT, bouton
+  <MAJ NAVDATA (dernière version, appliquée au redémarrage) ; instruction NAVDATA. Index spatial
+  pour l'aplanissement du relief autour des pistes.

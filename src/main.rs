@@ -5,6 +5,7 @@ mod alarms;
 mod fire;
 mod fms;
 mod procs;
+mod navdb;
 mod airports;
 mod atmosphere;
 mod elec;
@@ -1216,6 +1217,21 @@ impl Game {
         if let Some(o) = self.fms.poll() {
             self.mcdu_out(o);
         }
+        // Base de navigation : fin de téléchargement annoncée une fois
+        if let Some(u) = self.fms.navupd.clone() {
+            let st = u.lock().unwrap().clone();
+            match st {
+                navdb::Upd::Done(m) => {
+                    *u.lock().unwrap() = navdb::Upd::Idle;
+                    self.push(Level::Info, format!("NAVDATA A JOUR : {m} — REDEMARRER POUR L'APPLIQUER"));
+                }
+                navdb::Upd::Error(e) => {
+                    *u.lock().unwrap() = navdb::Upd::Idle;
+                    self.push(Level::Caution, format!("NAVDATA : {e}"));
+                }
+                _ => {}
+            }
+        }
         if let Some(m) = self.fms.autotune(&self.ac) {
             self.push(Level::Info, m);
         }
@@ -1819,6 +1835,10 @@ impl Game {
                 } else {
                     reply = Err("AU SOL : DECOLLAGE D'ABORD (instruction DECOLLAGE), PUIS LNAV".into());
                 }
+            }
+            "NAVDATA" => {
+                self.fms.navupd = Some(navdb::update());
+                reply = Ok("NAVDATA : TELECHARGEMENT DE LA DERNIERE BASE MONDE (OURAIRPORTS)".into());
             }
             "VNAV" => {
                 self.fms.vnav = arg(1) != "OFF";
@@ -2542,6 +2562,11 @@ async fn main() {
     let auto_update = std::env::var("DARKSTAR_AUTOUPDATE").is_ok();
     let mut last_upd_msg = String::new();
     let mut g = Game::new(&scenario);
+    // Premier lancement : téléchargement de la base mondiale (appliquée au lancement suivant)
+    if navdb::installed_at().is_none() {
+        g.fms.navupd = Some(navdb::update());
+        g.push(Level::Info, "NAVDATA : PREMIER LANCEMENT — TELECHARGEMENT DE LA BASE MONDE (OURAIRPORTS, GRATUITE)");
+    }
     // Position de départ forcée pour les essais : DARKSTAR_POS=lat,lon,altitude_ft
     if let Ok(p) = std::env::var("DARKSTAR_POS") {
         let v: Vec<f64> = p.split(',').filter_map(|x| x.trim().parse().ok()).collect();

@@ -255,7 +255,7 @@ impl Recorder {
 
 fn nearest_runway(lat: f64, lon: f64) -> (String, f64, f64) {
     let mut best = (String::new(), f64::MAX, 0.0);
-    for a in AIRPORTS {
+    for a in AIRPORTS.iter() {
         let (d, _) = dist_brg(lat, lon, a.lat, a.lon);
         if d < best.1 {
             let (along, cross) = a.to_runway(lat, lon);

@@ -227,6 +227,7 @@ pub struct Fpln {
     pub trans_lvl: String,
     pub metar_o: String,
     pub metar_d: String,
+    #[allow(dead_code)]
     pub taf_d: String,
     pub rwys: Vec<crate::procs::AiracRwy>,
 }
@@ -675,6 +676,8 @@ pub struct Fms {
     pub jp7_at_dest: f64,
     fuel_warned: bool,
     eco_decided: bool,
+    /// Mise à jour de la base de navigation en cours (OurAirports)
+    pub navupd: Option<std::sync::Arc<std::sync::Mutex<crate::navdb::Upd>>>,
 }
 
 pub enum McduOut {
@@ -1035,7 +1038,7 @@ impl Fms {
 
     pub fn new() -> Fms {
         let user = std::fs::read_to_string(config_path()).map(|s| s.trim().to_string()).unwrap_or_default();
-        Fms { fpln: None, temp: None, page: Page::Init, scroll: 0, scratch: String::new(), msg: String::new(), user, from_to: (String::new(), String::new()), crz: (ceiling_fl(11.0), 11.0), crz_max: true, fetch: Arc::new(Mutex::new(Fetch::Idle)), focus: true, acft: "B77W".into(), vnav: true, desc_started: false, land_sent: false, phase: "", dep: ProcSel::default(), arr: ProcSel::default(), ils: None, eco_mach: None, ga_ok: true, jp7_at_dest: 0.0, fuel_warned: false, eco_decided: false }
+        Fms { fpln: None, temp: None, page: Page::Init, scroll: 0, scratch: String::new(), msg: String::new(), user, from_to: (String::new(), String::new()), crz: (ceiling_fl(11.0), 11.0), crz_max: true, fetch: Arc::new(Mutex::new(Fetch::Idle)), focus: true, acft: "B77W".into(), vnav: true, desc_started: false, land_sent: false, phase: "", dep: ProcSel::default(), arr: ProcSel::default(), ils: None, eco_mach: None, ga_ok: true, jp7_at_dest: 0.0, fuel_warned: false, eco_decided: false, navupd: None }
     }
 
     /// Plan affiché / modifié : temporaire s'il existe, sinon actif.
@@ -1292,6 +1295,16 @@ impl Fms {
                     self.msg = "PLAN TEMPORAIRE EFFACE".into();
                 }
             }
+            // ----- DATA : mise à jour de la base de navigation -----
+            (Page::Data, true, 5) => {
+                if self.navupd.as_ref().is_some_and(|u| matches!(*u.lock().unwrap(), crate::navdb::Upd::Busy(_))) {
+                    self.msg = "MAJ DEJA EN COURS".into();
+                } else {
+                    self.navupd = Some(crate::navdb::update());
+                    self.msg = "MAJ NAVDATA LANCEE".into();
+                    out = Some(McduOut::Msg(Level::Info, "NAVDATA : TELECHARGEMENT DE LA DERNIERE BASE MONDE (OURAIRPORTS) — APPLIQUEE AU PROCHAIN LANCEMENT".into()));
+                }
+            }
             // ----- DEPARTURES / ARRIVAL -----
             (Page::Dep | Page::Arr, true, 5) => {
                 self.page = Page::Fpln;
@@ -1498,33 +1511,46 @@ fn page_lines(f: &Fms, ac: &Aircraft) -> (String, Color, Vec<(Line, Line)>) {
         }
         Page::Data => {
             title = "DATA INDEX".into();
-            match f.plan().filter(|p| !p.airac.is_empty()) {
-                Some(p) => {
-                    rows.push((ln(" ACTIVE DATA BASE", LBL_M, "SOURCE ", LBL_M), ln(format!("AIRAC {}", p.airac), CYAN_M, "SIMBRIEF", GREEN_M)));
+            let p = f.plan();
+            let cycle = p.map(|p| p.airac.clone()).filter(|c| !c.is_empty());
+            rows.push((ln(" ACTIVE DATA BASE", LBL_M, "SOURCE ", LBL_M), ln(cycle.as_ref().map(|c| format!("AIRAC {c}")).unwrap_or("BASE MONDE".into()), CYAN_M, if cycle.is_some() { "SIMBRIEF" } else { "OURAIRPORTS" }, GREEN_M)));
+            let n = AIRPORTS.iter().filter(|a| !a.rwys.is_empty()).count();
+            let date = crate::navdb::installed_at().map(|t| {
+                let days = (t / 86_400) as i64;
+                // Date civile depuis le nombre de jours (algorithme de Howard Hinnant)
+                let z = days + 719_468;
+                let era = z.div_euclid(146_097);
+                let doe = z - era * 146_097;
+                let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+                let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+                let mp = (5 * doy + 2) / 153;
+                let d = doy - (153 * mp + 2) / 5 + 1;
+                let m = if mp < 10 { mp + 3 } else { mp - 9 };
+                let y = yoe + era * 400 + if m <= 2 { 1 } else { 0 };
+                format!("{d:02}/{m:02}/{y}")
+            });
+            rows.push((ln(" BASE MONDE (PISTES REELLES)", LBL_M, "ABONNEMENT ", LBL_M), ln(if n > 0 { format!("{n} APT {}", date.unwrap_or_default()) } else { "NON INSTALLEE".into() }, if n > 0 { GREEN_M } else { AMB_M }, "GRATUIT", GREEN_M)));
+            match p {
+                Some(p) if !p.airac.is_empty() => {
                     rows.push((ln(format!(" {} TRANS ALT", p.origin), LBL_M, format!("{} TRANS LVL ", p.dest), LBL_M), ln(p.trans_alt.clone(), CYAN_M, format!("FL{:03}", p.trans_lvl.parse::<f64>().map(|v| v / 100.0).unwrap_or(0.0)), CYAN_M)));
                     rows.push((ln(" ALTN", LBL_M, "PISTES AIRAC ", LBL_M), ln(format!("{} {}", p.altn, p.altn_rwy), GREEN_M, format!("{}", p.rwys.len()), GREEN_M)));
-                    let md: String = p.metar_d.chars().take(48).collect();
-                    let (m1, m2) = md.split_at(md.len().min(24));
-                    rows.push((ln(format!(" METAR {}", p.dest), LBL_M, "", LBL_M), ln(m1.to_string(), WHITE_M, "", WHITE_M)));
-                    rows.push((blank(), ln(m2.to_string(), WHITE_M, "", WHITE_M)));
-                    // Au sol : METAR du départ ; en vol : TAF de la destination
-                    if ac.on_ground {
-                        let mo: String = p.metar_o.chars().take(24).collect();
-                        rows.push((ln(format!(" METAR {}", p.origin), LBL_M, "", LBL_M), ln(mo, WHITE_M, "", WHITE_M)));
-                    } else {
-                        let t: String = p.taf_d.chars().take(24).collect();
-                        rows.push((ln(format!(" TAF {}", p.dest), LBL_M, "", LBL_M), ln(t, WHITE_M, "", WHITE_M)));
-                    }
+                    let (lbl, txt0) = if ac.on_ground { (format!(" METAR {}", p.origin), p.metar_o.clone()) } else { (format!(" METAR {}", p.dest), p.metar_d.clone()) };
+                    rows.push((ln(lbl, LBL_M, "", LBL_M), ln(txt0.chars().take(24).collect::<String>(), WHITE_M, "", WHITE_M)));
                 }
-                None => {
-                    rows.push((ln(" ACTIVE DATA BASE", LBL_M, "", LBL_M), ln("DARKSTAR INTERNE", CYAN_M, "", WHITE_M)));
-                    rows.push((blank(), ln("IMPORTER UN OFP SIMBRIEF", AMB_M, "", WHITE_M)));
-                    rows.push((blank(), ln("POUR L'AIRAC", AMB_M, "", WHITE_M)));
-                    while rows.len() < 6 {
-                        rows.push((blank(), blank()));
-                    }
+                _ => {
+                    rows.push((blank(), ln("AIRAC DU VOL : IMPORTER", LBL_M, "", WHITE_M)));
+                    rows.push((blank(), ln("UN OFP SIMBRIEF", LBL_M, "", WHITE_M)));
+                    rows.push((blank(), blank()));
                 }
             }
+            let st = f.navupd.as_ref().map(|u| u.lock().unwrap().clone());
+            let (stxt, sc) = match st {
+                Some(crate::navdb::Upd::Busy(m)) => (m, AMB_M),
+                Some(crate::navdb::Upd::Done(m)) => (format!("OK {m}"), GREEN_M),
+                Some(crate::navdb::Upd::Error(e)) => (e, AMB_M),
+                _ => (String::new(), WHITE_M),
+            };
+            rows.push((ln(format!(" {}", stxt.chars().take(23).collect::<String>()), sc, "", LBL_M), ln("<MAJ NAVDATA", WHITE_M, "", WHITE_M)));
         }
         Page::RadNav => {
             title = "RAD NAV".into();

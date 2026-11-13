@@ -2,7 +2,10 @@
 
 use crate::geo::*;
 
+#[derive(Clone, Copy)]
 pub struct Airport {
+    /// Pistes réelles de la base OurAirports (vide : piste principale + pistes ajoutées à la main)
+    pub rwys: &'static [Rwy],
     pub icao: &'static str,
     pub name: &'static str,
     pub lat: f64, // centre de piste
@@ -15,11 +18,73 @@ pub struct Airport {
 
 macro_rules! apt {
     ($i:expr, $n:expr, $la:expr, $lo:expr, $h:expr, $l:expr, $w:expr, $e:expr) => {
-        Airport { icao: $i, name: $n, lat: $la, lon: $lo, hdg: $h, len: $l, width: $w, elev: $e }
+        Airport { rwys: &[], icao: $i, name: $n, lat: $la, lon: $lo, hdg: $h, len: $l, width: $w, elev: $e }
     };
 }
 
-pub const AIRPORTS: &[Airport] = &[
+/// Aérodromes : base mondiale OurAirports (si installée) complétée par la liste interne.
+pub static AIRPORTS: std::sync::LazyLock<Vec<Airport>> = std::sync::LazyLock::new(build_airports);
+
+fn leak(s: &str) -> &'static str {
+    Box::leak(s.to_string().into_boxed_str())
+}
+
+fn build_airports() -> Vec<Airport> {
+    let mut v: Vec<Airport> = BUILTIN.to_vec();
+    // (les essais automatiques restent sur la liste interne, indépendants du poste)
+    let Some(db) = (if cfg!(test) { None } else { crate::navdb::load() }) else { return v };
+    for a in db {
+        let rwys: Vec<Rwy> = a
+            .rwys
+            .iter()
+            .map(|r| {
+                let (d, brg) = dist_brg(r.lo.0, r.lo.1, r.hi.0, r.hi.1);
+                Rwy { lat: (r.lo.0 + r.hi.0) / 2.0, lon: (r.lo.1 + r.hi.1) / 2.0, hdg: brg, len: d.max(500.0), width: r.width, id_lo: leak(&r.id_lo), id_hi: leak(&r.id_hi) }
+            })
+            .collect();
+        let Some(p) = rwys.iter().copied().max_by(|x, y| x.len.total_cmp(&y.len)) else { continue };
+        let rwys: &'static [Rwy] = Box::leak(rwys.into_boxed_slice());
+        let existing = v.iter().position(|b| b.icao == a.icao);
+        let name = existing.map(|i| v[i].name).unwrap_or_else(|| leak(&a.name));
+        let apt = Airport { rwys, icao: leak(&a.icao), name, lat: p.lat, lon: p.lon, hdg: p.hdg, len: p.len, width: p.width, elev: a.elev_m };
+        match existing {
+            Some(i) => v[i] = apt,
+            None => v.push(apt),
+        }
+    }
+    v
+}
+
+/// Index spatial (cases de 1°) pour les recherches de proximité (relief aplani, altitude).
+static GRID: std::sync::LazyLock<std::collections::HashMap<(i32, i32), Vec<usize>>> = std::sync::LazyLock::new(|| {
+    let mut g: std::collections::HashMap<(i32, i32), Vec<usize>> = std::collections::HashMap::new();
+    for (i, a) in AIRPORTS.iter().enumerate() {
+        g.entry((a.lat.floor() as i32, a.lon.floor() as i32)).or_default().push(i);
+    }
+    g
+});
+
+/// Aérodromes des cases voisines du point (≈ 100 km).
+pub fn near(lat: f64, lon: f64) -> Vec<&'static Airport> {
+    let (cy, cx) = (lat.floor() as i32, lon.floor() as i32);
+    let mut out = Vec::new();
+    for dy in -1..=1 {
+        for dx in -1..=1 {
+            let mut x = cx + dx;
+            if x < -180 {
+                x += 360;
+            } else if x >= 180 {
+                x -= 360;
+            }
+            if let Some(v) = GRID.get(&(cy + dy, x)) {
+                out.extend(v.iter().map(|&i| &AIRPORTS[i]));
+            }
+        }
+    }
+    out
+}
+
+const BUILTIN: &[Airport] = &[
     apt!("KPMD", "PALMDALE PLANT 42 (SKUNK WORKS)", 34.6294, -118.0846, 71.0, 3658.0, 61.0, 775.0),
     apt!("KEDW", "EDWARDS AFB", 34.9054, -117.8839, 51.0, 4572.0, 91.0, 704.0),
     apt!("KLAX", "LOS ANGELES", 33.9425, -118.4081, 83.0, 3685.0, 61.0, 38.0),
@@ -238,6 +303,9 @@ pub struct Rwy {
     pub hdg: f64,
     pub len: f64,
     pub width: f64,
+    /// Désignations réelles des deux extrémités (base OurAirports), vides sinon
+    pub id_lo: &'static str,
+    pub id_hi: &'static str,
 }
 
 impl Rwy {
@@ -273,8 +341,12 @@ pub struct Approach {
 impl Airport {
     /// Toutes les pistes de l'aérodrome (principale en premier).
     pub fn runways(&self) -> Vec<Rwy> {
-        let mut v = vec![Rwy { lat: self.lat, lon: self.lon, hdg: self.hdg, len: self.len, width: self.width }];
-        v.extend(EXTRA_RWY.iter().filter(|r| r.0 == self.icao).map(|r| Rwy { lat: r.1, lon: r.2, hdg: r.3, len: r.4, width: r.5 }));
+        // Base OurAirports : seuils réels, rien à corriger
+        if !self.rwys.is_empty() {
+            return self.rwys.to_vec();
+        }
+        let mut v = vec![Rwy { lat: self.lat, lon: self.lon, hdg: self.hdg, len: self.len, width: self.width, id_lo: "", id_hi: "" }];
+        v.extend(EXTRA_RWY.iter().filter(|r| r.0 == self.icao).map(|r| Rwy { lat: r.1, lon: r.2, hdg: r.3, len: r.4, width: r.5, id_lo: "", id_hi: "" }));
         // Cap vrai exact des pistes d'après l'AIRAC de l'OFP SimBrief (départ / arrivée), à ±20°
         for r in v.iter_mut() {
             if let Some(tc) = crate::procs::airac_course(self.icao, r.hdg) {
@@ -288,6 +360,10 @@ impl Airport {
     /// numéro, puis gauche / centre / droite parmi les pistes parallèles vues dans ce sens.
     pub fn runway_ident(&self, k: usize, hdg: f64) -> String {
         let rws = self.runways();
+        // Désignation réelle (base OurAirports)
+        if let Some(r) = rws.get(k).filter(|r| !r.id_lo.is_empty()) {
+            return if wrap180(hdg - r.hdg).abs() < 90.0 { r.id_lo.to_string() } else { r.id_hi.to_string() };
+        }
         let num = Airport::runway_number(hdg);
         let par: Vec<usize> = (0..rws.len()).filter(|&i| Airport::runway_number(if wrap180(hdg - rws[i].hdg).abs() < 90.0 { rws[i].hdg } else { wrap360(rws[i].hdg + 180.0) }) == num).collect();
         if par.len() < 2 {
@@ -361,7 +437,7 @@ impl Airport {
 /// de l'aéroport le plus proche dans un rayon de 40 km, sinon 0.
 pub fn ground_elev(lat: f64, lon: f64) -> f64 {
     match crate::tiles::elevation(lat, lon) {
-        Some(t) => flatten_airports(lat, lon, t, AIRPORTS.iter()),
+        Some(t) => flatten_airports(lat, lon, t, near(lat, lon).into_iter()),
         None => fallback_elev(lat, lon),
     }
 }
@@ -387,7 +463,7 @@ pub fn flatten_airports<'a>(lat: f64, lon: f64, terrain: f64, apts: impl Iterato
 
 fn fallback_elev(lat: f64, lon: f64) -> f64 {
     let mut best = (f64::MAX, 0.0);
-    for a in AIRPORTS {
+    for a in near(lat, lon) {
         if (a.lat - lat).abs() > 1.0 {
             continue;
         }

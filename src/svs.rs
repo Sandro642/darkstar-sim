@@ -406,7 +406,7 @@ pub fn draw_svs(world: &World, tiles: &mut Tiles, wx: &crate::weather::Weather, 
     let mut lights = Lights { pts: Vec::new() };
     let mut outlines: Vec<[Vec3; 4]> = Vec::new();
     let mut mb = MeshBuilder::new();
-    for apt in AIRPORTS {
+    for apt in AIRPORTS.iter() {
     for rw in apt.runways() {
             let (ce, cn) = enu_offset(ac.lat, ac.lon, rw.lat, rw.lon);
             let dist = (ce * ce + cn * cn).sqrt();
