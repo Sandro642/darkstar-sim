@@ -805,7 +805,7 @@ impl Aircraft {
 
     /// Données anémométriques dégradées (échauffement des sondes au-delà de Mach 5.5).
     pub fn adc_degraded(&self) -> bool {
-        (self.d.mach > 5.5 || self.fails.has(Fail::Adc) || self.pitot_iced()) && !self.air_data_ovrd
+        (self.d.mach > 5.5 || self.fails.has(Fail::Adc) || self.pitot_iced() || self.win_state >= 2) && !self.air_data_ovrd
     }
 
     /// Sondes givrées (réchauffage coupé plus de 45 s par air froid).
@@ -1217,10 +1217,7 @@ impl Aircraft {
                 if self.gcas_clear_t > 1.5 {
                     self.gcas_active = false;
                     self.msg(Level::Info, format!("AUTO-GCAS : RECUPERATION TERMINEE ({:.1} G MAX) — PILOTE A VOUS", self.gcas_g_max));
-                    if self.gcas_ovr && self.gcas_g_max > self.nz_law_max() + 0.3 {
-                        self.set_failure(Fail::FcsDirect, true);
-                        self.msg(Level::Warning, "FCS ENDOMMAGE PAR LA RESSOURCE — LOI DIRECTE (AVION SAUVE)");
-                    }
+                    // Pas de panne automatique : les pannes ne sont injectées que par l'opérateur
                     self.gcas_ovr = false;
                 }
             }
@@ -1631,8 +1628,7 @@ impl Aircraft {
             }
             if self.win_state == 1 && self.win_temp > 1_210.0 && self.win_hot_t > 60.0 {
                 self.win_state = 2;
-                self.set_failure(Fail::Adc, true);
-                self.msg(Level::Warning, "VITRE AVANT ROMPUE — BAIE AVIONIQUE EXPOSEE, CENTRALE AERO PERDUE");
+                self.msg(Level::Warning, "VITRE AVANT ROMPUE — BAIE AVIONIQUE EXPOSEE, DONNEES AIR DEGRADEES");
             }
             // Moteurs : nacelles et chambres chauffées par la cellule, usure accélérée
             let x = ((skin_c - 1_150.0) / 100.0).max(0.0);

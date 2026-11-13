@@ -777,3 +777,6 @@ Le SR-72 est un avion de reconnaissance : sa charge utile est simulée.
   LSK L1..L6 / R1..R6 (touches de ligne du MCDU).
 - v1.55.3 : outil de capture d'essai `scripts/shot.sh` (application de test indépendante, plus
   d'application fantôme laissée ouverte en arrière-plan après les essais).
+- v1.55.4 : plus aucune panne injectée automatiquement — l'Auto-GCAS ne bascule plus le FCS en loi
+  directe après une ressource à 5 g ; la vitre avant rompue dégrade les données air sans
+  enregistrer de panne. Seul l'opérateur injecte les pannes.
