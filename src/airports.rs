@@ -143,7 +143,7 @@ const BUILTIN: &[Airport] = &[
     apt!("KVBG", "VANDENBERG SFB", 34.7294, -120.5767, 150.0, 4573.0, 61.0, 112.0),
     apt!("KBAB", "BEALE AFB", 39.1361, -121.4366, 150.0, 3658.0, 91.0, 34.0),
     // Mesuré sur l'imagerie satellite : axe à 158,7° vrai (14L/32R magnétique)
-    apt!("KXTA", "HOMEY AIRPORT (GROOM LAKE)", 37.2333, -115.7920, 158.7, 3658.0, 46.0, 1360.0),
+    apt!("KXTA", "HOMEY AIRPORT (GROOM LAKE)", 37.23319, -115.79234, 157.3, 3658.0, 46.0, 1360.0),
     apt!("KTNX", "TONOPAH TEST RANGE", 37.7947, -116.7787, 140.0, 3658.0, 46.0, 1650.0),
     apt!("CYVR", "VANCOUVER", 49.1967, -123.1815, 100.0, 3505.0, 61.0, 4.0),
     apt!("CYUL", "MONTREAL", 45.4706, -73.7408, 60.0, 3353.0, 61.0, 36.0),
@@ -205,7 +205,7 @@ const BUILTIN: &[Airport] = &[
 /// Pistes supplémentaires (la piste principale est celle de `AIRPORTS`) :
 /// (OACI, lat, lon du centre, cap vrai du sens « bas », longueur, largeur). Coordonnées approchées.
 pub const EXTRA_RWY: &[(&str, f64, f64, f64, f64, f64)] = &[
-    ("KXTA", 37.2314, -115.7983, 158.7, 3048.0, 46.0),
+    ("KXTA", 37.2314, -115.7983, 157.3, 3048.0, 46.0),
     ("KEDW", 34.8960, -117.8990, 51.0, 2438.0, 46.0),
     ("KEDW", 34.9300, -117.8250, 170.0, 7000.0, 90.0), // lac sec Rogers 17/35
     ("KPMD", 34.6330, -118.0740, 40.0, 3658.0, 46.0),
