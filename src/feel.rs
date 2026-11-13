@@ -25,6 +25,11 @@ pub struct Feel {
     pub rumble: f32,
     /// Bang supersonique à jouer.
     pub boom: bool,
+    /// Événements sol du cadre (consommés par le son) : joint de dalle franchi (intensité),
+    /// toucher des roues principales (vitesse sol kt, vario ft/min), roulette de nez posée.
+    pub joint: f32,
+    pub touch: Option<(f32, f32)>,
+    pub nose_down: bool,
     /// Distance roulée (m) : joints de dalles de la piste
     roll_dist: f64,
     /// Vibration résiduelle des roues qui tournent encore après l'envol (0..1)
@@ -39,6 +44,7 @@ struct Prev {
     ab: f64,
     gear: f64,
     theta: f64,
+    psi: f64,
 }
 
 fn smooth(x: f64) -> f32 {
@@ -56,7 +62,7 @@ fn wobble(t: f64, f: f64, seed: f64) -> f32 {
 
 impl Feel {
     pub fn new() -> Feel {
-        Feel { on: true, pos: Vec3::ZERO, vel: Vec3::ZERO, noise: Vec3::ZERO, t: 0.0, prev: None, veil: 0.0, rumble: 0.0, boom: false, roll_dist: 0.0, spin: 0.0 }
+        Feel { on: true, pos: Vec3::ZERO, vel: Vec3::ZERO, noise: Vec3::ZERO, t: 0.0, prev: None, veil: 0.0, rumble: 0.0, boom: false, joint: 0.0, touch: None, nose_down: false, roll_dist: 0.0, spin: 0.0 }
     }
 
     pub fn reset(&mut self) {
@@ -103,6 +109,8 @@ impl Feel {
         };
         self.noise = n;
 
+        // Taux de virage (deg/s) pour l'inclinaison de la tête au roulage
+        let turn_deg = self.prev.as_ref().map(|p| (((ac.psi - p.psi + std::f64::consts::PI).rem_euclid(std::f64::consts::TAU) - std::f64::consts::PI) / (dt as f64).max(1e-3)).to_degrees()).unwrap_or(0.0);
         // --- Inertie de la tête (ressort amorti) ---
         // En vol : enfoncement sous facteur de charge, retard sur le roulis ; au sol : la tête part
         // en arrière à l'accélération (vue qui monte) et en avant au freinage
@@ -110,7 +118,9 @@ impl Feel {
         let target = if self.on && alive && !ac.on_ground {
             vec3(0.0, (-(d.nz - 1.0) * 0.28).clamp(-1.2, 1.2) as f32 + surge * 0.5, (-ac.fcs.roll_rate * 0.012).clamp(-2.0, 2.0) as f32)
         } else if self.on && alive {
-            vec3(0.0, surge, 0.0)
+            // Au sol : la tête part en arrière à l'accélération, s'incline dans les virages de roulage
+            let lean = if gs > 2.0 { (-(turn_deg as f32) * (gs as f32 / 20.0).min(1.0) * 0.25).clamp(-1.5, 1.5) } else { 0.0 };
+            vec3(0.0, surge, lean)
         } else {
             Vec3::ZERO
         };
@@ -121,6 +131,7 @@ impl Feel {
             if (self.roll_dist / 25.0).floor() != before {
                 let k = smooth(gs / 80.0) * 2.2 + 0.3;
                 self.vel.y -= k;
+                self.joint = self.joint.max(0.3 + smooth(gs / 60.0) * 0.7);
                 self.vel.z += k * 0.35 * if (t * 7.0).sin() > 0.0 { 1.0 } else { -1.0 };
             }
         }
@@ -128,9 +139,17 @@ impl Feel {
         if let Some(p) = &self.prev {
             if self.on && alive {
                 if !p.ground && ac.on_ground {
+                    // Toucher : écrasement des amortisseurs proportionnel au taux de chute
                     let k = (-p.vs).clamp(0.5, 6.0) as f32;
-                    self.vel.y -= 9.0 * k;
+                    self.vel.y -= 11.0 * k;
                     self.vel.z += 4.0 * k * if (t * 10.0).sin() > 0.0 { 1.0 } else { -1.0 };
+                    self.touch = Some(((gs / 0.514) as f32, (-p.vs / 0.3048 * 60.0) as f32));
+                }
+                // Roulette de nez qui retombe sur la piste (dérotation)
+                if ac.on_ground && p.theta > 0.6f64.to_radians() && ac.theta <= 0.2f64.to_radians() && gs > 10.0 {
+                    self.vel.y -= 16.0;
+                    self.vel.x += 2.0 * if (t * 7.0).sin() > 0.0 { 1.0 } else { -1.0 };
+                    self.nose_down = true;
                 }
                 if !ac.on_ground && (p.mach < 1.0) != (d.mach < 1.0) {
                     self.boom = true;
@@ -161,7 +180,7 @@ impl Feel {
                 }
             }
         }
-        self.prev = Some(Prev { ground: ac.on_ground, vs: d.vs, mach: d.mach, scram: ac.eng.scram == ScramState::Lit, ab: ac.eng.ab_frac, gear: ac.gear_pos, theta: ac.theta });
+        self.prev = Some(Prev { ground: ac.on_ground, vs: d.vs, mach: d.mach, scram: ac.eng.scram == ScramState::Lit, ab: ac.eng.ab_frac, gear: ac.gear_pos, theta: ac.theta, psi: ac.psi });
         let (k, c) = (60.0, 8.5);
         let acc = (target - self.pos) * k - self.vel * c;
         self.vel += acc * dt;

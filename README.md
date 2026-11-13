@@ -699,3 +699,11 @@ Le SR-72 est un avion de reconnaissance : sa charge utile est simulée.
   - Ressenti du décollement des roues : roulement de piste sonore qui s'arrête net, détente des
     amortisseurs (à-coup de la vue + clac sourd), roues qui ralentissent (vibration résiduelle et
     sifflement descendant).
+- v1.48.0 : expérience sol façon DCS (roulage, décollage, atterrissage).
+  - Sons : roulage lent (pneus sur béton), grondement de piste qui monte avec la vitesse et
+    s'arrête net à l'envol, claquement à chaque joint de dalle, grincement des freins, crissement
+    des pneus au toucher (selon la vitesse sol) et impact du train (selon le taux de chute), coup
+    lourd de la roulette de nez qui retombe.
+  - Ressenti : écrasement des amortisseurs au toucher proportionnel au taux de chute, à-coup de
+    la roulette de nez, inclinaison de la tête dans les virages de roulage, tête poussée à
+    l'accélération et au freinage, détente des amortisseurs à l'envol.

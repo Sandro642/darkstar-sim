@@ -124,6 +124,11 @@ pub struct Sfx {
     modem: Sound,
     liftoff: Sound,
     runway: Sound,
+    taxi: Sound,
+    screech: Sound,
+    seam: Sound,
+    nose: Sound,
+    brake: Sound,
     rwr_new: Sound,
     rwr_lock: Sound,
     rwr_launch: Sound,
@@ -402,6 +407,37 @@ impl Sfx {
             lpr.run(n) * 2.2 + lpr2.run(n) * 0.35 + sine(38.0, t) * 0.2
         }))
         .await;
+        // Roulage lent : pneus sur béton (grain, frottement du caoutchouc), creux rythmé
+        let mut lpt1 = Lp::new(320.0);
+        let mut lpt2 = Lp::new(1600.0);
+        let taxi = load(synth(2.0, true, move |t, r| {
+            let n = r.next();
+            (lpt1.run(n) * 1.6 + (lpt2.run(n) - lpt1.0) * 0.25) * (1.0 + 0.25 * sine(2.0, t)) + sine(55.0, t) * 0.08
+        }))
+        .await;
+        // Toucher : crissement des pneus (mise en rotation des roues, bande 2-5 kHz, glissando)
+        let mut hps = Lp::new(1800.0);
+        let mut lps = Lp::new(5200.0);
+        let screech = load(synth(0.9, false, move |t, r| {
+            let n = r.next();
+            let band = lps.run(n) - hps.run(n);
+            let chirp = sine(2600.0 - 900.0 * t, t) * 0.35;
+            (band * 2.2 + chirp) * (-t * 4.5).exp() * (t * 60.0).min(1.0)
+        }))
+        .await;
+        // Joint de dalle : claquement sourd et court
+        let mut lpj = Lp::new(400.0);
+        let seam = load(synth(0.12, false, move |t, r| lpj.run(r.next()) * (-t * 45.0).exp() * 2.0 + sine(90.0, t) * (-t * 35.0).exp() * 0.5)).await;
+        // Roulette de nez qui retombe : coup lourd
+        let mut lpn = Lp::new(250.0);
+        let nose = load(synth(0.6, false, move |t, r| lpn.run(r.next()) * (-t * 10.0).exp() * 2.5 + sine(48.0, t) * (-t * 7.0).exp())).await;
+        // Freins : grincement (crissement tonal + souffle)
+        let mut lpb2 = Lp::new(3000.0);
+        let brake = load(synth(1.5, true, move |t, r| {
+            let w = 1.0 + 0.15 * sine(5.0, t);
+            sine(2900.0 * w, t) * 0.25 + sine(4400.0, t) * 0.08 + lpb2.run(r.next()) * 0.4
+        }))
+        .await;
         // Reconnexion Iridium : gazouillis de modem
         let modem = load(synth(2.0, true, |t, r| {
             let slot = (t * 12.0) as u32;
@@ -412,7 +448,7 @@ impl Sfx {
 
         let sfx = Sfx {
             turb_lo, turb_hi, roar, ab, ram, scram, wind, rumble, warn, siren, shaker, clacker, horn,
-            caution, ap_disc, bang, thump, blip, buzz, click, key, switch, ap_on, athr_off, alt_alert, mins, seq, whoosh, link_lost, link_ok, fire_bell, gcas, gear_hum, config, modem, liftoff, runway, rwr_new, rwr_lock, rwr_launch,
+            caution, ap_disc, bang, thump, blip, buzz, click, key, switch, ap_on, athr_off, alt_alert, mins, seq, whoosh, link_lost, link_ok, fire_bell, gcas, gear_hum, config, modem, liftoff, runway, taxi, screech, seam, nose, brake, rwr_new, rwr_lock, rwr_launch,
             voice: Voice::new(),
             muted: false,
             prev: Prev::default(),
@@ -423,8 +459,8 @@ impl Sfx {
         sfx
     }
 
-    fn loops(&self) -> [&Sound; 21] {
-        [&self.runway, &self.turb_lo, &self.turb_hi, &self.roar, &self.ab, &self.ram, &self.scram, &self.wind, &self.rumble, &self.warn, &self.siren, &self.shaker, &self.clacker, &self.horn, &self.fire_bell, &self.gcas, &self.gear_hum, &self.config, &self.modem, &self.rwr_lock, &self.rwr_launch]
+    fn loops(&self) -> [&Sound; 23] {
+        [&self.runway, &self.taxi, &self.brake, &self.turb_lo, &self.turb_hi, &self.roar, &self.ab, &self.ram, &self.scram, &self.wind, &self.rumble, &self.warn, &self.siren, &self.shaker, &self.clacker, &self.horn, &self.fire_bell, &self.gcas, &self.gear_hum, &self.config, &self.modem, &self.rwr_lock, &self.rwr_launch]
     }
 
     /// RWR et voix de menace : `level` 0 rien, 1 veille, 2 poursuite, 3 accrochage, 4 tir ;
@@ -502,7 +538,13 @@ impl Sfx {
         set_sound_volume(&self.horn, k * if has("TOO LOW — GEAR") { 0.4 } else { 0.0 });
         // Roulement sur la piste : croît avec la vitesse, s'arrête net au décollement
         let gs = (ac.ground_speed() / 90.0).clamp(0.0, 1.0) as f32;
+        // Roulage lent (taxi) puis grondement de piste à grande vitesse ; freins qui grincent
+        let gs_kt = (ac.ground_speed() / 0.514) as f32;
+        let taxi_v = (gs_kt / 8.0).min(1.0) * (1.0 - ((gs_kt - 40.0) / 60.0).clamp(0.0, 1.0));
         set_sound_volume(&self.runway, k * if ac.on_ground { gs * 0.45 } else { 0.0 });
+        set_sound_volume(&self.taxi, k * if ac.on_ground { taxi_v * 0.45 } else { 0.0 });
+        let braking = ac.on_ground && ac.brakes && gs_kt > 3.0 && gs_kt < 90.0;
+        set_sound_volume(&self.brake, k * if braking { (0.15 + 0.25 * (1.0 - gs_kt / 90.0)).min(0.35) } else { 0.0 });
         set_sound_volume(&self.fire_bell, k * if ac.fire.any() { 0.4 } else { 0.0 });
         let gcas_tone = ac.gcas_active || ac.osr_active || (ac.gcas_on && ac.gcas_t < 2.5);
         set_sound_volume(&self.gcas, k * if gcas_tone { 0.35 } else { 0.0 });
@@ -522,9 +564,6 @@ impl Sfx {
             }
             if p.ap && !ac.ap.on && !ac.on_ground && alive {
                 play.push((&self.ap_disc, 0.4));
-            }
-            if !p.ground && ac.on_ground && alive {
-                play.push((&self.thump, 0.7));
             }
             if p.ground && !ac.on_ground && alive {
                 play.push((&self.liftoff, 0.6));
@@ -653,11 +692,22 @@ impl Sfx {
     }
 
     /// Ressenti de vol : grondement de structure et bang supersonique.
-    pub fn feel(&self, rumble: f32, boom: bool) {
+    pub fn feel(&self, rumble: f32, boom: bool, joint: f32, touch: Option<(f32, f32)>, nose_down: bool) {
         let m = if self.muted { 0.0 } else { 1.0 };
         set_sound_volume(&self.rumble, m * rumble * 0.55);
         if boom {
             self.once(&self.bang, 0.45);
+        }
+        if joint > 0.0 {
+            self.once(&self.seam, 0.12 + joint * 0.2);
+        }
+        // Toucher : crissement selon la vitesse sol, impact selon le taux de chute
+        if let Some((gs_kt, sink_fpm)) = touch {
+            self.once(&self.screech, (gs_kt / 180.0).clamp(0.2, 0.75));
+            self.once(&self.thump, (0.35 + sink_fpm / 900.0).clamp(0.35, 1.0));
+        }
+        if nose_down {
+            self.once(&self.nose, 0.6);
         }
     }
 

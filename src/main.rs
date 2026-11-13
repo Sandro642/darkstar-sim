@@ -2668,7 +2668,7 @@ async fn main() {
         sfx.muted = g.muted;
         sfx.update(&g.ac, &alerts, &g.acked);
         g.feel.update(&g.ac, get_frame_time());
-        sfx.feel(g.feel.rumble, std::mem::take(&mut g.feel.boom));
+        sfx.feel(g.feel.rumble, std::mem::take(&mut g.feel.boom), std::mem::take(&mut g.feel.joint), g.feel.touch.take(), std::mem::take(&mut g.feel.nose_down));
         sfx.mishap(g.mishap.as_ref().is_some_and(|m| m.cascading()));
         // Voix d'alerte : chargement des phrases générées ; RWR (niveau de menace, nouvel émetteur)
         sfx.voice.poll().await;
