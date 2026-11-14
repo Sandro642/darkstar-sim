@@ -786,3 +786,8 @@ Le SR-72 est un avion de reconnaissance : sa charge utile est simulée.
   FERME / DUR, g, KEAS, distance au seuil, écart à l'axe). Aérodromes : taxiway parallèle avec
   axe jaune et feux bleus, bretelles avec points d'arrêt, aire de trafic avec postes de
   stationnement (ligne d'entrée, barre d'arrêt, cadre), hangars.
+- v1.57.0 : ND façon A320 à la place de la carte (sélecteur ND / CARTE) : modes ARC et ROSE NAV,
+  portée 10-640 NM (molette), rose des caps, ligne de foi, losange de route, plan de vol (point TO
+  blanc), terrains, trafic, GS / TAS, vent, point TO (relèvement, distance, heure). Escorte de
+  chasse (patrouille VIPER, deux F-16 en 3D) au départ jusqu'à l'allumage du stato et à l'arrivée
+  après sa coupure, dégagement en finale ; messages radio ; instruction ESCORTE / ESCORTE OFF.

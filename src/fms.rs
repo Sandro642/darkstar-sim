@@ -681,7 +681,7 @@ pub struct Fms {
     pub vnav: bool,
     /// Type d'avion SimBrief utilisé pour générer la route (code SimBrief, ex. B77W, A359)
     pub acft: String,
-    desc_started: bool,
+    pub desc_started: bool,
     land_sent: bool,
     /// Dernière phase annoncée
     phase: &'static str,

@@ -650,6 +650,8 @@ pub fn draw_svs(world: &World, tiles: &mut Tiles, wx: &crate::weather::Weather, 
     }
     // Ravitailleur et perche
     crate::refuel::draw_tanker(rf, ac, &mut mb);
+    // Escorte de chasse
+    crate::escort::draw_3d(ac, &mut mb);
     mb.flush();
 
     // --- Nuages volumétriques (masqués par le relief) ---

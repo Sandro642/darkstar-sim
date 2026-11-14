@@ -7,6 +7,7 @@ mod fms;
 mod procs;
 mod navdb;
 mod cifp;
+mod escort;
 mod airports;
 mod atmosphere;
 mod elec;
@@ -130,6 +131,8 @@ struct Game {
     recon: recon::Recon,
     wx: weather::Weather,
     refuel: refuel::Refuel,
+    /// Escorte de chasse au départ et à l'arrivée
+    escort: escort::Escort,
     combat: combat::Combat,
     emerg: emergency::Emergency,
     /// Liaison de données avec le Darkstar contrôlé (relais, perte, reconnexion).
@@ -309,6 +312,7 @@ impl Game {
             recon: recon::Recon::new(),
             wx: weather::Weather::new(),
             refuel: refuel::Refuel::new(),
+            escort: escort::Escort::new(),
             combat: combat::Combat::new(),
             emerg: emergency::Emergency::new(),
             link: link::Link::new(),
@@ -1314,6 +1318,14 @@ impl Game {
         for (l, m) in rfe {
             self.push(l, m);
         }
+        // Escorte de chasse (départ / arrivée sur turbines)
+        let dest_ll = self.fms.fpln.as_ref().and_then(|p| AIRPORTS.iter().find(|a| a.icao == p.dest)).or_else(|| AIRPORTS.get(self.dest)).map(|a| (a.lat, a.lon));
+        let desc = self.fms.desc_started || self.ac.approach.is_some() || self.ac.autoland.is_some();
+        for (l, m) in self.escort.update(&self.ac, sim_dt, dest_ll, desc) {
+            self.push(l, m);
+        }
+        escort::set_render(&self.escort.wings);
+        self.map.traffic = self.escort.traffic();
         // Procédure d'urgence : décisions et instructions automatiques
         self.emerg.update(sim_dt, &mut self.ac, &self.refuel);
         for c in std::mem::take(&mut self.emerg.cmds) {
@@ -1865,6 +1877,10 @@ impl Game {
                 } else {
                     reply = Err("AU SOL : DECOLLAGE D'ABORD (instruction DECOLLAGE), PUIS LNAV".into());
                 }
+            }
+            // Escorte de chasse : ESCORTE (rejointe) / ESCORTE OFF (séparation)
+            "ESCORTE" | "ESCORT" => {
+                reply = if arg(1) == "OFF" { self.escort.release() } else { self.escort.request(&self.ac) };
             }
             // Touche de ligne du MCDU : LSK L1..L6 / R1..R6
             "LSK" => {
