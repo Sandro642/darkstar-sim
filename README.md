@@ -847,3 +847,5 @@ Le SR-72 est un avion de reconnaissance : sa charge utile est simulée.
   de bord et consoles latérales en relief, panneaux réels encastrés dans des lunettes (radio sur
   l'auvent, écran à pages, moteurs, élec, manette / train / jettison, moteurs / APU / clim,
   scramjet), manche.
+- v1.63.1 : prototype de vue cockpit pilote retiré (instruction COCKPIT et menu DISPOSITION) ; les
+  panneaux du poste pilote restent disponibles en fenêtres dans la version développeur.
