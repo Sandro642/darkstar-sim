@@ -140,13 +140,28 @@ pub fn panel(r: Rect, title: &str) {
     }
 }
 
+thread_local! {
+    /// Zones masquant la souris (fenêtres au premier plan en version développeur)
+    static BLOCK: std::cell::RefCell<Vec<Rect>> = const { std::cell::RefCell::new(Vec::new()) };
+}
+
+/// Zones où les clics et le survol sont ignorés (fenêtres situées au-dessus).
+pub fn set_blockers(v: Vec<Rect>) {
+    BLOCK.with(|b| *b.borrow_mut() = v);
+}
+
+fn blocked() -> bool {
+    let m: Vec2 = mouse_position().into();
+    BLOCK.with(|b| b.borrow().iter().any(|r| r.contains(m)))
+}
+
 /// Bouton : vrai si cliqué cette image.
 pub fn clicked(r: Rect) -> bool {
-    is_mouse_button_pressed(MouseButton::Left) && r.contains(mouse_position().into())
+    is_mouse_button_pressed(MouseButton::Left) && r.contains(mouse_position().into()) && !blocked()
 }
 
 pub fn hovered(r: Rect) -> bool {
-    r.contains(mouse_position().into())
+    r.contains(mouse_position().into()) && !blocked()
 }
 
 /// Jauge en arc façon écran Darkstar (vert, extrémité rouge, aiguille blanche).

@@ -43,6 +43,15 @@ thread_local! {
     static STYLE: std::cell::Cell<u8> = const { std::cell::Cell::new(0) };
 }
 
+thread_local! {
+    static HIDE_MENU: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Masque le bouton MENU de l'horizon (version développeur).
+pub fn hide_menu(h: bool) {
+    HIDE_MENU.with(|c| c.set(h));
+}
+
 /// Style de l'horizon : 0 Darkstar (échelles, blanc), 1 F-35 (casque : valeurs encadrées, vert),
 /// 2 hybride (échelles Darkstar, langage visuel F-35 : vert, valeurs encadrées, fonds allégés).
 pub fn set_style(s: u8) {
@@ -1085,8 +1094,11 @@ fn draw_fma_bar(ac: &Aircraft, r: Rect, g: &Geo, info: &PfdInfo) {
     draw_rectangle(b.x, b.y, b.w, b.h, Color::new(0.0, 0.0, 0.0, 0.62));
     draw_line(b.x, b.y + b.h, b.x + b.w, b.y + b.h, 1.0, EDGE);
     let m = menu_rect(r);
-    rrect(m, 4.0, Color::new(0.22, 0.24, 0.27, 0.95));
-    txt_c("MENU", m.x + m.w / 2.0, m.y + 13.0, 12.0, label_c());
+    // Version développeur : la console est dans la barre de menus, pas sur l'horizon
+    if !HIDE_MENU.with(|c| c.get()) {
+        rrect(m, 4.0, Color::new(0.22, 0.24, 0.27, 0.95));
+        txt_c("MENU", m.x + m.w / 2.0, m.y + 13.0, 12.0, label_c());
+    }
     let x0 = m.x + m.w + 10.0;
     let x1 = b.x + b.w - 180.0;
     crate::pfd_plus::fma(ac, x0, b.y + 8.0, x1 - x0, info.dest);

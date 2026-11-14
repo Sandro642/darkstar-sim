@@ -291,6 +291,8 @@ pub struct Aircraft {
     /// Détection / extinction d'incendie
     pub fire: crate::fire::Fire,
     pub elec: systems::Elec,
+    /// Groupe auxiliaire de puissance
+    pub apu: crate::apu::Apu,
     /// Sortie de secours du train (gravité) engagée.
     pub gear_alt: bool,
     fcs_overload_t: f64,
@@ -481,6 +483,7 @@ impl Aircraft {
             },
             skin_temp: 293.0,
             last_landing: None,
+            apu: crate::apu::Apu::new(),
             win_temp: 20.0,
             win_hot_t: 0.0,
             win_state: 0,
@@ -1738,10 +1741,20 @@ impl Aircraft {
             self.msg(Level::Warning, "RUPTURE DE LA CHAMBRE DE COMBUSTION — MOTEURS G ET D DETRUITS");
             self.msg(Level::Warning, "PLUS AUCUNE POUSSEE : VOL PLANE — EMERGENCY OVERRIDE (autoland plane) OU EJECTION");
         }
+        // APU : régime, protections ; sa génératrice compte parmi les génératrices en ligne
+        {
+            let oat = self.d.oat;
+            let ev = self.apu.update(dt, self.alt / FT, self.d.mach, self.fuel > 0.0, oat);
+            for (l, m) in ev {
+                self.msg(l, m);
+            }
+            self.fuel = (self.fuel - self.apu.ff * dt).max(0.0);
+        }
         // Circuit électrique : génératrices en ligne, sinon pile à combustible (H2/O2), sinon batterie
         let gens = (0..2)
             .filter(|&i| self.eng.side[i] == TurbState::Running && self.eng.n2s[i] > 0.55 && !self.fails.has(if i == 0 { Fail::GenL } else { Fail::GenR }))
-            .count() as u32;
+            .count() as u32
+            + self.apu.gen_online() as u32;
         let h2_use = self.elec.update(dt, gens, self.h2 > 0.0, self.skin_temp - 273.15);
         self.h2 = (self.h2 - h2_use * dt).max(0.0);
         if self.elec.lost {
@@ -1829,7 +1842,8 @@ impl Aircraft {
         let mut ev: Vec<(Level, String)> = ev_walls;
 
         // Turbines gauche / droite (turboréacteurs à PC)
-        let start_time = if e.alert_start { 8.0 } else { 25.0 };
+        // Démarrage : 25 s avec l'air de l'APU (ou en vol, moulinet), 45 s au sol sans APU
+        let start_time = if e.alert_start { 8.0 } else if self.apu.bleed_air() || !self.on_ground { 25.0 } else { 45.0 };
         let any_running = e.side.contains(&TurbState::Running);
         e.ab_frac = if any_running { ((th_jp - 0.8) / 0.2).clamp(0.0, 1.0) } else { 0.0 };
         for i in 0..2 {

@@ -8,6 +8,8 @@ mod procs;
 mod navdb;
 mod cifp;
 mod escort;
+mod apu;
+mod dev;
 mod airports;
 mod atmosphere;
 mod elec;
@@ -133,6 +135,8 @@ struct Game {
     refuel: refuel::Refuel,
     /// Escorte de chasse au départ et à l'arrivée
     escort: escort::Escort,
+    /// Version développeur (instruction DEV)
+    dev: Option<dev::DevUi>,
     combat: combat::Combat,
     emerg: emergency::Emergency,
     /// Liaison de données avec le Darkstar contrôlé (relais, perte, reconnexion).
@@ -313,6 +317,7 @@ impl Game {
             wx: weather::Weather::new(),
             refuel: refuel::Refuel::new(),
             escort: escort::Escort::new(),
+            dev: None,
             combat: combat::Combat::new(),
             emerg: emergency::Emergency::new(),
             link: link::Link::new(),
@@ -1878,6 +1883,45 @@ impl Game {
                     reply = Err("AU SOL : DECOLLAGE D'ABORD (instruction DECOLLAGE), PUIS LNAV".into());
                 }
             }
+            // Version développeur : DEV (bascule) / DEV OFF
+            "DEV" if arg(1) == "PAGE" && self.dev.is_some() => {
+                let d = self.dev.as_mut().unwrap();
+                reply = match d.set_page(arg(2)) {
+                    true => Ok(format!("ECRAN : PAGE {}", arg(2))),
+                    false => Err("DEV PAGE 1..7 / CONFIG / ARMEMENT / MOTEUR".into()),
+                };
+            }
+            "DEV" => {
+                if self.dev.is_some() || arg(1) == "OFF" {
+                    self.dev = None;
+                    pfd::hide_menu(false);
+                    reply = Ok("VERSION SIMULATEUR".into());
+                } else {
+                    self.dev = Some(dev::DevUi::new());
+                    pfd::hide_menu(true);
+                    reply = Ok("VERSION DEVELOPPEUR — FENETRES DEPLACABLES, CONSOLE DANS LA BARRE (MENU CONSOLE)".into());
+                }
+            }
+            // APU : APU START|ON / STOP|OFF / GEN ON|OFF / BLEED ON|OFF
+            "APU" => {
+                let ac = &mut self.ac;
+                reply = match (arg(1), arg(2)) {
+                    ("START" | "ON" | "", _) => {
+                        let (alt, batt, fuel) = (ac.alt / FT, ac.elec.bus_ok || ac.elec.batt > 0.05, ac.fuel > 0.0);
+                        ac.apu.start(alt, batt, fuel)
+                    }
+                    ("STOP" | "OFF", _) => ac.apu.stop(),
+                    ("GEN", v) => {
+                        ac.apu.generator = v != "OFF";
+                        Ok(format!("APU GEN {}", if ac.apu.generator { "ON" } else { "OFF" }))
+                    }
+                    ("BLEED", v) => {
+                        ac.apu.bleed = v != "OFF";
+                        Ok(format!("APU BLEED {}", if ac.apu.bleed { "ON" } else { "OFF" }))
+                    }
+                    _ => Err("APU START / STOP / GEN ON|OFF / BLEED ON|OFF".into()),
+                };
+            }
             // Escorte de chasse : ESCORTE (rejointe) / ESCORTE OFF (séparation)
             "ESCORTE" | "ESCORT" => {
                 reply = if arg(1) == "OFF" { self.escort.release() } else { self.escort.request(&self.ac) };
@@ -2827,7 +2871,15 @@ async fn main() {
         let (ln, lat) = g.link();
         let bar = Rect::new(0.0, 0.0, sw, 34.0);
         let body = Rect::new(6.0, 40.0, sw - 12.0, sh - 46.0);
-        if map_full {
+        if let Some(mut d) = g.dev.take() {
+            let quit = draw_dev(&mut g, &mut d, &world, &mut tiles, &alerts, sw, sh, time, &ln, lat, warp_eff, master_warn, master_caut);
+            if quit {
+                pfd::hide_menu(false);
+                g.push(Level::Info, "VERSION SIMULATEUR");
+            } else {
+                g.dev = Some(d);
+            }
+        } else if map_full {
             g.map.input(body);
             let route = g.fms.route();
             g.map.draw(&world, &mut tiles, &g.wx, &g.refuel, &g.combat, &g.recon, &g.ac, body, g.dest, &route, time);
@@ -2939,106 +2991,12 @@ async fn main() {
                 g.tab = t;
             }
             let cr = Rect::new(rx, tabs_r.y + tabs_r.h + 4.0, rw, body.y + body.h - (tabs_r.y + tabs_r.h + 4.0));
-            match g.tab {
-                gcs::Tab::Systemes => {
-                    if let Some(t) = syspage::draw(&g.ac, &g.thermal, &g.mfd.wxr, cr, time) {
-                        g.tab = t;
-                    }
-                }
-                gcs::Tab::Moteurs => panels::draw_engines(&g.ac, &g.chambers, cr, time),
-                gcs::Tab::Mcdu => {
-                    if let Some(k) = fms::draw_mcdu(&g.fms, &g.ac, cr, time) {
-                        g.mcdu_key(k);
-                    }
-                }
-                gcs::Tab::Incendie => {
-                    if let Some(a) = fire::draw_fire(&g.ac, cr, time) {
-                        let cmd = match a {
-                            fire::FireAction::Handle(z) => format!("FEU {}", ["L", "R", "CHAMB", "H2"][z]),
-                            fire::FireAction::Bottle(b) => format!("BTL {}", b + 1),
-                            fire::FireAction::Test => "FEU TEST".into(),
-                        };
-                        g.exec_command(&cmd);
-                    }
-                }
-                gcs::Tab::Alarmes => match alarms::draw_alarms(&g.ac, &alerts, cr, time, g.mishap.as_ref().map(|m| m.lights()).or(g.tree)) {
-                    Some(alarms::AlarmAction::Toggle(f)) => {
-                        let on = !g.ac.fails.has(f);
-                        g.ac.set_failure(f, on);
-                        g.cues.push(audio::Cue::Ack);
-                    }
-                    Some(alarms::AlarmAction::RepairAll) => {
-                        g.tree = None;
-                        g.exec_command("PANNES OFF");
-                    }
-                    None => {}
-                },
-                gcs::Tab::Limites => limits::draw_limits(&g.ac, cr),
-                gcs::Tab::Elec => {
-                    if let Some(a) = elec::draw_elec(&g.ac, cr, time) {
-                        let el = &mut g.ac.elec;
-                        match a {
-                            elec::EnvAction::TempKnob(v) => el.temp_knob = v,
-                            elec::EnvAction::FaceHeat(v) => el.faceheat = v,
-                            elec::EnvAction::SelToggle => el.sel_ebay = !el.sel_ebay,
-                            elec::EnvAction::AutoToggle => el.auto_temp = !el.auto_temp,
-                        }
-                        g.cues.push(audio::Cue::Ack);
-                    }
-                }
-                gcs::Tab::Thermique => {
-                    if let Some(i) = thermal::draw_thermal(&g.thermal, cr, time) {
-                        // Clic sur un capteur déjà sélectionné : désélection
-                        g.thermal.selected = if g.thermal.selected == Some(i) { None } else { Some(i) };
-                    }
-                }
-                gcs::Tab::Essais => panels::draw_card(&g.ac, &g.mission, cr),
-                gcs::Tab::Domaine => panels::draw_envelope(&g.ac, cr, &g.history),
-                gcs::Tab::Override => {
-                    if let Some(sw) = gcs::draw_overrides(&g.ac, &g.chambers, cr) {
-                        g.apply_switch(sw);
-                    }
-                }
-                gcs::Tab::Fcs => fcs::draw_fcs(&g.ac, cr),
-                gcs::Tab::Armement => {
-                    if let Some(a) = combat::draw_page(&g.combat, &g.recon.emitters, &g.ac, cr) {
-                        let r = match a {
-                            combat::ArmAction::Chaff => g.combat.dispense(combat::Seeker::Radar, &g.ac),
-                            combat::ArmAction::Flare => g.combat.dispense(combat::Seeker::Ir, &g.ac),
-                            combat::ArmAction::Ecm => {
-                                g.combat.ecm = !g.combat.ecm;
-                                Ok(format!("ECM {}", if g.combat.ecm { "ON" } else { "OFF" }))
-                            }
-                            combat::ArmAction::Auto => {
-                                g.combat.cmds_auto = !g.combat.cmds_auto;
-                                Ok(format!("CMDS {}", if g.combat.cmds_auto { "AUTO" } else { "MANUEL" }))
-                            }
-                            combat::ArmAction::Fire(k) => g.combat.fire_hacm(k, &g.recon.emitters[k], &g.ac),
-                        };
-                        match r {
-                            Ok(m) => g.push(Level::Info, m),
-                            Err(e) => g.push(Level::Caution, format!("ARMEMENT : {e}")),
-                        }
-                        g.cues.push(audio::Cue::Ack);
-                    }
-                }
-                gcs::Tab::Recon => {
-                    let ln = g.link().0;
-                    if let Some(a) = recon::draw_recon(&g.ac, &g.recon, &mut tiles, cr, &ln) {
-                        let t = g.mission.elapsed;
-                        g.recon.apply(a, &mut g.ac, t);
-                        g.cues.push(audio::Cue::Ack);
-                    }
-                }
-                gcs::Tab::Console => {
-                    let bit = menu::BitState { running: g.bit_timer > 0.0, fail: g.bit_fail };
-                    if let Some(a) = menu::draw_menu(&g.ac, &bit, cr, time) {
-                        g.apply_menu(a);
-                    }
-                }
+            let tab = g.tab;
+            if let Some(t) = draw_tab_page(&mut g, tab, cr, &alerts, &mut tiles, time) {
+                g.tab = t;
             }
         }
-        let top = gcs::draw_topbar(
+        let top = if g.dev.is_some() { gcs::TopActions::default() } else { gcs::draw_topbar(
             bar,
             &gcs::TopBar {
                 sim_time: g.sim_time,
@@ -3051,7 +3009,7 @@ async fn main() {
                 muted: g.muted,
                 time,
             },
-        );
+        ) };
         if top.ack {
             g.acked = alerts.iter().map(|(_, s)| s.clone()).collect();
         }
@@ -3192,6 +3150,242 @@ fn draw_console(g: &Game, r: Rect) {
 }
 
 /// Bandeau de mise à jour en haut de l'écran ; renvoie vrai si l'utilisateur a cliqué dessus.
+/// Page d'onglet dans le rectangle `cr` (écran principal ou version développeur). Renvoie l'onglet
+/// demandé par la page (navigation depuis SYSTEMES).
+fn draw_tab_page(g: &mut Game, tab: gcs::Tab, cr: Rect, alerts: &[(Level, String)], tiles: &mut tiles::Tiles, time: f64) -> Option<gcs::Tab> {
+    let mut nav = None;
+    match tab {
+        gcs::Tab::Systemes => {
+            if let Some(t) = syspage::draw(&g.ac, &g.thermal, &g.mfd.wxr, cr, time) {
+                nav = Some(t);
+            }
+        }
+        gcs::Tab::Moteurs => panels::draw_engines(&g.ac, &g.chambers, cr, time),
+        gcs::Tab::Mcdu => {
+            if let Some(k) = fms::draw_mcdu(&g.fms, &g.ac, cr, time) {
+                g.mcdu_key(k);
+            }
+        }
+        gcs::Tab::Incendie => {
+            if let Some(a) = fire::draw_fire(&g.ac, cr, time) {
+                let cmd = match a {
+                    fire::FireAction::Handle(z) => format!("FEU {}", ["L", "R", "CHAMB", "H2"][z]),
+                    fire::FireAction::Bottle(b) => format!("BTL {}", b + 1),
+                    fire::FireAction::Test => "FEU TEST".into(),
+                };
+                g.exec_command(&cmd);
+            }
+        }
+        gcs::Tab::Alarmes => match alarms::draw_alarms(&g.ac, &alerts, cr, time, g.mishap.as_ref().map(|m| m.lights()).or(g.tree)) {
+            Some(alarms::AlarmAction::Toggle(f)) => {
+                let on = !g.ac.fails.has(f);
+                g.ac.set_failure(f, on);
+                g.cues.push(audio::Cue::Ack);
+            }
+            Some(alarms::AlarmAction::RepairAll) => {
+                g.tree = None;
+                g.exec_command("PANNES OFF");
+            }
+            None => {}
+        },
+        gcs::Tab::Limites => limits::draw_limits(&g.ac, cr),
+        gcs::Tab::Elec => {
+            if let Some(a) = elec::draw_elec(&g.ac, cr, time) {
+                let el = &mut g.ac.elec;
+                match a {
+                    elec::EnvAction::TempKnob(v) => el.temp_knob = v,
+                    elec::EnvAction::FaceHeat(v) => el.faceheat = v,
+                    elec::EnvAction::SelToggle => el.sel_ebay = !el.sel_ebay,
+                    elec::EnvAction::AutoToggle => el.auto_temp = !el.auto_temp,
+                }
+                g.cues.push(audio::Cue::Ack);
+            }
+        }
+        gcs::Tab::Thermique => {
+            if let Some(i) = thermal::draw_thermal(&g.thermal, cr, time) {
+                // Clic sur un capteur déjà sélectionné : désélection
+                g.thermal.selected = if g.thermal.selected == Some(i) { None } else { Some(i) };
+            }
+        }
+        gcs::Tab::Essais => panels::draw_card(&g.ac, &g.mission, cr),
+        gcs::Tab::Domaine => panels::draw_envelope(&g.ac, cr, &g.history),
+        gcs::Tab::Override => {
+            if let Some(sw) = gcs::draw_overrides(&g.ac, &g.chambers, cr) {
+                g.apply_switch(sw);
+            }
+        }
+        gcs::Tab::Fcs => fcs::draw_fcs(&g.ac, cr),
+        gcs::Tab::Armement => {
+            if let Some(a) = combat::draw_page(&g.combat, &g.recon.emitters, &g.ac, cr) {
+                let r = match a {
+                    combat::ArmAction::Chaff => g.combat.dispense(combat::Seeker::Radar, &g.ac),
+                    combat::ArmAction::Flare => g.combat.dispense(combat::Seeker::Ir, &g.ac),
+                    combat::ArmAction::Ecm => {
+                        g.combat.ecm = !g.combat.ecm;
+                        Ok(format!("ECM {}", if g.combat.ecm { "ON" } else { "OFF" }))
+                    }
+                    combat::ArmAction::Auto => {
+                        g.combat.cmds_auto = !g.combat.cmds_auto;
+                        Ok(format!("CMDS {}", if g.combat.cmds_auto { "AUTO" } else { "MANUEL" }))
+                    }
+                    combat::ArmAction::Fire(k) => g.combat.fire_hacm(k, &g.recon.emitters[k], &g.ac),
+                };
+                match r {
+                    Ok(m) => g.push(Level::Info, m),
+                    Err(e) => g.push(Level::Caution, format!("ARMEMENT : {e}")),
+                }
+                g.cues.push(audio::Cue::Ack);
+            }
+        }
+        gcs::Tab::Recon => {
+            let ln = g.link().0;
+            if let Some(a) = recon::draw_recon(&g.ac, &g.recon, tiles, cr, &ln) {
+                let t = g.mission.elapsed;
+                g.recon.apply(a, &mut g.ac, t);
+                g.cues.push(audio::Cue::Ack);
+            }
+        }
+        gcs::Tab::Console => {
+            let bit = menu::BitState { running: g.bit_timer > 0.0, fail: g.bit_fail };
+            if let Some(a) = menu::draw_menu(&g.ac, &bit, cr, time) {
+                g.apply_menu(a);
+            }
+        }
+    }
+    nav
+}
+
+/// Version développeur : fenêtres (arrière vers avant), pages de l'ECRAN, page 1 composée, barre de
+/// menus avec la console. Renvoie vrai pour revenir à la version simulateur.
+#[allow(clippy::too_many_arguments)]
+fn draw_dev(g: &mut Game, d: &mut dev::DevUi, world: &world::World, tiles: &mut tiles::Tiles, alerts: &[(Level, String)], sw: f32, sh: f32, time: f64, ln: &str, lat: f64, warp: f64, warn: bool, caut: bool) -> bool {
+    d.begin(sw, sh);
+    let console_open = g.console.is_some();
+    for (i, kind) in d.order() {
+        ui::set_blockers(d.blockers_above(i, sw, console_open));
+        let Some(cr) = d.frame(i) else { continue };
+        ui::scissor(Some(cr));
+        match kind {
+            dev::WinKind::Ecran => {
+                let area = d.screen_tabs(cr);
+                let tab = match d.page {
+                    dev::Page::Fcs => Some(gcs::Tab::Fcs),
+                    dev::Page::Thermique => Some(gcs::Tab::Thermique),
+                    dev::Page::Recon => Some(gcs::Tab::Recon),
+                    dev::Page::Systemes => Some(gcs::Tab::Systemes),
+                    dev::Page::Incendie => Some(gcs::Tab::Incendie),
+                    dev::Page::Mcdu => Some(gcs::Tab::Mcdu),
+                    dev::Page::Armement => Some(gcs::Tab::Armement),
+                    dev::Page::DonneesMoteur => Some(gcs::Tab::Moteurs),
+                    _ => None,
+                };
+                match (d.page, tab) {
+                    (dev::Page::Config, _) => d.config(area),
+                    (dev::Page::Horizon, _) => {
+                        for (e, r) in d.page1(area) {
+                            ui::scissor(Some(r));
+                            draw_elem(g, e, r, world, tiles, alerts, time, ln, lat, warp);
+                            draw_rectangle_lines(r.x, r.y, r.w, r.h, 1.0, Color::new(0.25, 0.27, 0.3, 1.0));
+                        }
+                    }
+                    (_, Some(t)) => {
+                        // Saisie MCDU au clavier quand la page MCDU est affichée
+                        if t == gcs::Tab::Mcdu {
+                            g.tab = gcs::Tab::Mcdu;
+                        }
+                        match draw_tab_page(g, t, area, alerts, tiles, time) {
+                            Some(gcs::Tab::Armement) => d.page = dev::Page::Armement,
+                            Some(gcs::Tab::Moteurs) => d.page = dev::Page::DonneesMoteur,
+                            Some(gcs::Tab::Fcs) => d.page = dev::Page::Fcs,
+                            Some(gcs::Tab::Thermique) => d.page = dev::Page::Thermique,
+                            Some(gcs::Tab::Incendie) => d.page = dev::Page::Incendie,
+                            _ => {}
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            dev::WinKind::Messages => panels::draw_messages(&g.log, cr),
+            dev::WinKind::Train => draw_elem(g, dev::Elem::Train, cr, world, tiles, alerts, time, ln, lat, warp),
+            dev::WinKind::Nd => draw_elem(g, dev::Elem::Nd, cr, world, tiles, alerts, time, ln, lat, warp),
+            dev::WinKind::Moteurs => panels::draw_engines(&g.ac, &g.chambers, cr, time),
+            dev::WinKind::Elec => {
+                let _ = draw_tab_page(g, gcs::Tab::Elec, cr, alerts, tiles, time);
+            }
+            dev::WinKind::PanneauDroit => {
+                if let Some(c) = dev::right_panel(&g.ac, cr) {
+                    g.exec_command(&c);
+                    g.cues.push(audio::Cue::Switch);
+                }
+            }
+            dev::WinKind::Pannes => {
+                let _ = draw_tab_page(g, gcs::Tab::Alarmes, cr, alerts, tiles, time);
+            }
+        }
+        ui::scissor(None);
+    }
+    ui::set_blockers(Vec::new());
+    let mut status = format!("SIM {}   x{:.0}   LIAISON {}", mission::fmt_time(g.sim_time), warp, ln);
+    if warn {
+        status = format!("MASTER WARNING   {status}");
+    } else if caut {
+        status = format!("MASTER CAUTION   {status}");
+    }
+    let log: Vec<String> = g.log.iter().rev().take(8).rev().map(|(t, _, m)| format!("{} {m}", mission::fmt_time(*t))).collect();
+    let out = d.bar(sw, g.console.as_deref(), &g.cmd_hist, &log, &status);
+    if let Some(open) = out.console_open {
+        g.console = if open { Some(String::new()) } else { None };
+        g.hist_pos = g.cmd_hist.len();
+    }
+    out.quit
+}
+
+/// Élément de la page 1 (ou fenêtre) dessiné dans `r`.
+#[allow(clippy::too_many_arguments)]
+fn draw_elem(g: &mut Game, e: dev::Elem, r: Rect, world: &world::World, tiles: &mut tiles::Tiles, alerts: &[(Level, String)], time: f64, ln: &str, lat: f64, warp: f64) {
+    let tab = |t| Some(t);
+    let t = match e {
+        dev::Elem::Horizon => {
+            let info = pfd_info(g, alerts, ln, lat, warp, time);
+            let shown = g.stale.as_ref().unwrap_or(&g.ac);
+            let svs_r = pfd::svs_rect(r);
+            let view = svs::draw_svs(world, tiles, &g.wx, &g.refuel, shown, svs_r, time, g.style, g.feel.cam());
+            g.feel.draw_overlay(shown, svs_r, time);
+            wx3d::draw(&g.wx, shown, &view, time);
+            pfd_plus::set_inner(pfd::geo(r).inner);
+            pfd::draw_pfd(shown, &view, r, &info);
+            None
+        }
+        dev::Elem::Nd => {
+            g.map.input(r);
+            let route = g.fms.route();
+            g.map.draw(world, tiles, &g.wx, &g.refuel, &g.combat, &g.recon, &g.ac, r, g.dest, &route, time);
+            None
+        }
+        dev::Elem::Train => {
+            let unsafe_gear = alerts.iter().any(|(_, a)| a == "TOO LOW — GEAR");
+            pfd::draw_gear(&g.ac, r.x + r.w / 2.0, r.y + r.h / 2.0, time, unsafe_gear);
+            None
+        }
+        dev::Elem::Messages => {
+            panels::draw_messages(&g.log, r);
+            None
+        }
+        dev::Elem::DonneesMoteur => tab(gcs::Tab::Moteurs),
+        dev::Elem::Systemes => tab(gcs::Tab::Systemes),
+        dev::Elem::Fcs => tab(gcs::Tab::Fcs),
+        dev::Elem::Alarmes => tab(gcs::Tab::Alarmes),
+        dev::Elem::Thermique => tab(gcs::Tab::Thermique),
+        dev::Elem::Elec => tab(gcs::Tab::Elec),
+        dev::Elem::Mcdu => tab(gcs::Tab::Mcdu),
+        dev::Elem::Incendie => tab(gcs::Tab::Incendie),
+        dev::Elem::Limites => tab(gcs::Tab::Limites),
+    };
+    if let Some(t) = t {
+        let _ = draw_tab_page(g, t, r, alerts, tiles, time);
+    }
+}
+
 fn draw_update_banner(st: &updater::State, sw: f32) -> bool {
     let (text, col, clickable) = match st {
         updater::State::Available { version, notes, .. } => {

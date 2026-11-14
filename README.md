@@ -791,3 +791,12 @@ Le SR-72 est un avion de reconnaissance : sa charge utile est simulée.
   blanc), terrains, trafic, GS / TAS, vent, point TO (relèvement, distance, heure). Escorte de
   chasse (patrouille VIPER, deux F-16 en 3D) au départ jusqu'à l'allumage du stato et à l'arrivée
   après sa coupure, dégagement en finale ; messages radio ; instruction ESCORTE / ESCORTE OFF.
+- v1.58.0 : VERSION DEVELOPPEUR (instruction DEV) — fond blanc, barre de menus (FENETRES, CONSOLE,
+  DISPOSITION, SIMULATEUR), console dans la barre (plus sur l'horizon), fenêtres déplaçables /
+  redimensionnables / refermables : ECRAN, MESSAGES / GCS, TRAIN, ND, MOTEURS, ELEC, PANNEAU DROIT,
+  PANNES ; disposition enregistrée. ECRAN à pages : 1 HORIZON (composée), 2 FCS, 3 THERMIQUE,
+  4 RECON, 5 SYSTEMES (+ ARMEMENT, DONNEES MOTEUR), 6 INCENDIE, 7 MCDU, CONFIG (canevas et palette
+  d'éléments à glisser-déposer pour composer la page 1). DEV PAGE <n>. APU : MASTER / START
+  (~35 s), génératrice, prélèvement d'air (démarrage turbines au sol 25 s au lieu de 45 s),
+  consommation, arrêt automatique au-dessus du FL350 / Mach 0,9 ; instruction APU ; panneau droit
+  (turbines, entrées d'air, stato, scram, APU avec jauges N / EGT).

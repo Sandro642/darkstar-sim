@@ -103,7 +103,7 @@ impl Escort {
                     self.done_dep = true;
                     self.spawn(ac, true);
                     out.push((Level::Info, "VIPER 1 : DARKSTAR, VIPER EN REJOINTE POUR L'ESCORTE DE DEPART — DEUX F-16".into()));
-                } else if !ac.on_ground && !self.done_arr && !ram && mach < 1.4 && d_dest < 150.0 * NM && ac.alt / FT < 50_000.0 && (desc || d_dest < 80.0 * NM) {
+                } else if !ac.on_ground && !ac.gear_down && !self.done_arr && !ram && mach < 1.4 && d_dest < 150.0 * NM && ac.alt / FT < 50_000.0 && (desc || d_dest < 80.0 * NM) {
                     self.done_arr = true;
                     self.done_dep = true;
                     self.spawn(ac, false);
