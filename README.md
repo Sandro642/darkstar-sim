@@ -833,3 +833,6 @@ Le SR-72 est un avion de reconnaissance : sa charge utile est simulée.
 - v1.61.1 : console d'instructions de nouveau disponible en version normale (ENTREE) ; version
   développeur (future version embarquée) : fenêtre COMMANDES et élément COMMANDES de la page 1 —
   toutes les fonctions utilisables aux boutons, la console restant dans la barre.
+- v1.61.2 : COMMANDES — nouveaux boutons : minimums DA (FCU), TEMPS et SON (FCU), SIMBRIEF,
+  DISPATCH (terrain le plus proche vers la destination), ROUTE RECON / OFF (NAVIGATION / MISSION),
+  EJECTION à double appui et LIAISON / relais DATALINK, SATCOM, SECOURS (URGENCE).

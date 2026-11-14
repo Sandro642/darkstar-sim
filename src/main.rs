@@ -3441,6 +3441,12 @@ fn draw_screen(g: &mut Game, d: &mut dev::DevUi, cr: Rect, world: &world::World,
 /// Page COMMANDES : toutes les fonctions en boutons ; touches virtuelles ou instructions.
 fn draw_commandes(g: &mut Game, cr: Rect) {
     let dest = g.fms.fpln.as_ref().map(|p| p.dest.clone()).unwrap_or_else(|| AIRPORTS[g.dest].icao.to_string());
+    // Terrain le plus proche de l'avion (origine du DISPATCH)
+    let origin = airports::near(g.ac.lat, g.ac.lon)
+        .into_iter()
+        .min_by(|a, b| geo::dist_brg(g.ac.lat, g.ac.lon, a.lat, a.lon).0.total_cmp(&geo::dist_brg(g.ac.lat, g.ac.lon, b.lat, b.lon).0))
+        .map(|a| a.icao.to_string())
+        .unwrap_or_else(|| AIRPORTS[g.dest].icao.to_string());
     let cx = fcu::Ctx {
         vnav: g.fms.vnav,
         dest: &dest,
@@ -3448,6 +3454,9 @@ fn draw_commandes(g: &mut Game, cr: Rect) {
         muted: g.muted,
         escort: matches!(g.escort.state, escort::State::Joining | escort::State::Formation),
         emergency: g.emerg.mode.is_some(),
+        da_ft: g.da_ft,
+        origin: &origin,
+        link_ok: g.link.full(),
     };
     match fcu::draw(&g.ac, &cx, cr) {
         Some(fcu::Act::Key(k)) => {

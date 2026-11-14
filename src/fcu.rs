@@ -1,6 +1,7 @@
 //! Page COMMANDES (version normale : pas de console dans l'avion réel) — toutes les fonctions en
-//! boutons lumineux rangés par catégorie : AUTOPILOTE (FCU, avec sélecteurs CAP / ALT / VITESSE /
-//! MACH), PROPULSION, CONFIGURATION, CARBURANT, NAVIGATION / MISSION, URGENCE, SIMULATION.
+//! boutons lumineux rangés par catégorie : AUTOPILOTE (FCU, sélecteurs CAP / ALT / VITESSE / MACH /
+//! DA, temps et son), PROPULSION, CONFIGURATION (carburant), NAVIGATION / MISSION (SimBrief,
+//! dispatch, route recon), URGENCE (éjection à double appui, liaison / relais).
 //! Un bouton déclenche exactement l'action du raccourci clavier ou de l'instruction associée.
 
 use crate::aircraft::*;
@@ -21,6 +22,16 @@ pub struct Ctx<'a> {
     pub muted: bool,
     pub escort: bool,
     pub emergency: bool,
+    /// Hauteur de décision (ft au-dessus du seuil) et terrain le plus proche (DISPATCH)
+    pub da_ft: f64,
+    pub origin: &'a str,
+    /// Liaison complète établie (les relais ne servent qu'en cas de perte)
+    pub link_ok: bool,
+}
+
+thread_local! {
+    /// Éjection armée (premier appui) : instant de l'armement
+    static EJECT_ARM: std::cell::Cell<f64> = const { std::cell::Cell::new(-100.0) };
 }
 
 const BG: Color = Color::new(0.05, 0.06, 0.075, 1.0);
@@ -98,7 +109,7 @@ pub fn draw(ac: &Aircraft, cx: &Ctx, r: Rect) -> Option<Act> {
     let ap = &ac.ap;
 
     // ----- AUTOPILOTE (FCU) : pleine largeur -----
-    let gh = 190.0;
+    let gh = 226.0;
     group(Rect::new(x0, y, w, gh), "AUTOPILOTE (FCU)");
     let iy = y + 24.0;
     let lat_nav = ap.on && ap.lat == LatMode::Nav;
@@ -156,6 +167,15 @@ pub fn draw(ac: &Aircraft, cx: &Ctx, r: Rect) -> Option<Act> {
         let d = [-1.0, -0.1, 0.1, 1.0][k];
         out = Some(Act::Cmd(format!("MACH {:.2}", (mach + d).clamp(0.3, 11.0))));
     }
+    // Minimums : hauteur de décision au-dessus du seuil
+    if let Some(k) = selector(x0 + 8.0, sy + 72.0, sw, "DA", &format!("{:.0} FT", cx.da_ft), ["-50", "-10", "+10", "+50"]) {
+        let d = [-50.0, -10.0, 10.0, 50.0][k];
+        out = Some(Act::Cmd(format!("DA {:.0}", (cx.da_ft + d).clamp(50.0, 1_000.0))));
+    }
+    // Simulation : temps accéléré et son (à droite des minimums)
+    if let Some(k) = row(x0 + 18.0 + sw, sy + 70.0, sw, &[("TEMPS", &format!("x{:.0}", cx.warp), on(cx.warp > 1.0)), ("SON", if cx.muted { "COUPE" } else { "ON" }, if cx.muted { amber(true) } else { on(true) })]) {
+        out = Some(Act::Key([KeyCode::E, KeyCode::J][k]));
+    }
     y += gh + 8.0;
 
     // ----- PROPULSION | CONFIGURATION -----
@@ -196,8 +216,21 @@ pub fn draw(ac: &Aircraft, cx: &Ctx, r: Rect) -> Option<Act> {
     y += gh2 + 8.0;
 
     // ----- NAVIGATION / MISSION | URGENCE -----
-    let gh3 = 72.0;
+    let gh3 = 112.0;
     group(Rect::new(x0, y, col_w, gh3), "NAVIGATION / MISSION");
+    if let Some(k) = row(x0 + 8.0, y + 64.0, col_w - 16.0, &[
+        ("SIMBRIEF", "IMPORT OFP", None),
+        ("DISPATCH", &format!("{}>{}", cx.origin, cx.dest), None),
+        ("ROUTE", "RECON", None),
+        ("ROUTE", "OFF", None),
+    ]) {
+        out = Some(Act::Cmd(match k {
+            0 => "SIMBRIEF".into(),
+            1 => format!("DISPATCH {} {}", cx.origin, cx.dest),
+            2 => "PLAN RECON".into(),
+            _ => "PLAN OFF".into(),
+        }));
+    }
     if let Some(k) = row(x0 + 8.0, y + 24.0, col_w - 16.0, &[
         ("DIRECT", cx.dest, None),
         ("ESCORTE", if cx.escort { "EN PLACE" } else { "VIPER" }, on(cx.escort)),
@@ -212,25 +245,37 @@ pub fn draw(ac: &Aircraft, cx: &Ctx, r: Rect) -> Option<Act> {
         });
     }
     group(Rect::new(x1, y, col_w, gh3), "URGENCE");
+    let now = get_time();
+    let armed = now - EJECT_ARM.with(|c| c.get()) < 5.0;
     if let Some(k) = row(x1 + 8.0, y + 24.0, col_w - 16.0, &[
         ("URGENCE", if cx.emergency { "ACTIVE" } else { "DEROUTEMENT" }, cx.emergency.then_some(RED)),
         ("OVERRIDE", "EMERGENCY", None),
         ("ANNULER", "URGENCE", None),
+        ("EJECTION", if armed { "CONFIRMER" } else { "2 APPUIS" }, armed.then_some(RED)),
     ]) {
-        out = Some(Act::Cmd(match k {
-            0 => "URGENCE".into(),
-            1 => "EMERGENCY OVERRIDE".into(),
-            _ => "URGENCE OFF".into(),
-        }));
-    }
-    y += gh3 + 8.0;
-
-    // ----- SIMULATION -----
-    if y + 72.0 <= r.y + r.h {
-        group(Rect::new(x0, y, w, 72.0), "SIMULATION");
-        if let Some(k) = row(x0 + 8.0, y + 24.0, w - 16.0, &[("TEMPS", &format!("x{:.0}", cx.warp), on(cx.warp > 1.0)), ("SON", if cx.muted { "COUPE" } else { "ON" }, if cx.muted { amber(true) } else { on(true) })]) {
-            out = Some(Act::Key([KeyCode::E, KeyCode::J][k]));
+        match k {
+            0 => out = Some(Act::Cmd("URGENCE".into())),
+            1 => out = Some(Act::Cmd("EMERGENCY OVERRIDE".into())),
+            2 => out = Some(Act::Cmd("URGENCE OFF".into())),
+            _ => {
+                // Premier appui : armement 5 s ; second appui : éjection
+                if armed {
+                    EJECT_ARM.with(|c| c.set(-100.0));
+                    out = Some(Act::Cmd("EJECTION CONFIRME".into()));
+                } else {
+                    EJECT_ARM.with(|c| c.set(now));
+                }
+            }
         }
     }
+    // Liaison de données : reconnexion automatique ou relais choisi
+    let lk = if cx.link_ok { "EN LIGNE" } else { "RELAIS" };
+    if let Some(k) = row(x1 + 8.0, y + 64.0, col_w - 16.0, &[("LIAISON", if cx.link_ok { "EN LIGNE" } else { "AUTO" }, if cx.link_ok { on(true) } else { amber(true) }), ("DATALINK", lk, None), ("SATCOM", lk, None), ("SECOURS", "IRIDIUM", None)]) {
+        if !cx.link_ok {
+            out = Some(Act::Cmd(["RECONNEXION", "RELAIS LOS", "RELAIS SATCOM", "RELAIS SECOURS"][k].into()));
+        }
+    }
+    let _ = gh3;
+
     out
 }
