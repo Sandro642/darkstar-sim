@@ -3324,9 +3324,17 @@ fn draw_dev(g: &mut Game, d: &mut dev::DevUi, world: &world::World, tiles: &mut 
             dev::WinKind::Elec => {
                 let _ = draw_tab_page(g, gcs::Tab::Elec, cr, alerts, tiles, time);
             }
+            // Panneaux de la console : droit (démarrage moteurs / APU) et gauche (platines)
             dev::WinKind::PanneauDroit => {
-                if let Some(c) = dev::right_panel(&g.ac, cr) {
-                    g.exec_command(&c);
+                if let Some(a) = menu::right_console(&g.ac, cr, time) {
+                    g.apply_menu(a);
+                    g.cues.push(audio::Cue::Switch);
+                }
+            }
+            dev::WinKind::PanneauGauche => {
+                let bit = menu::BitState { running: g.bit_timer > 0.0, fail: g.bit_fail };
+                if let Some(a) = menu::draw_platines(&g.ac, &bit, cr, time) {
+                    g.apply_menu(a);
                     g.cues.push(audio::Cue::Switch);
                 }
             }

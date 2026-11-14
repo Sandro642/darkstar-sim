@@ -140,6 +140,11 @@ pub fn draw_menu(ac: &Aircraft, bit: &BitState, r_all: Rect, time: f64) -> Optio
     if right {
         return right_console(ac, r, time);
     }
+    draw_platines(ac, bit, r, time)
+}
+
+/// Panneau gauche / centre de la console : platines ENGINE/APU, FLT CNTRL et SYS.
+pub fn draw_platines(ac: &Aircraft, bit: &BitState, r: Rect, time: f64) -> Option<MenuAction> {
     let mut out = None;
     let e = &ac.eng;
     panel(r, "CONSOLE - ENGINE/APU  /  FLT CNTRL  /  SYSTEMS");
@@ -363,7 +368,7 @@ pub fn draw_menu(ac: &Aircraft, bit: &BitState, r_all: Rect, time: f64) -> Optio
 
 /// Panneau droit de la console : démarrage moteurs et APU. APU MASTER, START (START / AVAIL),
 /// GEN, BLEED, cadrans N et EGT ; source d'air ; START L / START R ; check-list de démarrage.
-fn right_console(ac: &Aircraft, r: Rect, time: f64) -> Option<MenuAction> {
+pub fn right_console(ac: &Aircraft, r: Rect, time: f64) -> Option<MenuAction> {
     use crate::apu::ApuState;
     let mut out = None;
     panel(r, "R CONSOLE - START / APU");

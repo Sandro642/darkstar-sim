@@ -817,3 +817,5 @@ Le SR-72 est un avion de reconnaissance : sa charge utile est simulée.
   START / APU : APU MASTER, START (START / AVAIL), GEN, BLEED, cadrans N et EGT ; démarrage moteur
   par moteur (START L / START R) avec source d'air (APU / parc / moulinet) ; check-list de
   démarrage. Instruction PANNEAU DROIT.
+- v1.60.2 : version développeur — fenêtre PANNEAU DROIT = panneau droit de la console (START / APU,
+  check-list) et nouvelle fenêtre PANNEAU GAUCHE (platines ENGINE/APU, FLT CNTRL, SYS).
