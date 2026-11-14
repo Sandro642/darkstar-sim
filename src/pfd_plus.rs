@@ -448,8 +448,9 @@ pub fn hud_vis(ac: &Aircraft, wx: &crate::weather::WxInfo, threats: &[ThreatCue]
         }
         m.dest = dest;
         // Conditions permanentes
-        let hover = s.contains(vec2(mouse_position().0, mouse_position().1));
-        let all = hover || now < m.all_until;
+        // Informations toujours affichées (plus seulement au survol de la souris)
+        let _ = s;
+        let all = true;
         let threat_hot = threats.iter().any(|t| t.state >= 3);
         let corridor_hot = ac.d.q > 90_000.0 || (stage > 0 && ac.d.q < 25_000.0) || ac.skin_temp - 273.15 > SKIN_LIMIT_C - 100.0;
         let ff = ac.eng.fuel_flow;

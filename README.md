@@ -824,3 +824,9 @@ Le SR-72 est un avion de reconnaissance : sa charge utile est simulée.
   plus aucune touche ne fonctionnait.
 - v1.60.4 : panneau droit de la console = APU seul (MASTER, START, GEN, BLEED, cadrans N / EGT,
   check-list APU) ; démarrages moteur gauche / droit retirés.
+- v1.61.0 : onglet COMMANDES — toutes les fonctions en boutons lumineux par catégorie
+  (AUTOPILOTE / FCU avec sélecteurs CAP, ALT, VITESSE, MACH ; PROPULSION ; CONFIGURATION ;
+  CARBURANT ; NAVIGATION / MISSION ; URGENCE ; SIMULATION), mêmes actions que les raccourcis.
+  Console d'instructions réservée à la version développeur. Informations de l'horizon (vent,
+  RWR, couloir, énergie, carburant) affichées en permanence. Maj+Entrée : l'écran de lancement
+  repropose l'appareil, l'aérodrome et la piste (version dev et son conservés).

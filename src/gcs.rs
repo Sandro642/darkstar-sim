@@ -102,10 +102,11 @@ pub enum Tab {
     Mcdu,
     Apu,
     Config,
+    Commandes,
 }
 
 /// Pages, dans l'ordre : touches 4..9 et 0 pour les 7 premières, boutons de lunette pour les 6 premières.
-pub const TABS: [(Tab, &str); 17] = [
+pub const TABS: [(Tab, &str); 18] = [
     (Tab::Moteurs, "MOTEURS"),
     (Tab::Alarmes, "ALARMES"),
     (Tab::Fcs, "FCS"),
@@ -123,6 +124,7 @@ pub const TABS: [(Tab, &str); 17] = [
     (Tab::Mcdu, "MCDU"),
     (Tab::Apu, "APU"),
     (Tab::Config, "CONFIG"),
+    (Tab::Commandes, "COMMANDES"),
 ];
 
 /// Barre d'onglets sur deux rangées ; renvoie l'onglet cliqué. `alert` : onglets à signaler en ambre.

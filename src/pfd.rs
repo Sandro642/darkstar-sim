@@ -445,8 +445,8 @@ fn draw_svs_overlay(ac: &Aircraft, v: &View, s: Rect, info: &PfdInfo) {
     }
 
     if !ac.on_ground {
-        let reveal = s.contains(vec2(mouse_position().0, mouse_position().1));
-        crate::pfd_plus::fuel_alert(ac, &info.fuel, s, info.time, info.fuel_since, reveal && info.fuel.level != crate::fuel::Level::Ok);
+        // Détail carburant toujours affiché dès qu'un seuil est atteint (sans survol)
+        crate::pfd_plus::fuel_alert(ac, &info.fuel, s, info.time, info.fuel_since, info.fuel.level != crate::fuel::Level::Ok);
     }
     // Panneaux couloir hypersonique et énergie (masqués en finale ILS)
     let on_ils = ac.approach.is_some_and(|(_, tla, tlo, thdg, _)| along_before(tla, tlo, thdg, ac.lat, ac.lon) < 60_000.0);

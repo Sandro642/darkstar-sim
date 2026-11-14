@@ -10,6 +10,7 @@ mod cifp;
 mod escort;
 mod apu;
 mod dev;
+mod fcu;
 mod airports;
 mod atmosphere;
 mod elec;
@@ -139,6 +140,8 @@ struct Game {
     dev: Option<dev::DevUi>,
     /// MCDU affiché à l'image précédente (le clavier ne lui est envoyé que s'il est visible)
     mcdu_seen: bool,
+    /// Touches virtuelles (boutons de la page COMMANDES)
+    vkeys: Vec<KeyCode>,
     /// Page 1 composée (CONFIG) pour l'écran principal de la version normale
     layout: dev::DevUi,
     combat: combat::Combat,
@@ -323,6 +326,7 @@ impl Game {
             escort: escort::Escort::new(),
             dev: None,
             mcdu_seen: false,
+            vkeys: Vec::new(),
             layout: dev::DevUi::new(),
             combat: combat::Combat::new(),
             emerg: emergency::Emergency::new(),
@@ -1016,6 +1020,9 @@ impl Game {
     }
 
     fn input(&mut self, real_dt: f64) {
+        // Boutons de la page COMMANDES : mêmes actions que les raccourcis
+        let vk = std::mem::take(&mut self.vkeys);
+        let kp = |k: KeyCode| is_key_pressed(k) || vk.contains(&k);
         let shift = is_key_down(KeyCode::LeftShift) || is_key_down(KeyCode::RightShift);
         let ac = &mut self.ac;
 
@@ -1100,28 +1107,28 @@ impl Game {
             }
         }
 
-        if is_key_pressed(KeyCode::T) || is_key_pressed(KeyCode::Key1) {
+        if kp(KeyCode::T) || is_key_pressed(KeyCode::Key1) {
             ac.cmd_turbine();
         }
-        if is_key_pressed(KeyCode::I) {
+        if kp(KeyCode::I) {
             ac.cmd_inlet();
         }
-        if is_key_pressed(KeyCode::Y) || is_key_pressed(KeyCode::Key2) {
+        if kp(KeyCode::Y) || is_key_pressed(KeyCode::Key2) {
             ac.cmd_ram();
         }
-        if is_key_pressed(KeyCode::U) || is_key_pressed(KeyCode::Key3) {
+        if kp(KeyCode::U) || is_key_pressed(KeyCode::Key3) {
             ac.cmd_scram();
         }
-        if is_key_pressed(KeyCode::G) {
+        if kp(KeyCode::G) {
             ac.cmd_gear();
         }
-        if is_key_pressed(KeyCode::B) {
+        if kp(KeyCode::B) {
             ac.brakes = !ac.brakes;
         }
-        if is_key_pressed(KeyCode::S) {
+        if kp(KeyCode::S) {
             ac.speedbrake = !ac.speedbrake;
         }
-        if is_key_pressed(KeyCode::P) {
+        if kp(KeyCode::P) {
             if ac.on_ground {
                 msgs.push((Level::Caution, "AP INDISPONIBLE AU SOL".into()));
             } else if ac.ap.on {
@@ -1136,7 +1143,7 @@ impl Game {
                 msgs.push((Level::Info, "AP1 ENGAGÉ — ALT HOLD / HDG HOLD".into()));
             }
         }
-        if is_key_pressed(KeyCode::O) {
+        if kp(KeyCode::O) {
             ac.ap.at_on = !ac.ap.at_on;
             if ac.ap.at_on {
                 ac.ap.mach_tgt = (ac.d.mach * 10.0).round() / 10.0;
@@ -1145,7 +1152,7 @@ impl Game {
                 msgs.push((Level::Caution, "A/THR OFF".into()));
             }
         }
-        if is_key_pressed(KeyCode::N) && !ac.on_ground {
+        if kp(KeyCode::N) && !ac.on_ground {
             if !ac.ap.on {
                 ac.ap.on = true;
                 ac.ap.vert = VertMode::Alt;
@@ -1158,7 +1165,7 @@ impl Game {
             };
             msgs.push((Level::Info, m));
         }
-        if is_key_pressed(KeyCode::L) && !ac.on_ground {
+        if kp(KeyCode::L) && !ac.on_ground {
             if let Some((_, tla, tlo, th, tel)) = ac.approach {
                 if !ac.ap.on {
                     // AP engagé sur le cap et l'altitude du moment jusqu'à la capture
@@ -1189,7 +1196,7 @@ impl Game {
                 msgs.push((Level::Caution, "ILS HORS PORTÉE (< 80 km de la destination)".into()));
             }
         }
-        if is_key_pressed(KeyCode::X) {
+        if kp(KeyCode::X) {
             if self.refuel.active() {
                 self.refuel.stop(ac, "REPRISE EN MAIN");
             }
@@ -1199,10 +1206,10 @@ impl Game {
             ac.autotakeoff = None;
             msgs.push((Level::Caution, "REPRISE EN MAIN MANUELLE — AP / A/THR / AUTOLAND OFF".into()));
         }
-        if is_key_pressed(KeyCode::E) {
+        if kp(KeyCode::E) {
             self.warp_idx = (self.warp_idx + 1) % WARPS.len();
         }
-        if is_key_pressed(KeyCode::C) {
+        if kp(KeyCode::C) {
             self.map.follow = true;
         }
         let page_keys = [KeyCode::Key4, KeyCode::Key5, KeyCode::Key6, KeyCode::Key7, KeyCode::Key8, KeyCode::Key9, KeyCode::Key0];
@@ -1212,7 +1219,7 @@ impl Game {
                 self.tab = tab;
             }
         }
-        if is_key_pressed(KeyCode::J) {
+        if kp(KeyCode::J) {
             self.muted = !self.muted;
         }
         for (l, s) in msgs {
@@ -2692,6 +2699,8 @@ async fn main() {
     let auto_update = std::env::var("DARKSTAR_AUTOUPDATE").is_ok();
     let mut last_upd_msg = String::new();
     let mut g = Game::new(&scenario);
+    // Dernier choix de l'écran de lancement (appareil, aérodrome, piste), reproposé au nouvel essai
+    let mut last_spawn: Option<connect::ConnectUi> = None;
     // Premier lancement : téléchargement de la base mondiale (appliquée au lancement suivant)
     if navdb::installed_at().is_none() || cifp::cycle().is_none() {
         g.fms.navupd = Some(navdb::update());
@@ -2720,6 +2729,7 @@ async fn main() {
     // Lancement normal : établir d'abord la liaison avec un Darkstar de la flotte
     if (scenario.is_empty() && shot.is_none()) || std::env::var("DARKSTAR_CONNECT").is_ok() {
         let ui = connect::ConnectUi::new();
+        last_spawn = Some(ui.clone());
         g.place_at(ui.sel, ui.apt, &ui.rwy);
         g.link.state = link::State::Idle;
         g.log.clear();
@@ -2768,12 +2778,24 @@ async fn main() {
         let enter = (is_key_pressed(KeyCode::Enter) || is_key_pressed(KeyCode::KpEnter)) && !in_connect;
         if enter && (g.ac.crashed.is_some() || g.ended || (shift && g.console.is_none())) {
             let muted = g.muted;
+            let dev = g.dev.take();
             g.fdr.finalize();
             g = Game::new(&scenario);
             g.muted = muted;
+            g.dev = dev;
+            pfd::hide_menu(g.dev.is_some());
             sfx.reset();
             g.feel.reset();
-        } else if enter {
+            // Nouvel essai : l'écran de lancement repropose l'appareil, l'aérodrome et la piste
+            if let Some(ui) = last_spawn.clone().filter(|_| shot.is_none()) {
+                let ui = connect::ConnectUi { query: String::new(), ..ui };
+                g.place_at(ui.sel, ui.apt, &ui.rwy);
+                g.link.state = link::State::Idle;
+                g.log.clear();
+                g.connect = Some(ui);
+            }
+        } else if enter && (g.dev.is_some() || g.console.is_some()) {
+            // Console d'instructions : version développeur seulement (pas de console dans l'avion)
             match g.console.take() {
                 None => {
                     while get_char_pressed().is_some() {}
@@ -2849,7 +2871,7 @@ async fn main() {
                 g.push(l, s);
             }
             if g.link.state == link::State::Connected {
-                g.connect = None;
+                last_spawn = g.connect.take();
                 let tail = link::tail();
                 let a = &AIRPORTS[g.dep_apt];
                 g.push(Level::Info, format!("GCS EN LIGNE — DARKSTAR {tail} CONTROLE PAR GCS-1"));
@@ -2938,7 +2960,9 @@ async fn main() {
                 Some(r) => (pfd::geo(r).inner, r),
                 None => (disp, disp),
             };
-            draw_console(&g, svs_r);
+            if g.console.is_some() {
+                draw_console(&g, svs_r);
+            }
             // Écran noir : reconnexion automatique par le canal d'urgence ; nouvel essai après échec
             if g.mishap.as_ref().is_some_and(|m| m.draw_los(svs_r)) {
                 if let Some(m) = &mut g.mishap {
@@ -3262,6 +3286,30 @@ fn draw_tab_page(g: &mut Game, tab: gcs::Tab, cr: Rect, alerts: &[(Level, String
             }
         }
         gcs::Tab::Fcs => fcs::draw_fcs(&g.ac, cr),
+        // Commandes en boutons (pas de console dans l'avion réel)
+        gcs::Tab::Commandes => {
+            let dest = g.fms.fpln.as_ref().map(|p| p.dest.clone()).unwrap_or_else(|| AIRPORTS[g.dest].icao.to_string());
+            let cx = fcu::Ctx {
+                vnav: g.fms.vnav,
+                dest: &dest,
+                warp: WARPS[g.warp_idx],
+                muted: g.muted,
+                escort: matches!(g.escort.state, escort::State::Joining | escort::State::Formation),
+                emergency: g.emerg.mode.is_some(),
+            };
+            match fcu::draw(&g.ac, &cx, cr) {
+                Some(fcu::Act::Key(k)) => {
+                    g.vkeys.push(k);
+                    g.fms.focus = false;
+                    g.cues.push(audio::Cue::Switch);
+                }
+                Some(fcu::Act::Cmd(c)) => {
+                    g.exec_command(&c);
+                    g.cues.push(audio::Cue::Switch);
+                }
+                None => {}
+            }
+        }
         // Composition de la page 1 (écran principal) : canevas et palette
         gcs::Tab::Config => g.layout.config(cr),
         // Panneau droit : boutons moteurs et APU
