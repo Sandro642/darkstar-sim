@@ -21,9 +21,13 @@ pub enum WinKind {
     Pannes,
     PanneauGauche,
     Commandes,
+    Radio,
+    Manette,
+    Scram,
+    MotApuClim,
 }
 
-pub const WINS: [(WinKind, &str); 10] = [
+pub const WINS: [(WinKind, &str); 14] = [
     (WinKind::Ecran, "ECRAN"),
     (WinKind::Messages, "MESSAGES / GCS"),
     (WinKind::Train, "TRAIN"),
@@ -34,6 +38,10 @@ pub const WINS: [(WinKind, &str); 10] = [
     (WinKind::Pannes, "PANNES"),
     (WinKind::PanneauGauche, "PANNEAU GAUCHE"),
     (WinKind::Commandes, "COMMANDES"),
+    (WinKind::Radio, "RADIO / TRANSPONDEUR"),
+    (WinKind::Manette, "MANETTE / TRAIN"),
+    (WinKind::Scram, "SCRAMJET"),
+    (WinKind::MotApuClim, "MOTEURS / APU / CLIM"),
 ];
 
 fn win_name(k: WinKind) -> &'static str {
@@ -99,9 +107,10 @@ pub enum Page {
     Config,
     Armement,
     DonneesMoteur,
+    Commandes,
 }
 
-const PAGES: [(Page, &str); 8] = [
+const PAGES: [(Page, &str); 9] = [
     (Page::Horizon, "1 HORIZON"),
     (Page::Fcs, "2 FCS"),
     (Page::Thermique, "3 THERMIQUE"),
@@ -109,6 +118,7 @@ const PAGES: [(Page, &str); 8] = [
     (Page::Systemes, "5 SYSTEMES"),
     (Page::Incendie, "6 INCENDIE"),
     (Page::Mcdu, "7 MCDU"),
+    (Page::Commandes, "8 COMMANDES"),
     (Page::Config, "CONFIG"),
 ];
 
@@ -162,19 +172,25 @@ fn path() -> std::path::PathBuf {
     std::path::Path::new(&home).join("Library/Application Support/Darkstar/dev_layout.txt")
 }
 
+/// Disposition « cockpit pilote » : radio en haut ; moteurs, écran et élec au milieu ; manette,
+/// scramjet, messages, pannes et moteurs / APU / clim en bas.
 fn default_wins() -> Vec<Win> {
     let w = |kind, x, y, ww, h, open| Win { kind, r: [x, y, ww, h], open };
     vec![
-        w(WinKind::Moteurs, 0.005, 0.01, 0.20, 0.55, true),
-        w(WinKind::Ecran, 0.21, 0.01, 0.52, 0.72, true),
-        w(WinKind::PanneauDroit, 0.74, 0.01, 0.255, 0.56, true),
-        w(WinKind::Pannes, 0.74, 0.58, 0.255, 0.41, true),
-        w(WinKind::Elec, 0.005, 0.57, 0.20, 0.42, true),
-        w(WinKind::Messages, 0.21, 0.74, 0.40, 0.25, true),
-        w(WinKind::Train, 0.615, 0.74, 0.115, 0.25, true),
-        w(WinKind::Nd, 0.74, 0.74, 0.255, 0.25, false),
+        w(WinKind::Radio, 0.32, 0.0, 0.36, 0.17, true),
+        w(WinKind::Moteurs, 0.0, 0.18, 0.215, 0.47, true),
+        w(WinKind::Ecran, 0.22, 0.18, 0.56, 0.58, true),
+        w(WinKind::Elec, 0.785, 0.18, 0.215, 0.47, true),
+        w(WinKind::Manette, 0.0, 0.66, 0.215, 0.34, true),
+        w(WinKind::Scram, 0.43, 0.77, 0.14, 0.23, true),
+        w(WinKind::Messages, 0.22, 0.77, 0.205, 0.23, true),
+        w(WinKind::Pannes, 0.575, 0.77, 0.205, 0.23, true),
+        w(WinKind::MotApuClim, 0.785, 0.66, 0.215, 0.34, true),
+        w(WinKind::Train, 0.0, 0.0, 0.10, 0.17, false),
+        w(WinKind::Nd, 0.70, 0.0, 0.30, 0.17, false),
+        w(WinKind::PanneauDroit, 0.74, 0.01, 0.255, 0.56, false),
         w(WinKind::PanneauGauche, 0.30, 0.22, 0.43, 0.50, false),
-        w(WinKind::Commandes, 0.36, 0.06, 0.37, 0.90, true),
+        w(WinKind::Commandes, 0.36, 0.06, 0.37, 0.90, false),
     ]
 }
 
@@ -237,14 +253,14 @@ impl DevUi {
                 wins.push(d);
             }
         }
-        if !wins.is_empty() {
+        if !wins.is_empty() && s.lines().any(|l| l.trim() == "V 2") {
             self.wins = wins;
         }
         self.widgets = wids;
     }
 
     pub fn save(&self) {
-        let mut s = String::new();
+        let mut s = String::from("V 2\n");
         for w in &self.wins {
             s.push_str(&format!("W {} {:.4} {:.4} {:.4} {:.4} {}\n", win_name(w.kind).replace(' ', "_"), w.r[0], w.r[1], w.r[2], w.r[3], w.open as u8));
         }
@@ -396,6 +412,7 @@ impl DevUi {
             "5" | "SYSTEMES" => Page::Systemes,
             "6" | "INCENDIE" => Page::Incendie,
             "7" | "MCDU" => Page::Mcdu,
+            "8" | "COMMANDES" => Page::Commandes,
             "CONFIG" => Page::Config,
             "ARMEMENT" => Page::Armement,
             "MOTEUR" | "MOTEURS" => Page::DonneesMoteur,

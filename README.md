@@ -836,3 +836,9 @@ Le SR-72 est un avion de reconnaissance : sa charge utile est simulée.
 - v1.61.2 : COMMANDES — nouveaux boutons : minimums DA (FCU), TEMPS et SON (FCU), SIMBRIEF,
   DISPATCH (terrain le plus proche vers la destination), ROUTE RECON / OFF (NAVIGATION / MISSION),
   EJECTION à double appui et LIAISON / relais DATALINK, SATCOM, SECOURS (URGENCE).
+- v1.62.0 : poste pilote (version développeur = version embarquée) — disposition cockpit : RADIO /
+  TRANSPONDEUR en haut (COMM1, COMM2, NAV1 calée sur l'ILS, NAV2 : active / attente, permutation,
+  réglage MHz / kHz ; transpondeur STNDBY / ON / ALT, IDENT, code), MOTEURS à gauche (3 boutons :
+  moteurs simple, données moteur, manette 0-100 %), ECRAN au centre, ELEC à droite ; en bas
+  MANETTE (manette des gaz à glisser, levier de train, JETTISON protégé), MESSAGES, SCRAMJET,
+  PANNES, MOTEURS / APU / CLIM. Page 8 COMMANDES dans l'écran. Instruction JETTISON.

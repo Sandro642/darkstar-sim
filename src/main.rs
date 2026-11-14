@@ -11,6 +11,7 @@ mod escort;
 mod apu;
 mod dev;
 mod fcu;
+mod cockpit;
 mod airports;
 mod atmosphere;
 mod elec;
@@ -142,6 +143,9 @@ struct Game {
     mcdu_seen: bool,
     /// Touches virtuelles (boutons de la page COMMANDES)
     vkeys: Vec<KeyCode>,
+    /// Poste pilote : radio / transpondeur, page du panneau moteurs
+    radio: cockpit::Radio,
+    eng_page: u8,
     /// Page 1 composée (CONFIG) pour l'écran principal de la version normale
     layout: dev::DevUi,
     combat: combat::Combat,
@@ -327,6 +331,8 @@ impl Game {
             dev: None,
             mcdu_seen: false,
             vkeys: Vec::new(),
+            radio: cockpit::Radio::new(),
+            eng_page: 0,
             layout: dev::DevUi::new(),
             combat: combat::Combat::new(),
             emerg: emergency::Emergency::new(),
@@ -1934,6 +1940,12 @@ impl Game {
                     reply = Ok("VERSION DEVELOPPEUR — FENETRES DEPLACABLES, CONSOLE DANS LA BARRE (MENU CONSOLE)".into());
                 }
             }
+            // Largage d'urgence : vidange JP-7 et H2
+            "JETTISON" | "LARGAGE" => {
+                ac.cmd_fuel_dump(true);
+                ac.cmd_h2_dump(true);
+                reply = Ok("JETTISON — VIDANGE D'URGENCE JP-7 ET H2".into());
+            }
             // Panneau droit de la console (démarrage moteurs / APU)
             "PANNEAU" | "CONSOLE" if matches!(arg(1), "DROIT" | "DROITE") => {
                 menu::show_right(true);
@@ -3351,7 +3363,34 @@ fn draw_dev(g: &mut Game, d: &mut dev::DevUi, world: &world::World, tiles: &mut 
             dev::WinKind::Messages => panels::draw_messages(&g.log, cr),
             dev::WinKind::Train => draw_elem(g, dev::Elem::Train, cr, world, tiles, alerts, time, ln, lat, warp),
             dev::WinKind::Nd => draw_elem(g, dev::Elem::Nd, cr, world, tiles, alerts, time, ln, lat, warp),
-            dev::WinKind::Moteurs => panels::draw_engines(&g.ac, &g.chambers, cr, time),
+            // Poste pilote
+            dev::WinKind::Moteurs => {
+                let mut p = g.eng_page;
+                cockpit::engines(&g.ac, &g.chambers, cr, &mut p, time);
+                g.eng_page = p;
+            }
+            dev::WinKind::Radio => {
+                let ils = g.fms.ils.as_ref().map(|t| t.mhz);
+                if let Some(m) = cockpit::radio(&mut g.radio, cr, ils, time) {
+                    g.push(Level::Info, m);
+                    g.cues.push(audio::Cue::Switch);
+                }
+            }
+            dev::WinKind::Manette => {
+                if let Some(a) = cockpit::throttle(&g.ac, cr) {
+                    apply_cockpit(g, a);
+                }
+            }
+            dev::WinKind::Scram => {
+                if let Some(a) = cockpit::scram(&g.ac, cr, time) {
+                    apply_cockpit(g, a);
+                }
+            }
+            dev::WinKind::MotApuClim => {
+                if let Some(a) = cockpit::eng_apu_clim(&g.ac, cr) {
+                    apply_cockpit(g, a);
+                }
+            }
             dev::WinKind::Elec => {
                 let _ = draw_tab_page(g, gcs::Tab::Elec, cr, alerts, tiles, time);
             }
@@ -3412,6 +3451,7 @@ fn draw_screen(g: &mut Game, d: &mut dev::DevUi, cr: Rect, world: &world::World,
     let mut horizon = None;
     match (d.page, tab) {
         (dev::Page::Config, _) => d.config(area),
+        (dev::Page::Commandes, _) => draw_commandes(g, area),
         (dev::Page::Horizon, _) => {
             for (e, r) in d.page1(area) {
                 ui::scissor(Some(r));
@@ -3436,6 +3476,40 @@ fn draw_screen(g: &mut Game, d: &mut dev::DevUi, cr: Rect, world: &world::World,
         _ => {}
     }
     horizon
+}
+
+/// Action d'un panneau du poste pilote.
+fn apply_cockpit(g: &mut Game, a: cockpit::Act) {
+    match a {
+        cockpit::Act::Cmd(c) => g.exec_command(&c),
+        cockpit::Act::Key(k) => {
+            g.vkeys.push(k);
+            g.fms.focus = false;
+        }
+        cockpit::Act::Throttle(v) => {
+            let ac = &mut g.ac;
+            if ac.autoland.is_none() {
+                ac.throttle = v;
+                ac.thr_manual = true;
+                if ac.ap.at_on {
+                    ac.ap.at_on = false;
+                    g.push(Level::Caution, "A/THR OFF — MANETTE MANUELLE");
+                }
+            }
+            return;
+        }
+        cockpit::Act::Menu(m) => g.apply_menu(m),
+        cockpit::Act::Env(e) => {
+            let el = &mut g.ac.elec;
+            match e {
+                elec::EnvAction::TempKnob(v) => el.temp_knob = v,
+                elec::EnvAction::FaceHeat(v) => el.faceheat = v,
+                elec::EnvAction::SelToggle => el.sel_ebay = !el.sel_ebay,
+                elec::EnvAction::AutoToggle => el.auto_temp = !el.auto_temp,
+            }
+        }
+    }
+    g.cues.push(audio::Cue::Switch);
 }
 
 /// Page COMMANDES : toutes les fonctions en boutons ; touches virtuelles ou instructions.

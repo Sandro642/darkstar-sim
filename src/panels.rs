@@ -282,6 +282,25 @@ fn engine_table(ac: &Aircraft, r: Rect) -> f32 {
     h
 }
 
+/// Page moteurs simple (poste pilote) : les deux nacelles empilées, pleine largeur.
+pub fn draw_nacelles(ac: &Aircraft, r: Rect, time: f64) {
+    let e = &ac.eng;
+    let gap = 8.0;
+    let nh = ((r.h - gap) / 2.0).min(r.w / 3.2);
+    let y0 = r.y + (r.h - (2.0 * nh + gap)) / 2.0;
+    for (i, (side, off)) in [("ENG L", 8.0), ("ENG R", -6.0)].iter().enumerate() {
+        let tstate = match e.side[i] {
+            TurbState::Off if e.fadec_fault[i] => "FADEC FAULT",
+            TurbState::Off if e.sw[i] == EngSw::Motor => "MOTOR",
+            TurbState::Off => "OFF",
+            TurbState::Starting => "START",
+            TurbState::Running => "RUN",
+            TurbState::Failed => "FAIL",
+        };
+        nacelle(Rect::new(r.x, y0 + i as f32 * (nh + gap), r.w, nh), &format!("{side}  {tstate}"), ac, i, *off, time + i as f64 * 0.37);
+    }
+}
+
 pub fn draw_engines(ac: &Aircraft, mon: &crate::health::ChamberMon, r: Rect, time: f64) {
     panel(r, "MOTEURS - TBCC DARKSTAR");
     let e = &ac.eng;
