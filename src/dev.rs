@@ -247,11 +247,16 @@ impl DevUi {
         if self.menu.is_some() {
             return;
         }
-        // Fin de glisser
+        // Fin de glisser d'une fenêtre (les glisser de la page CONFIG sont traités par la page,
+        // qui pose l'élément au relâchement) ; glisser CONFIG orphelin si la page a changé
         if !is_mouse_button_down(MouseButton::Left) {
-            if self.drag.is_some() {
-                self.drag = None;
-                self.save();
+            match self.drag {
+                Some(Drag::Move { .. } | Drag::Resize { .. }) => {
+                    self.drag = None;
+                    self.save();
+                }
+                Some(_) if self.page != Page::Config => self.drag = None,
+                _ => {}
             }
         }
         let a = self.work;

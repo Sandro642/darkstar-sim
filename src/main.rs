@@ -3215,6 +3215,13 @@ fn draw_tab_page(g: &mut Game, tab: gcs::Tab, cr: Rect, alerts: &[(Level, String
             }
         }
         gcs::Tab::Fcs => fcs::draw_fcs(&g.ac, cr),
+        // Panneau droit : boutons moteurs et APU
+        gcs::Tab::Apu => {
+            if let Some(c) = dev::right_panel(&g.ac, cr) {
+                g.exec_command(&c);
+                g.cues.push(audio::Cue::Switch);
+            }
+        }
         gcs::Tab::Armement => {
             if let Some(a) = combat::draw_page(&g.combat, &g.recon.emitters, &g.ac, cr) {
                 let r = match a {

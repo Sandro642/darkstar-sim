@@ -800,3 +800,6 @@ Le SR-72 est un avion de reconnaissance : sa charge utile est simulée.
   (~35 s), génératrice, prélèvement d'air (démarrage turbines au sol 25 s au lieu de 45 s),
   consommation, arrêt automatique au-dessus du FL350 / Mach 0,9 ; instruction APU ; panneau droit
   (turbines, entrées d'air, stato, scram, APU avec jauges N / EGT).
+- v1.58.1 : version développeur — le glisser-déposer depuis la palette (page CONFIG) pose bien
+  l'élément au relâchement. Version normale : onglet APU (panneau droit : turbines, entrées d'air,
+  stato, scram, APU MASTER / START, GEN, BLEED, jauges N / EGT).
