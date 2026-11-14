@@ -2794,8 +2794,7 @@ async fn main() {
                 g.log.clear();
                 g.connect = Some(ui);
             }
-        } else if enter && (g.dev.is_some() || g.console.is_some()) {
-            // Console d'instructions : version développeur seulement (pas de console dans l'avion)
+        } else if enter {
             match g.console.take() {
                 None => {
                     while get_char_pressed().is_some() {}
@@ -2960,9 +2959,7 @@ async fn main() {
                 Some(r) => (pfd::geo(r).inner, r),
                 None => (disp, disp),
             };
-            if g.console.is_some() {
-                draw_console(&g, svs_r);
-            }
+            draw_console(&g, svs_r);
             // Écran noir : reconnexion automatique par le canal d'urgence ; nouvel essai après échec
             if g.mishap.as_ref().is_some_and(|m| m.draw_los(svs_r)) {
                 if let Some(m) = &mut g.mishap {
@@ -3286,30 +3283,8 @@ fn draw_tab_page(g: &mut Game, tab: gcs::Tab, cr: Rect, alerts: &[(Level, String
             }
         }
         gcs::Tab::Fcs => fcs::draw_fcs(&g.ac, cr),
-        // Commandes en boutons (pas de console dans l'avion réel)
-        gcs::Tab::Commandes => {
-            let dest = g.fms.fpln.as_ref().map(|p| p.dest.clone()).unwrap_or_else(|| AIRPORTS[g.dest].icao.to_string());
-            let cx = fcu::Ctx {
-                vnav: g.fms.vnav,
-                dest: &dest,
-                warp: WARPS[g.warp_idx],
-                muted: g.muted,
-                escort: matches!(g.escort.state, escort::State::Joining | escort::State::Formation),
-                emergency: g.emerg.mode.is_some(),
-            };
-            match fcu::draw(&g.ac, &cx, cr) {
-                Some(fcu::Act::Key(k)) => {
-                    g.vkeys.push(k);
-                    g.fms.focus = false;
-                    g.cues.push(audio::Cue::Switch);
-                }
-                Some(fcu::Act::Cmd(c)) => {
-                    g.exec_command(&c);
-                    g.cues.push(audio::Cue::Switch);
-                }
-                None => {}
-            }
-        }
+        // Commandes en boutons (version embarquée : pas de console dans l'avion réel)
+        gcs::Tab::Commandes => draw_commandes(g, cr),
         // Composition de la page 1 (écran principal) : canevas et palette
         gcs::Tab::Config => g.layout.config(cr),
         // Panneau droit : boutons moteurs et APU
@@ -3387,6 +3362,7 @@ fn draw_dev(g: &mut Game, d: &mut dev::DevUi, world: &world::World, tiles: &mut 
                     g.cues.push(audio::Cue::Switch);
                 }
             }
+            dev::WinKind::Commandes => draw_commandes(g, cr),
             dev::WinKind::PanneauGauche => {
                 let bit = menu::BitState { running: g.bit_timer > 0.0, fail: g.bit_fail };
                 if let Some(a) = menu::draw_platines(&g.ac, &bit, cr, time) {
@@ -3462,6 +3438,31 @@ fn draw_screen(g: &mut Game, d: &mut dev::DevUi, cr: Rect, world: &world::World,
     horizon
 }
 
+/// Page COMMANDES : toutes les fonctions en boutons ; touches virtuelles ou instructions.
+fn draw_commandes(g: &mut Game, cr: Rect) {
+    let dest = g.fms.fpln.as_ref().map(|p| p.dest.clone()).unwrap_or_else(|| AIRPORTS[g.dest].icao.to_string());
+    let cx = fcu::Ctx {
+        vnav: g.fms.vnav,
+        dest: &dest,
+        warp: WARPS[g.warp_idx],
+        muted: g.muted,
+        escort: matches!(g.escort.state, escort::State::Joining | escort::State::Formation),
+        emergency: g.emerg.mode.is_some(),
+    };
+    match fcu::draw(&g.ac, &cx, cr) {
+        Some(fcu::Act::Key(k)) => {
+            g.vkeys.push(k);
+            g.fms.focus = false;
+            g.cues.push(audio::Cue::Switch);
+        }
+        Some(fcu::Act::Cmd(c)) => {
+            g.exec_command(&c);
+            g.cues.push(audio::Cue::Switch);
+        }
+        None => {}
+    }
+}
+
 /// Élément de la page 1 (ou fenêtre) dessiné dans `r`.
 #[allow(clippy::too_many_arguments)]
 fn draw_elem(g: &mut Game, e: dev::Elem, r: Rect, world: &world::World, tiles: &mut tiles::Tiles, alerts: &[(Level, String)], time: f64, ln: &str, lat: f64, warp: f64) {
@@ -3515,6 +3516,10 @@ fn draw_elem(g: &mut Game, e: dev::Elem, r: Rect, world: &world::World, tiles: &
         dev::Elem::Mcdu => tab(gcs::Tab::Mcdu),
         dev::Elem::Incendie => tab(gcs::Tab::Incendie),
         dev::Elem::Limites => tab(gcs::Tab::Limites),
+        dev::Elem::Commandes => {
+            draw_commandes(g, r);
+            None
+        }
     };
     if let Some(t) = t {
         let _ = draw_tab_page(g, t, r, alerts, tiles, time);

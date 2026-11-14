@@ -545,7 +545,7 @@ pub fn draw_help(r: Rect) {
     let lines = [
         ("STATION SOL DARKSTAR - PILOTAGE PAR INSTRUCTIONS", CYAN_S),
         ("", WHITE),
-        ("Onglet COMMANDES : toutes les fonctions en boutons. Console d'instructions : version DEV (instruction via la barre) :", WHITE),
+        ("ENTREE ouvre la console d'instructions (onglet COMMANDES : les memes fonctions en boutons) :", WHITE),
         ("  CAP 270  ALT 90000 / FL350  ASSIETTE 10  MACH 6  KEAS 300  THR 80", GREEN_S),
         ("  DEST KEDW  DIRECT KEDW  ATTERRIR KEDW (autoland)  DECOLLAGE 15000", GREEN_S),
         ("  DESCENTE 50 : descente hypersonique a q constant (anti-surpression)", GREEN_S),

@@ -20,9 +20,10 @@ pub enum WinKind {
     PanneauDroit,
     Pannes,
     PanneauGauche,
+    Commandes,
 }
 
-pub const WINS: [(WinKind, &str); 9] = [
+pub const WINS: [(WinKind, &str); 10] = [
     (WinKind::Ecran, "ECRAN"),
     (WinKind::Messages, "MESSAGES / GCS"),
     (WinKind::Train, "TRAIN"),
@@ -32,6 +33,7 @@ pub const WINS: [(WinKind, &str); 9] = [
     (WinKind::PanneauDroit, "PANNEAU DROIT"),
     (WinKind::Pannes, "PANNES"),
     (WinKind::PanneauGauche, "PANNEAU GAUCHE"),
+    (WinKind::Commandes, "COMMANDES"),
 ];
 
 fn win_name(k: WinKind) -> &'static str {
@@ -57,9 +59,10 @@ pub enum Elem {
     Carburant,
     Camera,
     Hsi,
+    Commandes,
 }
 
-pub const ELEMS: [(Elem, &str); 16] = [
+pub const ELEMS: [(Elem, &str); 17] = [
     (Elem::Horizon, "HORIZON"),
     (Elem::DonneesMoteur, "DONNEES MOTEUR"),
     (Elem::Systemes, "SYSTEMES"),
@@ -76,6 +79,7 @@ pub const ELEMS: [(Elem, &str); 16] = [
     (Elem::Carburant, "CARBURANT"),
     (Elem::Camera, "CAMERA"),
     (Elem::Hsi, "HSI"),
+    (Elem::Commandes, "COMMANDES"),
 ];
 
 pub fn elem_name(e: Elem) -> &'static str {
@@ -169,7 +173,8 @@ fn default_wins() -> Vec<Win> {
         w(WinKind::Messages, 0.21, 0.74, 0.40, 0.25, true),
         w(WinKind::Train, 0.615, 0.74, 0.115, 0.25, true),
         w(WinKind::Nd, 0.74, 0.74, 0.255, 0.25, false),
-        w(WinKind::PanneauGauche, 0.30, 0.22, 0.43, 0.50, true),
+        w(WinKind::PanneauGauche, 0.30, 0.22, 0.43, 0.50, false),
+        w(WinKind::Commandes, 0.36, 0.06, 0.37, 0.90, true),
     ]
 }
 

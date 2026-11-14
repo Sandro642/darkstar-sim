@@ -830,3 +830,6 @@ Le SR-72 est un avion de reconnaissance : sa charge utile est simulée.
   Console d'instructions réservée à la version développeur. Informations de l'horizon (vent,
   RWR, couloir, énergie, carburant) affichées en permanence. Maj+Entrée : l'écran de lancement
   repropose l'appareil, l'aérodrome et la piste (version dev et son conservés).
+- v1.61.1 : console d'instructions de nouveau disponible en version normale (ENTREE) ; version
+  développeur (future version embarquée) : fenêtre COMMANDES et élément COMMANDES de la page 1 —
+  toutes les fonctions utilisables aux boutons, la console restant dans la barre.
