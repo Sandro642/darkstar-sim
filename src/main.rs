@@ -611,7 +611,22 @@ impl Game {
         use menu::MenuAction::*;
         match a {
             EngSwitch(i, sw) => self.ac.cmd_eng_switch(i, sw),
-            ApuStart => self.exec_command("APU START"),
+            ApuMaster(on) => {
+                if on {
+                    self.ac.apu.master = true;
+                    self.push(Level::Info, "APU MASTER ON");
+                } else {
+                    self.exec_command("APU STOP");
+                }
+            }
+            ApuStart => {
+                if self.ac.apu.master {
+                    self.exec_command("APU START");
+                } else {
+                    self.push(Level::Caution, "APU START : METTRE D'ABORD APU MASTER SUR ON");
+                }
+            }
+            EngStart(i) => self.ac.cmd_start_one(i),
             ApuStop => self.exec_command("APU STOP"),
             ApuGen(on) => self.exec_command(if on { "APU GEN ON" } else { "APU GEN OFF" }),
             ApuBleed(on) => self.exec_command(if on { "APU BLEED ON" } else { "APU BLEED OFF" }),
@@ -1909,6 +1924,12 @@ impl Game {
                     pfd::hide_menu(true);
                     reply = Ok("VERSION DEVELOPPEUR — FENETRES DEPLACABLES, CONSOLE DANS LA BARRE (MENU CONSOLE)".into());
                 }
+            }
+            // Panneau droit de la console (démarrage moteurs / APU)
+            "PANNEAU" | "CONSOLE" if matches!(arg(1), "DROIT" | "DROITE") => {
+                menu::show_right(true);
+                self.tab = gcs::Tab::Console;
+                reply = Ok("CONSOLE : PANNEAU DROIT (START / APU)".into());
             }
             // APU : APU START|ON / STOP|OFF / GEN ON|OFF / BLEED ON|OFF
             "APU" => {
