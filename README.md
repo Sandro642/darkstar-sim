@@ -807,3 +807,9 @@ Le SR-72 est un avion de reconnaissance : sa charge utile est simulée.
   composition commune avec la version développeur) et bascule ECRAN PRINCIPAL : PAGE COMPOSEE /
   STANDARD ; en page composée, l'afficheur du cockpit (lunette conservée) affiche les éléments
   choisis à la place de la disposition standard.
+- v1.60.0 : version normale — l'écran du cockpit est le même ECRAN à pages que la version
+  développeur (1 HORIZON composée, 2 FCS, 3 THERMIQUE, 4 RECON, 5 SYSTEMES + ARMEMENT / DONNEES
+  MOTEUR, 6 INCENDIE, 7 MCDU, CONFIG), lunette conservée. Élément HORIZON complet (radar météo,
+  ravitaillement, réticule caméra, bandeau d'approche) et nouveaux éléments CARBURANT, CAMERA,
+  HSI ; page 1 par défaut = écran standard du cockpit. Page CONSOLE : APU (START / AVAIL, GEN,
+  BLEED) dans la platine SYS.

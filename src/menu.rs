@@ -28,6 +28,10 @@ pub enum MenuAction {
     GLim(bool),
     PitotHeat(bool),
     Nws(bool),
+    ApuStart,
+    ApuStop,
+    ApuGen(bool),
+    ApuBleed(bool),
 }
 
 pub struct BitState {
@@ -276,7 +280,7 @@ pub fn draw_menu(ac: &Aircraft, bit: &BitState, r: Rect, time: f64) -> Option<Me
     plate(p3, "SYS");
     let x0 = p3.x + 50.0;
     let w = p3.w - 66.0;
-    let n = 5.0;
+    let n = 8.0;
     let cx = |k: f32| x0 + w * (k + 0.5) / n;
     let yl = p3.y + 22.0;
     let yt = p3.y + p3.h * 0.52;
@@ -321,5 +325,36 @@ pub fn draw_menu(ac: &Aircraft, bit: &BitState, r: Rect, time: f64) -> Option<Me
         out = Some(MenuAction::Nws(np == 0));
     }
     state(4.0, if ac.nws_hi { "HI 30 DEG" } else { "LO 12 DEG" }, LEGEND);
+    // APU : bouton MASTER / START (START puis AVAIL), interrupteurs GEN et BLEED
+    {
+        use crate::apu::ApuState;
+        let a = &ac.apu;
+        let bw = 58.0;
+        let bh = 40.0;
+        let white = Color::new(0.95, 0.95, 0.9, 1.0);
+        txt_c("APU", cx(5.0), yl, 12.0, LEGEND);
+        let starting = a.state == ApuState::Starting;
+        let avail = a.state == ApuState::Running && a.n > 0.95;
+        if pushbutton(Rect::new(cx(5.0) - bw / 2.0, yt - bh / 2.0, bw, bh), "START", starting.then_some(white), "AVAIL", avail.then_some(GREEN_S)) {
+            out = Some(if matches!(a.state, ApuState::Starting | ApuState::Running) { MenuAction::ApuStop } else { MenuAction::ApuStart });
+        }
+        let (st, c) = match a.state {
+            ApuState::Running => (format!("{:.0}% {:.0}C", a.n * 100.0, a.egt), GREEN_S),
+            ApuState::Starting => (format!("{:.0}% {:.0}C", a.n * 100.0, a.egt), AMBER),
+            ApuState::Stopping => ("COOLING".into(), AMBER),
+            ApuState::Off => ("OFF".into(), DIM),
+        };
+        state(5.0, &st, c);
+        txt_c("APU GEN", cx(6.0), yl, 12.0, LEGEND);
+        if let Some(np) = toggle(cx(6.0), yt, if a.generator { 0 } else { 1 }, 2) {
+            out = Some(MenuAction::ApuGen(np == 0));
+        }
+        state(6.0, if a.gen_online() { "ON LINE" } else if a.generator { "ON" } else { "OFF" }, if a.gen_online() { GREEN_S } else { LEGEND });
+        txt_c("APU BLEED", cx(7.0), yl, 12.0, LEGEND);
+        if let Some(np) = toggle(cx(7.0), yt, if a.bleed { 0 } else { 1 }, 2) {
+            out = Some(MenuAction::ApuBleed(np == 0));
+        }
+        state(7.0, if a.bleed_air() { "AIR" } else if a.bleed { "ON" } else { "OFF" }, if a.bleed_air() { GREEN_S } else { LEGEND });
+    }
     out
 }

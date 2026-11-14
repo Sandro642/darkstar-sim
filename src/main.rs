@@ -611,6 +611,10 @@ impl Game {
         use menu::MenuAction::*;
         match a {
             EngSwitch(i, sw) => self.ac.cmd_eng_switch(i, sw),
+            ApuStart => self.exec_command("APU START"),
+            ApuStop => self.exec_command("APU STOP"),
+            ApuGen(on) => self.exec_command(if on { "APU GEN ON" } else { "APU GEN OFF" }),
+            ApuBleed(on) => self.exec_command(if on { "APU BLEED ON" } else { "APU BLEED OFF" }),
             FadecReset(i) => self.ac.cmd_fadec_reset(i),
             Start => self.ac.cmd_start(),
             Stop => self.ac.cmd_stop(),
@@ -2896,31 +2900,19 @@ async fn main() {
             let lit: [bool; 6] = std::array::from_fn(|i| g.tab == BEZEL_PAGES[i]);
             let info = pfd_info(&g, &alerts, &ln, lat, warp_eff, time);
             let shown = g.stale.as_ref().unwrap_or(&g.ac);
-            let composed = g.layout.main_screen && !g.layout.widgets.is_empty();
-            let (svs_r, pfd_r) = if composed {
-                // Écran principal : page 1 composée dans l'afficheur, lunette conservée
-                drop(info);
-                let bez = mfd::bezel_only(mfd_r, lit, time);
-                handle_mfd(&mut g, mfd::MfdActions { bezel: bez, ..Default::default() });
-                let disp = mfd::display_rect(mfd_r);
-                draw_rectangle(disp.x, disp.y, disp.w, disp.h, BLACK);
-                let elems = g.layout.page1(disp);
-                for (e, r) in &elems {
-                    ui::scissor(Some(*r));
-                    draw_elem(&mut g, *e, *r, &world, &mut tiles, &alerts, time, &ln, lat, warp_eff);
-                    ui::scissor(None);
-                    draw_rectangle_lines(r.x, r.y, r.w, r.h, 1.0, Color::new(0.25, 0.27, 0.3, 1.0));
-                }
-                match elems.iter().find(|(e, _)| *e == dev::Elem::Horizon) {
-                    Some((_, r)) => (pfd::geo(*r).inner, *r),
-                    None => (disp, disp),
-                }
-            } else {
-                let (_, act) = mfd::draw_mfd(&world, &mut tiles, &g.wx, &g.refuel, shown, &g.recon, mfd_r, &mut g.mfd, &info, g.style, time, lit, &g.feel);
-                drop(info);
-                handle_mfd(&mut g, act);
-                let lay = mfd::layout(mfd_r).1;
-                (lay.inner, lay.pfd)
+            // Écran du cockpit : le même ECRAN à pages que la version développeur, lunette conservée
+            drop(info);
+            let _ = shown;
+            let bez = mfd::bezel_only(mfd_r, lit, time);
+            handle_mfd(&mut g, mfd::MfdActions { bezel: bez, ..Default::default() });
+            let disp = mfd::display_rect(mfd_r);
+            draw_rectangle(disp.x, disp.y, disp.w, disp.h, BLACK);
+            let mut lay_ui = std::mem::take(&mut g.layout);
+            let hz = draw_screen(&mut g, &mut lay_ui, disp, &world, &mut tiles, &alerts, time, &ln, lat, warp_eff);
+            g.layout = lay_ui;
+            let (svs_r, pfd_r) = match hz {
+                Some(r) => (pfd::geo(r).inner, r),
+                None => (disp, disp),
             };
             draw_console(&g, svs_r);
             // Écran noir : reconnexion automatique par le canal d'urgence ; nouvel essai après échec
@@ -3302,43 +3294,7 @@ fn draw_dev(g: &mut Game, d: &mut dev::DevUi, world: &world::World, tiles: &mut 
         ui::scissor(Some(cr));
         match kind {
             dev::WinKind::Ecran => {
-                let area = d.screen_tabs(cr);
-                let tab = match d.page {
-                    dev::Page::Fcs => Some(gcs::Tab::Fcs),
-                    dev::Page::Thermique => Some(gcs::Tab::Thermique),
-                    dev::Page::Recon => Some(gcs::Tab::Recon),
-                    dev::Page::Systemes => Some(gcs::Tab::Systemes),
-                    dev::Page::Incendie => Some(gcs::Tab::Incendie),
-                    dev::Page::Mcdu => Some(gcs::Tab::Mcdu),
-                    dev::Page::Armement => Some(gcs::Tab::Armement),
-                    dev::Page::DonneesMoteur => Some(gcs::Tab::Moteurs),
-                    _ => None,
-                };
-                match (d.page, tab) {
-                    (dev::Page::Config, _) => d.config(area),
-                    (dev::Page::Horizon, _) => {
-                        for (e, r) in d.page1(area) {
-                            ui::scissor(Some(r));
-                            draw_elem(g, e, r, world, tiles, alerts, time, ln, lat, warp);
-                            draw_rectangle_lines(r.x, r.y, r.w, r.h, 1.0, Color::new(0.25, 0.27, 0.3, 1.0));
-                        }
-                    }
-                    (_, Some(t)) => {
-                        // Saisie MCDU au clavier quand la page MCDU est affichée
-                        if t == gcs::Tab::Mcdu {
-                            g.tab = gcs::Tab::Mcdu;
-                        }
-                        match draw_tab_page(g, t, area, alerts, tiles, time) {
-                            Some(gcs::Tab::Armement) => d.page = dev::Page::Armement,
-                            Some(gcs::Tab::Moteurs) => d.page = dev::Page::DonneesMoteur,
-                            Some(gcs::Tab::Fcs) => d.page = dev::Page::Fcs,
-                            Some(gcs::Tab::Thermique) => d.page = dev::Page::Thermique,
-                            Some(gcs::Tab::Incendie) => d.page = dev::Page::Incendie,
-                            _ => {}
-                        }
-                    }
-                    _ => {}
-                }
+                let _ = draw_screen(g, d, cr, world, tiles, alerts, time, ln, lat, warp);
             }
             dev::WinKind::Messages => panels::draw_messages(&g.log, cr),
             dev::WinKind::Train => draw_elem(g, dev::Elem::Train, cr, world, tiles, alerts, time, ln, lat, warp),
@@ -3375,6 +3331,56 @@ fn draw_dev(g: &mut Game, d: &mut dev::DevUi, world: &world::World, tiles: &mut 
     out.quit
 }
 
+/// ECRAN à pages (version dev et écran du cockpit de la version normale) : bandeau des pages,
+/// page 1 composée, pages FCS / THERMIQUE / RECON / SYSTEMES (+ ARMEMENT, DONNEES MOTEUR) /
+/// INCENDIE / MCDU, page CONFIG. Renvoie la zone de l'horizon (bandeaux et alertes de l'horizon).
+#[allow(clippy::too_many_arguments)]
+fn draw_screen(g: &mut Game, d: &mut dev::DevUi, cr: Rect, world: &world::World, tiles: &mut tiles::Tiles, alerts: &[(Level, String)], time: f64, ln: &str, lat: f64, warp: f64) -> Option<Rect> {
+    let area = d.screen_tabs(cr);
+    let tab = match d.page {
+        dev::Page::Fcs => Some(gcs::Tab::Fcs),
+        dev::Page::Thermique => Some(gcs::Tab::Thermique),
+        dev::Page::Recon => Some(gcs::Tab::Recon),
+        dev::Page::Systemes => Some(gcs::Tab::Systemes),
+        dev::Page::Incendie => Some(gcs::Tab::Incendie),
+        dev::Page::Mcdu => Some(gcs::Tab::Mcdu),
+        dev::Page::Armement => Some(gcs::Tab::Armement),
+        dev::Page::DonneesMoteur => Some(gcs::Tab::Moteurs),
+        _ => None,
+    };
+    let mut horizon = None;
+    match (d.page, tab) {
+        (dev::Page::Config, _) => d.config(area),
+        (dev::Page::Horizon, _) => {
+            for (e, r) in d.page1(area) {
+                ui::scissor(Some(r));
+                draw_elem(g, e, r, world, tiles, alerts, time, ln, lat, warp);
+                ui::scissor(None);
+                draw_rectangle_lines(r.x, r.y, r.w, r.h, 1.0, Color::new(0.25, 0.27, 0.3, 1.0));
+                if e == dev::Elem::Horizon {
+                    horizon = Some(r);
+                }
+            }
+        }
+        (_, Some(t)) => {
+            // Saisie MCDU au clavier quand la page MCDU est affichée
+            if t == gcs::Tab::Mcdu {
+                g.tab = gcs::Tab::Mcdu;
+            }
+            match draw_tab_page(g, t, area, alerts, tiles, time) {
+                Some(gcs::Tab::Armement) => d.page = dev::Page::Armement,
+                Some(gcs::Tab::Moteurs) => d.page = dev::Page::DonneesMoteur,
+                Some(gcs::Tab::Fcs) => d.page = dev::Page::Fcs,
+                Some(gcs::Tab::Thermique) => d.page = dev::Page::Thermique,
+                Some(gcs::Tab::Incendie) => d.page = dev::Page::Incendie,
+                _ => {}
+            }
+        }
+        _ => {}
+    }
+    horizon
+}
+
 /// Élément de la page 1 (ou fenêtre) dessiné dans `r`.
 #[allow(clippy::too_many_arguments)]
 fn draw_elem(g: &mut Game, e: dev::Elem, r: Rect, world: &world::World, tiles: &mut tiles::Tiles, alerts: &[(Level, String)], time: f64, ln: &str, lat: f64, warp: f64) {
@@ -3383,12 +3389,25 @@ fn draw_elem(g: &mut Game, e: dev::Elem, r: Rect, world: &world::World, tiles: &
         dev::Elem::Horizon => {
             let info = pfd_info(g, alerts, ln, lat, warp, time);
             let shown = g.stale.as_ref().unwrap_or(&g.ac);
-            let svs_r = pfd::svs_rect(r);
-            let view = svs::draw_svs(world, tiles, &g.wx, &g.refuel, shown, svs_r, time, g.style, g.feel.cam());
-            g.feel.draw_overlay(shown, svs_r, time);
-            wx3d::draw(&g.wx, shown, &view, time);
-            pfd_plus::set_inner(pfd::geo(r).inner);
-            pfd::draw_pfd(shown, &view, r, &info);
+            let _ = mfd::draw_horizon(world, tiles, &g.wx, &g.refuel, shown, &g.recon, r, &mut g.mfd, &info, g.style, time, &g.feel);
+            None
+        }
+        dev::Elem::Carburant => {
+            if mfd::fuel_pane(&g.ac, r) {
+                handle_mfd(g, mfd::MfdActions { fuel_dump: true, ..Default::default() });
+            }
+            None
+        }
+        dev::Elem::Camera => {
+            let cam = mfd::camera_pane(&g.ac, &g.recon, tiles, r);
+            if cam.is_some() {
+                handle_mfd(g, mfd::MfdActions { cam, ..Default::default() });
+            }
+            None
+        }
+        dev::Elem::Hsi => {
+            let dest = g.dest;
+            mfd::hsi_pane(&g.ac, r, &mut g.mfd, dest);
             None
         }
         dev::Elem::Nd => {

@@ -42,6 +42,7 @@ pub struct MfdActions {
 /// Hauteur de la rangée de boutons au-dessus de l'écran.
 const BEZEL_TOP: f32 = 58.0;
 
+#[allow(dead_code)]
 pub struct Layout {
     pub pfd: Rect,
     pub svs: Rect,
@@ -86,6 +87,7 @@ pub fn display_rect(r: Rect) -> Rect {
 /// Rapport largeur / hauteur de l'écran du cockpit (lunette comprise).
 pub const COCKPIT_ASPECT: f32 = 1.30;
 
+#[allow(dead_code)]
 pub fn layout(r: Rect) -> (Rect, Layout, [Rect; 3]) {
     let d = display_rect(r);
     let pfd_r = Rect::new(d.x + 5.0, d.y + 5.0, d.w - 10.0, (d.h * 0.71).floor());
@@ -97,6 +99,52 @@ pub fn layout(r: Rect) -> (Rect, Layout, [Rect; 3]) {
 }
 
 #[allow(clippy::too_many_arguments)]
+/// Horizon complet dans le rectangle `r` (même rendu que l'écran du cockpit) : vision synthétique,
+/// ressenti, météo 3D, radar météo, PFD, repère et directeur de ravitaillement, réticule caméra,
+/// bandeau d'approche.
+#[allow(clippy::too_many_arguments)]
+pub fn draw_horizon(world: &World, tiles: &mut crate::tiles::Tiles, wx: &crate::weather::Weather, rf: &crate::refuel::Refuel, ac: &Aircraft, recon: &crate::recon::Recon, r: Rect, st: &mut MfdState, info: &PfdInfo, style: SvsStyle, time: f64, feel: &crate::feel::Feel) -> View {
+    let svs_r = pfd::svs_rect(r);
+    let inner = pfd::geo(r).inner;
+    let view = svs::draw_svs(world, tiles, wx, rf, ac, svs_r, time, style, feel.cam());
+    feel.draw_overlay(ac, svs_r, time);
+    crate::wx3d::draw(wx, ac, &view, time);
+    st.wxr.update(wx, ac, wxr_range(st), get_frame_time());
+    st.wxr.draw_horizon(ac, &view, time);
+    crate::pfd_plus::set_inner(inner);
+    pfd::draw_pfd(ac, &view, r, info);
+    if let Some(t) = &rf.tanker {
+        if !ac.on_ground && !matches!(rf.phase, crate::refuel::Phase::Precontact | crate::refuel::Phase::Contact) {
+            scissor(Some(svs_r));
+            crate::pfd_plus::cue(ac, &view, &crate::pfd_plus::Cue { lat: t.lat, lon: t.lon, elev: t.alt, label: format!("{} FL{:.0}", t.callsign, t.alt / FT / 100.0), color: Color::new(0.4, 0.85, 1.0, 1.0) }, 2);
+            scissor(None);
+        }
+    }
+    crate::refuel::draw_hud(rf, ac, inner, time);
+    if info.mishap.is_none() {
+        crate::recon::draw_cam_hud(ac, recon, inner, time);
+        crate::appr::draw(ac, inner, time);
+    }
+    view
+}
+
+/// Volet CARBURANT (vrai si VIDANGE cliqué).
+pub fn fuel_pane(ac: &Aircraft, r: Rect) -> bool {
+    draw_fuel(ac, r)
+}
+
+/// Volet CAMERA de reconnaissance.
+pub fn camera_pane(ac: &Aircraft, recon: &crate::recon::Recon, tiles: &mut crate::tiles::Tiles, r: Rect) -> Option<crate::recon::CamAction> {
+    pane_frame(r);
+    crate::recon::draw_camera(ac, recon, tiles, r)
+}
+
+/// Volet HSI.
+pub fn hsi_pane(ac: &Aircraft, r: Rect, st: &mut MfdState, dest: usize) {
+    draw_hsi(ac, r, st, dest);
+}
+
+#[allow(dead_code)]
 #[allow(clippy::too_many_arguments)]
 pub fn draw_mfd(world: &World, tiles: &mut crate::tiles::Tiles, wx: &crate::weather::Weather, rf: &crate::refuel::Refuel, ac: &Aircraft, recon: &crate::recon::Recon, r: Rect, st: &mut MfdState, info: &PfdInfo, style: SvsStyle, time: f64, lit: [bool; 6], feel: &crate::feel::Feel) -> (View, MfdActions) {
     let mut act = MfdActions { bezel: bezel(r, lit, time), ..Default::default() };

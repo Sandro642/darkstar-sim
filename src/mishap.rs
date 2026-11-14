@@ -373,6 +373,7 @@ fn dms(v: f64, pos: char, neg: char) -> String {
 }
 
 /// Croix rouge d'écran sans source de données (comme sur un afficheur réel).
+#[allow(dead_code)]
 pub fn red_x(r: Rect, fill: bool) {
     if fill {
         draw_rectangle(r.x, r.y, r.w, r.h, BLACK);

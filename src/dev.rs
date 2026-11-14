@@ -52,9 +52,12 @@ pub enum Elem {
     Mcdu,
     Incendie,
     Limites,
+    Carburant,
+    Camera,
+    Hsi,
 }
 
-pub const ELEMS: [(Elem, &str); 13] = [
+pub const ELEMS: [(Elem, &str); 16] = [
     (Elem::Horizon, "HORIZON"),
     (Elem::DonneesMoteur, "DONNEES MOTEUR"),
     (Elem::Systemes, "SYSTEMES"),
@@ -68,6 +71,9 @@ pub const ELEMS: [(Elem, &str); 13] = [
     (Elem::Mcdu, "MCDU"),
     (Elem::Incendie, "INCENDIE"),
     (Elem::Limites, "LIMITES"),
+    (Elem::Carburant, "CARBURANT"),
+    (Elem::Camera, "CAMERA"),
+    (Elem::Hsi, "HSI"),
 ];
 
 pub fn elem_name(e: Elem) -> &'static str {
@@ -165,10 +171,12 @@ fn default_wins() -> Vec<Win> {
 }
 
 fn default_widgets() -> Vec<Widget> {
+    // Écran standard du cockpit : horizon, puis carburant, caméra et HSI
     vec![
-        Widget { elem: Elem::Horizon, r: [0.0, 0.0, 0.70, 1.0] },
-        Widget { elem: Elem::DonneesMoteur, r: [0.70, 0.0, 0.30, 0.5] },
-        Widget { elem: Elem::Alarmes, r: [0.70, 0.5, 0.30, 0.5] },
+        Widget { elem: Elem::Horizon, r: [0.0, 0.0, 1.0, 0.71] },
+        Widget { elem: Elem::Carburant, r: [0.0, 0.71, 0.333, 0.29] },
+        Widget { elem: Elem::Camera, r: [0.333, 0.71, 0.334, 0.29] },
+        Widget { elem: Elem::Hsi, r: [0.667, 0.71, 0.333, 0.29] },
     ]
 }
 
@@ -178,6 +186,12 @@ fn kind_of(name: &str) -> Option<WinKind> {
 
 fn elem_of(name: &str) -> Option<Elem> {
     ELEMS.iter().find(|e| e.1.replace(' ', "_") == name).map(|e| e.0)
+}
+
+impl Default for DevUi {
+    fn default() -> Self {
+        DevUi { wins: default_wins(), widgets: default_widgets(), page: Page::Horizon, menu: None, drag: None, work: Rect::new(0.0, BAR_H, 1.0, 1.0), main_screen: true }
+    }
 }
 
 impl DevUi {
@@ -471,7 +485,7 @@ impl DevUi {
         // Palette
         draw_rectangle(pal.x, pal.y, pal.w, pal.h, Color::new(0.12, 0.13, 0.15, 1.0));
         txt("ELEMENTS", pal.x + 8.0, pal.y + 16.0, 11.0, Color::new(0.7, 0.74, 0.78, 1.0));
-        let ih = ((pal.h - 90.0) / ELEMS.len() as f32).min(26.0);
+        let ih = ((pal.h - 60.0) / ELEMS.len() as f32).min(26.0);
         for (k, (e, l)) in ELEMS.iter().enumerate() {
             let b = Rect::new(pal.x + 6.0, pal.y + 24.0 + k as f32 * ih, pal.w - 12.0, ih - 3.0);
             draw_rectangle(b.x, b.y, b.w, b.h, if hovered(b) { Color::new(0.2, 0.36, 0.5, 1.0) } else { Color::new(0.2, 0.22, 0.25, 1.0) });
@@ -479,14 +493,6 @@ impl DevUi {
             if self.menu.is_none() && is_mouse_button_pressed(MouseButton::Left) && b.contains(m) && self.drag.is_none() {
                 self.drag = Some(Drag::Palette { elem: *e });
             }
-        }
-        // Écran principal de la version normale : page composée ou disposition standard
-        let mb = Rect::new(pal.x + 6.0, pal.y + pal.h - 60.0, pal.w - 12.0, 24.0);
-        draw_rectangle(mb.x, mb.y, mb.w, mb.h, if self.main_screen { Color::new(0.1, 0.45, 0.3, 1.0) } else if hovered(mb) { Color::new(0.25, 0.27, 0.3, 1.0) } else { Color::new(0.2, 0.22, 0.25, 1.0) });
-        txt_c(if self.main_screen { "ECRAN PRINCIPAL : PAGE COMPOSEE" } else { "ECRAN PRINCIPAL : STANDARD" }, mb.x + mb.w / 2.0, mb.y + 16.0, 9.0, WHITE);
-        if self.menu.is_none() && clicked(mb) {
-            self.main_screen = !self.main_screen;
-            self.save();
         }
         let rb = Rect::new(pal.x + 6.0, pal.y + pal.h - 30.0, pal.w - 12.0, 24.0);
         draw_rectangle(rb.x, rb.y, rb.w, rb.h, if hovered(rb) { Color::new(0.5, 0.25, 0.2, 1.0) } else { Color::new(0.3, 0.2, 0.18, 1.0) });
