@@ -33,7 +33,6 @@ pub enum MenuAction {
     ApuStop,
     ApuGen(bool),
     ApuBleed(bool),
-    EngStart(usize),
 }
 
 pub struct BitState {
@@ -124,7 +123,7 @@ pub fn draw_menu(ac: &Aircraft, bit: &BitState, r_all: Rect, time: f64) -> Optio
     let right = RIGHT.with(|c| c.get());
     let bh = 24.0;
     let half = (r_all.w - 6.0) / 2.0;
-    for (k, l) in ["CONSOLE GAUCHE / CENTRE", "PANNEAU DROIT - START / APU"].iter().enumerate() {
+    for (k, l) in ["CONSOLE GAUCHE / CENTRE", "PANNEAU DROIT - APU"].iter().enumerate() {
         let b = Rect::new(r_all.x + k as f32 * (half + 6.0), r_all.y, half, bh);
         let on = (k == 1) == right;
         rrect(b, 5.0, if on { Color::new(0.10, 0.16, 0.22, 1.0) } else if hovered(b) { Color::new(0.08, 0.10, 0.13, 1.0) } else { Color::new(0.06, 0.075, 0.095, 1.0) });
@@ -366,17 +365,16 @@ pub fn draw_platines(ac: &Aircraft, bit: &BitState, r: Rect, time: f64) -> Optio
 }
 
 
-/// Panneau droit de la console : démarrage moteurs et APU. APU MASTER, START (START / AVAIL),
-/// GEN, BLEED, cadrans N et EGT ; source d'air ; START L / START R ; check-list de démarrage.
+/// Panneau droit de la console : APU. MASTER, START (START / AVAIL), GEN, BLEED, cadrans N et EGT,
+/// check-list de démarrage de l'APU.
 pub fn right_console(ac: &Aircraft, r: Rect, time: f64) -> Option<MenuAction> {
     use crate::apu::ApuState;
     let mut out = None;
-    panel(r, "R CONSOLE - START / APU");
+    panel(r, "R CONSOLE - APU");
     let a = &ac.apu;
-    let e = &ac.eng;
     let white = Color::new(0.95, 0.95, 0.9, 1.0);
     // --- APU ---
-    let p = Rect::new(r.x + 8.0, r.y + 30.0, r.w - 16.0, (r.h - 40.0) * 0.50);
+    let p = Rect::new(r.x + 8.0, r.y + 30.0, r.w - 16.0, r.h - 40.0);
     plate(p, "APU");
     let x0 = p.x + 40.0;
     let w = p.w - 50.0;
@@ -408,7 +406,7 @@ pub fn right_console(ac: &Aircraft, r: Rect, time: f64) -> Option<MenuAction> {
     txt_c(if a.bleed_air() { "AIR" } else if a.bleed { "ON" } else { "OFF" }, col(0.90), yt + 44.0, 11.0, if a.bleed_air() { GREEN_S } else { LEGEND });
     // Cadrans N et EGT
     let gy = (yt + 66.0 + 30.0).min(p.y + p.h - 26.0);
-    let gr = 22.0f32.min((p.h - (gy - p.y)) - 6.0).max(14.0);
+    let gr = 26.0f32;
     for (k, (name, frac, red, val)) in [("N %", a.n as f32, 1.02, format!("{:.0}", a.n * 100.0)), ("EGT C", (a.egt / 800.0) as f32, 0.85, format!("{:.0}", a.egt))].iter().enumerate() {
         let cx = col(0.28 + k as f32 * 0.44);
         crate::ui::arc_gauge(cx, gy, gr, frac.clamp(0.0, 1.05), *red);
@@ -422,47 +420,15 @@ pub fn right_console(ac: &Aircraft, r: Rect, time: f64) -> Option<MenuAction> {
         ApuState::Off => ("APU OFF", DIM),
     };
     txt_r(st.0, p.x + p.w - 30.0, p.y + p.h - 12.0, 11.0, st.1);
-    // --- ENGINE START ---
-    let q = Rect::new(r.x + 8.0, p.y + p.h + 8.0, r.w - 16.0, r.y + r.h - (p.y + p.h + 8.0) - 8.0);
-    plate(q, "ENGINE START");
-    let x0 = q.x + 40.0;
-    let w = q.w - 50.0;
-    let col = |f: f32| x0 + w * f;
-    // Source d'air de démarrage
-    let (air, ac_col) = if a.bleed_air() { ("AIR : APU", GREEN_S) } else if !ac.on_ground { ("AIR : MOULINET", LEGEND) } else { ("AIR : PARC (45 S)", AMBER) };
-    txt_c(air, col(0.5), q.y + 22.0, 12.0, ac_col);
-    let yb = q.y + 36.0;
-    for i in 0..2 {
-        let f = if i == 0 { 0.22 } else { 0.78 };
-        txt_c(["START L", "START R"][i], col(f), yb + 6.0, 12.0, LEGEND);
-        let starting = e.side[i] == TurbState::Starting;
-        let running = e.side[i] == TurbState::Running;
-        if pushbutton(Rect::new(col(f) - 31.0, yb + 14.0, 62.0, 44.0), "START", (starting && blink).then_some(white), "RUN", running.then_some(GREEN_S)) {
-            out = Some(MenuAction::EngStart(i));
-        }
-        let (s, c) = match e.side[i] {
-            TurbState::Running => (format!("N2 {:.0}%", e.n2s[i] * 104.0), GREEN_S),
-            TurbState::Starting => (format!("N2 {:.0}%", e.n2s[i] * 104.0), AMBER),
-            TurbState::Failed => ("FAIL".into(), RED),
-            TurbState::Off => ("OFF".into(), DIM),
-        };
-        txt_c(&s, col(f), yb + 72.0, 11.0, c);
-    }
-    // Check-list de démarrage
-    let steps: [(&str, bool); 5] = [
-        ("APU MASTER ON", a.master),
-        ("APU START -> AVAIL", avail),
-        ("APU BLEED ON", a.bleed_air()),
-        ("START L -> RUN", e.side[0] == TurbState::Running),
-        ("START R -> RUN", e.side[1] == TurbState::Running),
-    ];
-    let mut y = yb + 92.0;
+    // Check-list APU
+    let steps: [(&str, bool); 3] = [("APU MASTER ON", a.master), ("APU START -> AVAIL", avail), ("APU BLEED ON (AIR DE DEMARRAGE)", a.bleed_air())];
+    let mut y = gy + gr + 34.0;
     for (k, (l, ok)) in steps.iter().enumerate() {
-        if y + 4.0 > q.y + q.h - 6.0 {
+        if y + 4.0 > p.y + p.h - 24.0 {
             break;
         }
-        txt(&format!("{} {l}", k + 1), q.x + 40.0, y, 11.0, if *ok { GREEN_S } else { DIM });
-        txt_r(if *ok { "OK" } else { "--" }, q.x + q.w - 12.0, y, 11.0, if *ok { GREEN_S } else { DIM });
+        txt(&format!("{} {l}", k + 1), p.x + 64.0, y, 11.0, if *ok { GREEN_S } else { DIM });
+        txt_r(if *ok { "OK" } else { "--" }, p.x + p.w - 40.0, y, 11.0, if *ok { GREEN_S } else { DIM });
         y += 15.0;
     }
     out

@@ -822,3 +822,5 @@ Le SR-72 est un avion de reconnaissance : sa charge utile est simulée.
 - v1.60.3 : clavier — il n'est envoyé au MCDU que si le MCDU est affiché et a le focus (clic sur son
   écran ; clic ailleurs ou Échap le libère). Corrige la version développeur où, après la page MCDU,
   plus aucune touche ne fonctionnait.
+- v1.60.4 : panneau droit de la console = APU seul (MASTER, START, GEN, BLEED, cadrans N / EGT,
+  check-list APU) ; démarrages moteur gauche / droit retirés.

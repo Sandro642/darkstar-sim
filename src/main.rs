@@ -629,7 +629,6 @@ impl Game {
                     self.push(Level::Caution, "APU START : METTRE D'ABORD APU MASTER SUR ON");
                 }
             }
-            EngStart(i) => self.ac.cmd_start_one(i),
             ApuStop => self.exec_command("APU STOP"),
             ApuGen(on) => self.exec_command(if on { "APU GEN ON" } else { "APU GEN OFF" }),
             ApuBleed(on) => self.exec_command(if on { "APU BLEED ON" } else { "APU BLEED OFF" }),
@@ -1932,7 +1931,7 @@ impl Game {
             "PANNEAU" | "CONSOLE" if matches!(arg(1), "DROIT" | "DROITE") => {
                 menu::show_right(true);
                 self.tab = gcs::Tab::Console;
-                reply = Ok("CONSOLE : PANNEAU DROIT (START / APU)".into());
+                reply = Ok("CONSOLE : PANNEAU DROIT (APU)".into());
             }
             // APU : APU START|ON / STOP|OFF / GEN ON|OFF / BLEED ON|OFF
             "APU" => {

@@ -758,24 +758,6 @@ impl Aircraft {
         }
     }
 
-    /// Démarrage d'une seule turbine (panneau droit : START L / START R).
-    pub fn cmd_start_one(&mut self, i: usize) {
-        let n = ["L", "R"][i];
-        if matches!(self.eng.side[i], TurbState::Running | TurbState::Starting) {
-            self.msg(Level::Info, format!("ENG {n} : DEJA EN MARCHE"));
-            return;
-        }
-        self.eng.sw[i] = EngSw::On;
-        match self.start_refusal(i) {
-            None => {
-                self.eng.side[i] = TurbState::Starting;
-                let air = if self.apu.bleed_air() { "AIR APU" } else if self.on_ground { "AIR DE PARC (APU NON DISPONIBLE, 45 S)" } else { "MOULINET" };
-                self.msg(Level::Info, format!("ENG {n} : SEQUENCE DE DEMARRAGE — {air}"));
-            }
-            Some(r) => self.msg(Level::Caution, format!("DEMARRAGE REFUSE : {r}")),
-        }
-    }
-
     /// Bouton STOP : coupure carburant des deux turbines.
     pub fn cmd_stop(&mut self) {
         let mut any = false;
