@@ -819,3 +819,6 @@ Le SR-72 est un avion de reconnaissance : sa charge utile est simulée.
   démarrage. Instruction PANNEAU DROIT.
 - v1.60.2 : version développeur — fenêtre PANNEAU DROIT = panneau droit de la console (START / APU,
   check-list) et nouvelle fenêtre PANNEAU GAUCHE (platines ENGINE/APU, FLT CNTRL, SYS).
+- v1.60.3 : clavier — il n'est envoyé au MCDU que si le MCDU est affiché et a le focus (clic sur son
+  écran ; clic ailleurs ou Échap le libère). Corrige la version développeur où, après la page MCDU,
+  plus aucune touche ne fonctionnait.

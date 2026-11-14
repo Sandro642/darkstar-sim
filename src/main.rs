@@ -137,6 +137,8 @@ struct Game {
     escort: escort::Escort,
     /// Version développeur (instruction DEV)
     dev: Option<dev::DevUi>,
+    /// MCDU affiché à l'image précédente (le clavier ne lui est envoyé que s'il est visible)
+    mcdu_seen: bool,
     /// Page 1 composée (CONFIG) pour l'écran principal de la version normale
     layout: dev::DevUi,
     combat: combat::Combat,
@@ -320,6 +322,7 @@ impl Game {
             refuel: refuel::Refuel::new(),
             escort: escort::Escort::new(),
             dev: None,
+            mcdu_seen: false,
             layout: dev::DevUi::new(),
             combat: combat::Combat::new(),
             emerg: emergency::Emergency::new(),
@@ -2808,7 +2811,7 @@ async fn main() {
                 g.console = None;
             }
             g.stick = (0.0, 0.0);
-        } else if g.tab == gcs::Tab::Mcdu && g.fms.focus && !g.ended && g.connect.is_none() {
+        } else if g.mcdu_seen && g.fms.focus && !g.ended && g.connect.is_none() {
             // Saisie MCDU : les touches alphanumériques vont dans la ligne de saisie
             while let Some(ch) = get_char_pressed() {
                 let c = ch.to_ascii_uppercase();
@@ -2892,6 +2895,7 @@ async fn main() {
         }
 
         // --- Mise en page ---
+        g.mcdu_seen = false;
         tiles.begin_frame();
         clear_background(ui::BG);
         let (sw, sh) = (screen_width(), screen_height());
@@ -3201,6 +3205,11 @@ fn draw_tab_page(g: &mut Game, tab: gcs::Tab, cr: Rect, alerts: &[(Level, String
         }
         gcs::Tab::Moteurs => panels::draw_engines(&g.ac, &g.chambers, cr, time),
         gcs::Tab::Mcdu => {
+            g.mcdu_seen = true;
+            // Clic hors du MCDU : il rend le clavier (raccourcis, pilotage) ; clic sur l'écran : focus
+            if is_mouse_button_pressed(MouseButton::Left) && !cr.contains(mouse_position().into()) {
+                g.fms.focus = false;
+            }
             if let Some(k) = fms::draw_mcdu(&g.fms, &g.ac, cr, time) {
                 g.mcdu_key(k);
             }
@@ -3392,10 +3401,6 @@ fn draw_screen(g: &mut Game, d: &mut dev::DevUi, cr: Rect, world: &world::World,
             }
         }
         (_, Some(t)) => {
-            // Saisie MCDU au clavier quand la page MCDU est affichée
-            if t == gcs::Tab::Mcdu {
-                g.tab = gcs::Tab::Mcdu;
-            }
             match draw_tab_page(g, t, area, alerts, tiles, time) {
                 Some(gcs::Tab::Armement) => d.page = dev::Page::Armement,
                 Some(gcs::Tab::Moteurs) => d.page = dev::Page::DonneesMoteur,
