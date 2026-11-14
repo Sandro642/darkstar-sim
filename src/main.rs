@@ -137,6 +137,8 @@ struct Game {
     escort: escort::Escort,
     /// Version développeur (instruction DEV)
     dev: Option<dev::DevUi>,
+    /// Page 1 composée (CONFIG) pour l'écran principal de la version normale
+    layout: dev::DevUi,
     combat: combat::Combat,
     emerg: emergency::Emergency,
     /// Liaison de données avec le Darkstar contrôlé (relais, perte, reconnexion).
@@ -318,6 +320,7 @@ impl Game {
             refuel: refuel::Refuel::new(),
             escort: escort::Escort::new(),
             dev: None,
+            layout: dev::DevUi::new(),
             combat: combat::Combat::new(),
             emerg: emergency::Emergency::new(),
             link: link::Link::new(),
@@ -1894,6 +1897,7 @@ impl Game {
             "DEV" => {
                 if self.dev.is_some() || arg(1) == "OFF" {
                     self.dev = None;
+                    self.layout = dev::DevUi::new();
                     pfd::hide_menu(false);
                     reply = Ok("VERSION SIMULATEUR".into());
                 } else {
@@ -2875,6 +2879,7 @@ async fn main() {
             let quit = draw_dev(&mut g, &mut d, &world, &mut tiles, &alerts, sw, sh, time, &ln, lat, warp_eff, master_warn, master_caut);
             if quit {
                 pfd::hide_menu(false);
+                g.layout = dev::DevUi::new();
                 g.push(Level::Info, "VERSION SIMULATEUR");
             } else {
                 g.dev = Some(d);
@@ -2891,11 +2896,32 @@ async fn main() {
             let lit: [bool; 6] = std::array::from_fn(|i| g.tab == BEZEL_PAGES[i]);
             let info = pfd_info(&g, &alerts, &ln, lat, warp_eff, time);
             let shown = g.stale.as_ref().unwrap_or(&g.ac);
-            let (_, act) = mfd::draw_mfd(&world, &mut tiles, &g.wx, &g.refuel, shown, &g.recon, mfd_r, &mut g.mfd, &info, g.style, time, lit, &g.feel);
-            drop(info);
-            handle_mfd(&mut g, act);
-            let lay = mfd::layout(mfd_r).1;
-            let svs_r = lay.inner;
+            let composed = g.layout.main_screen && !g.layout.widgets.is_empty();
+            let (svs_r, pfd_r) = if composed {
+                // Écran principal : page 1 composée dans l'afficheur, lunette conservée
+                drop(info);
+                let bez = mfd::bezel_only(mfd_r, lit, time);
+                handle_mfd(&mut g, mfd::MfdActions { bezel: bez, ..Default::default() });
+                let disp = mfd::display_rect(mfd_r);
+                draw_rectangle(disp.x, disp.y, disp.w, disp.h, BLACK);
+                let elems = g.layout.page1(disp);
+                for (e, r) in &elems {
+                    ui::scissor(Some(*r));
+                    draw_elem(&mut g, *e, *r, &world, &mut tiles, &alerts, time, &ln, lat, warp_eff);
+                    ui::scissor(None);
+                    draw_rectangle_lines(r.x, r.y, r.w, r.h, 1.0, Color::new(0.25, 0.27, 0.3, 1.0));
+                }
+                match elems.iter().find(|(e, _)| *e == dev::Elem::Horizon) {
+                    Some((_, r)) => (pfd::geo(*r).inner, *r),
+                    None => (disp, disp),
+                }
+            } else {
+                let (_, act) = mfd::draw_mfd(&world, &mut tiles, &g.wx, &g.refuel, shown, &g.recon, mfd_r, &mut g.mfd, &info, g.style, time, lit, &g.feel);
+                drop(info);
+                handle_mfd(&mut g, act);
+                let lay = mfd::layout(mfd_r).1;
+                (lay.inner, lay.pfd)
+            };
             draw_console(&g, svs_r);
             // Écran noir : reconnexion automatique par le canal d'urgence ; nouvel essai après échec
             if g.mishap.as_ref().is_some_and(|m| m.draw_los(svs_r)) {
@@ -2954,7 +2980,7 @@ async fn main() {
                 }
             }
             // Bouton MENU du PFD : ouvre l'onglet CONSOLE
-            let menu_btn = pfd::menu_rect(lay.pfd);
+            let menu_btn = pfd::menu_rect(pfd_r);
             if g.tab == gcs::Tab::Console {
                 draw_rectangle_lines(menu_btn.x - 1.0, menu_btn.y - 1.0, menu_btn.w + 2.0, menu_btn.h + 2.0, 2.0, ui::ACCENT);
             }
@@ -3215,6 +3241,8 @@ fn draw_tab_page(g: &mut Game, tab: gcs::Tab, cr: Rect, alerts: &[(Level, String
             }
         }
         gcs::Tab::Fcs => fcs::draw_fcs(&g.ac, cr),
+        // Composition de la page 1 (écran principal) : canevas et palette
+        gcs::Tab::Config => g.layout.config(cr),
         // Panneau droit : boutons moteurs et APU
         gcs::Tab::Apu => {
             if let Some(c) = dev::right_panel(&g.ac, cr) {

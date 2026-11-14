@@ -74,7 +74,12 @@ fn bezel(r: Rect, lit: [bool; 6], time: f64) -> Option<usize> {
     out
 }
 
-fn display_rect(r: Rect) -> Rect {
+/// Lunette seule (boutons de page) : bouton cliqué ; l'afficheur est rempli par l'appelant.
+pub fn bezel_only(r: Rect, lit: [bool; 6], time: f64) -> Option<usize> {
+    bezel(r, lit, time)
+}
+
+pub fn display_rect(r: Rect) -> Rect {
     Rect::new(r.x + 14.0, r.y + BEZEL_TOP, r.w - 28.0, r.h - BEZEL_TOP - 14.0)
 }
 

@@ -139,6 +139,8 @@ pub struct DevUi {
     drag: Option<Drag>,
     /// Zone de travail de la dernière image (sous la barre)
     work: Rect,
+    /// Version normale : l'écran principal affiche la page 1 composée
+    pub main_screen: bool,
 }
 
 pub const BAR_H: f32 = 30.0;
@@ -180,7 +182,7 @@ fn elem_of(name: &str) -> Option<Elem> {
 
 impl DevUi {
     pub fn new() -> DevUi {
-        let mut d = DevUi { wins: default_wins(), widgets: default_widgets(), page: Page::Horizon, menu: None, drag: None, work: Rect::new(0.0, BAR_H, 1.0, 1.0) };
+        let mut d = DevUi { wins: default_wins(), widgets: default_widgets(), page: Page::Horizon, menu: None, drag: None, work: Rect::new(0.0, BAR_H, 1.0, 1.0), main_screen: false };
         d.load();
         d
     }
@@ -198,6 +200,7 @@ impl DevUi {
                         wins.push(Win { kind: k, r: [x, y, w, h], open: f.get(6) == Some(&"1") });
                     }
                 }
+                Some(&"M") => self.main_screen = f.get(1) == Some(&"1"),
                 Some(&"E") => {
                     if let (Some(e), Some(x), Some(y), Some(w), Some(h)) = (f.get(1).and_then(|n| elem_of(n)), num(2), num(3), num(4), num(5)) {
                         wids.push(Widget { elem: e, r: [x, y, w, h] });
@@ -223,6 +226,7 @@ impl DevUi {
         for w in &self.wins {
             s.push_str(&format!("W {} {:.4} {:.4} {:.4} {:.4} {}\n", win_name(w.kind).replace(' ', "_"), w.r[0], w.r[1], w.r[2], w.r[3], w.open as u8));
         }
+        s.push_str(&format!("M {}\n", self.main_screen as u8));
         for e in &self.widgets {
             s.push_str(&format!("E {} {:.4} {:.4} {:.4} {:.4}\n", elem_name(e.elem).replace(' ', "_"), e.r[0], e.r[1], e.r[2], e.r[3]));
         }
@@ -467,7 +471,7 @@ impl DevUi {
         // Palette
         draw_rectangle(pal.x, pal.y, pal.w, pal.h, Color::new(0.12, 0.13, 0.15, 1.0));
         txt("ELEMENTS", pal.x + 8.0, pal.y + 16.0, 11.0, Color::new(0.7, 0.74, 0.78, 1.0));
-        let ih = ((pal.h - 60.0) / ELEMS.len() as f32).min(26.0);
+        let ih = ((pal.h - 90.0) / ELEMS.len() as f32).min(26.0);
         for (k, (e, l)) in ELEMS.iter().enumerate() {
             let b = Rect::new(pal.x + 6.0, pal.y + 24.0 + k as f32 * ih, pal.w - 12.0, ih - 3.0);
             draw_rectangle(b.x, b.y, b.w, b.h, if hovered(b) { Color::new(0.2, 0.36, 0.5, 1.0) } else { Color::new(0.2, 0.22, 0.25, 1.0) });
@@ -475,6 +479,14 @@ impl DevUi {
             if self.menu.is_none() && is_mouse_button_pressed(MouseButton::Left) && b.contains(m) && self.drag.is_none() {
                 self.drag = Some(Drag::Palette { elem: *e });
             }
+        }
+        // Écran principal de la version normale : page composée ou disposition standard
+        let mb = Rect::new(pal.x + 6.0, pal.y + pal.h - 60.0, pal.w - 12.0, 24.0);
+        draw_rectangle(mb.x, mb.y, mb.w, mb.h, if self.main_screen { Color::new(0.1, 0.45, 0.3, 1.0) } else if hovered(mb) { Color::new(0.25, 0.27, 0.3, 1.0) } else { Color::new(0.2, 0.22, 0.25, 1.0) });
+        txt_c(if self.main_screen { "ECRAN PRINCIPAL : PAGE COMPOSEE" } else { "ECRAN PRINCIPAL : STANDARD" }, mb.x + mb.w / 2.0, mb.y + 16.0, 9.0, WHITE);
+        if self.menu.is_none() && clicked(mb) {
+            self.main_screen = !self.main_screen;
+            self.save();
         }
         let rb = Rect::new(pal.x + 6.0, pal.y + pal.h - 30.0, pal.w - 12.0, 24.0);
         draw_rectangle(rb.x, rb.y, rb.w, rb.h, if hovered(rb) { Color::new(0.5, 0.25, 0.2, 1.0) } else { Color::new(0.3, 0.2, 0.18, 1.0) });

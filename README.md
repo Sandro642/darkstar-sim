@@ -803,3 +803,7 @@ Le SR-72 est un avion de reconnaissance : sa charge utile est simulée.
 - v1.58.1 : version développeur — le glisser-déposer depuis la palette (page CONFIG) pose bien
   l'élément au relâchement. Version normale : onglet APU (panneau droit : turbines, entrées d'air,
   stato, scram, APU MASTER / START, GEN, BLEED, jauges N / EGT).
+- v1.59.0 : version normale — onglet CONFIG (canevas et palette d'éléments à glisser-déposer,
+  composition commune avec la version développeur) et bascule ECRAN PRINCIPAL : PAGE COMPOSEE /
+  STANDARD ; en page composée, l'afficheur du cockpit (lunette conservée) affiche les éléments
+  choisis à la place de la disposition standard.
