@@ -704,7 +704,8 @@ impl Sfx {
         // Toucher : crissement selon la vitesse sol, impact selon le taux de chute
         if let Some((gs_kt, sink_fpm)) = touch {
             self.once(&self.screech, (gs_kt / 180.0).clamp(0.2, 0.75));
-            self.once(&self.thump, (0.35 + sink_fpm / 900.0).clamp(0.35, 1.0));
+            // Butter : à peine un frottement ; posé dur : choc des amortisseurs
+            self.once(&self.thump, (0.08 + sink_fpm / 700.0).clamp(0.08, 1.0));
         }
         if nose_down {
             self.once(&self.nose, 0.6);

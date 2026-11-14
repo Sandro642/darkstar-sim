@@ -83,7 +83,7 @@ pub static BY_SIZE: std::sync::LazyLock<Vec<usize>> = std::sync::LazyLock::new(|
 
 /// Piste sous l'avion (au sol) : aérodrome, désignation dans le sens `hdg`, longueur totale et
 /// longueur restante devant l'avion (m). None hors des pistes (taxiway, parking).
-pub fn runway_under(lat: f64, lon: f64, hdg: f64) -> Option<(&'static Airport, String, f64, f64)> {
+pub fn runway_under(lat: f64, lon: f64, hdg: f64) -> Option<(&'static Airport, String, f64, f64, f64)> {
     for a in near(lat, lon) {
         for (k, r) in a.runways().iter().enumerate() {
             let (e, n) = enu_offset(r.lat, r.lon, lat, lon);
@@ -95,7 +95,8 @@ pub fn runway_under(lat: f64, lon: f64, hdg: f64) -> Option<(&'static Airport, S
                 let fwd = wrap180(hdg - r.hdg).abs() < 90.0;
                 let ahead = if fwd { r.len / 2.0 - along } else { r.len / 2.0 + along };
                 let dir = if fwd { r.hdg } else { wrap360(r.hdg + 180.0) };
-                return Some((a, a.runway_ident(k, dir), r.len, ahead.clamp(0.0, r.len)));
+                let right = if fwd { cross } else { -cross };
+                return Some((a, a.runway_ident(k, dir), r.len, ahead.clamp(0.0, r.len), right));
             }
         }
     }

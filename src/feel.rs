@@ -140,7 +140,9 @@ impl Feel {
             if self.on && alive {
                 if !p.ground && ac.on_ground {
                     // Toucher : écrasement des amortisseurs proportionnel au taux de chute
-                    let k = (-p.vs).clamp(0.5, 6.0) as f32;
+                    // Butter (< 60 ft/min) : simple frémissement ; dur : écrasement sec du train
+                    let s = (-p.vs).max(0.0) as f32;
+                    let k = (s.powf(1.4) * 1.1).clamp(0.08, 8.0);
                     self.vel.y -= 11.0 * k;
                     self.vel.z += 4.0 * k * if (t * 10.0).sin() > 0.0 { 1.0 } else { -1.0 };
                     self.touch = Some(((gs / 0.514) as f32, (-p.vs / 0.3048 * 60.0) as f32));

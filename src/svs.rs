@@ -207,6 +207,102 @@ fn rw_quad(mb: &mut MeshBuilder, f: &AptFrame, a0: f64, a1: f64, c0: f64, c1: f6
     }
 }
 
+/// Côté piste : taxiway parallèle (axe jaune, feux de bord bleus), bretelles aux seuils et tous les
+/// 900 m avec marquage de point d'arrêt (2 traits pleins, 2 tiretés), aire de trafic en béton,
+/// postes de stationnement (ligne d'entrée jaune, barre d'arrêt, cadre), hangars. Détails et feux
+/// seulement à proximité.
+fn airside(mb: &mut MeshBuilder, lights: &mut Lights, f: &AptFrame, len: f64, width: f64, dist: f64, dark: bool) {
+    let (l2, w2) = (len / 2.0, width / 2.0);
+    let tw = 23.0; // largeur du taxiway
+    let tc = w2 + 172.0; // axe du taxiway parallèle
+    let tar = if dark { [96, 96, 100, 255] } else { [62, 62, 66, 255] };
+    let concrete = if dark { [128, 126, 120, 255] } else { [150, 148, 140, 255] };
+    let yellow = [235, 190, 40, 255];
+    let white = [235, 235, 235, 255];
+    let near = dist < 12_000.0;
+    // Taxiway parallèle
+    rw_quad(mb, f, -l2 - 40.0, l2 + 40.0, tc - tw / 2.0, tc + tw / 2.0, false, tar);
+    if near {
+        rw_quad(mb, f, -l2 - 40.0, l2 + 40.0, tc - 0.25, tc + 0.25, true, yellow);
+    }
+    // Bretelles : aux deux seuils puis tous les ~900 m
+    let mut exits = vec![-l2 + 15.0, l2 - 15.0];
+    let n = ((len - 600.0) / 900.0).floor().max(0.0) as i32;
+    for k in 1..=n {
+        exits.push(-l2 + len * k as f64 / (n + 1) as f64);
+    }
+    for a in exits {
+        rw_quad(mb, f, a - tw / 2.0, a + tw / 2.0, w2, tc, false, tar);
+        if near {
+            rw_quad(mb, f, a - 0.25, a + 0.25, w2 + 3.0, tc, true, yellow);
+            // Point d'arrêt avant piste (60 m de l'axe de piste) : 2 pleins côté taxiway, 2 tiretés côté piste
+            let hc = 60.0f64.max(w2 + 20.0);
+            for (k, dashed) in [(0.0, true), (0.9, true), (2.1, false), (3.0, false)] {
+                let c0 = hc + k;
+                if dashed {
+                    let mut x = a - tw / 2.0 + 1.0;
+                    while x < a + tw / 2.0 - 1.0 {
+                        rw_quad(mb, f, x, (x + 1.5).min(a + tw / 2.0 - 1.0), c0, c0 + 0.3, true, yellow);
+                        x += 3.0;
+                    }
+                } else {
+                    rw_quad(mb, f, a - tw / 2.0 + 1.0, a + tw / 2.0 - 1.0, c0, c0 + 0.3, true, yellow);
+                }
+            }
+        }
+    }
+    // Aire de trafic
+    let (ap0, ap1) = (tc + tw / 2.0, tc + tw / 2.0 + 190.0);
+    let (aa0, aa1) = (-(l2 * 0.35).min(520.0), (l2 * 0.35).min(520.0));
+    rw_quad(mb, f, aa0, aa1, ap0, ap1, false, concrete);
+    if near {
+        // Ligne de taxi d'aire de trafic, postes tous les 65 m
+        rw_quad(mb, f, aa0 + 10.0, aa1 - 10.0, ap0 + 14.0, ap0 + 14.5, true, yellow);
+        let mut x = aa0 + 45.0;
+        while x < aa1 - 40.0 {
+            // Ligne d'entrée, barre d'arrêt, cadre du poste (60 x 55 m)
+            rw_quad(mb, f, x - 0.25, x + 0.25, ap0 + 14.0, ap0 + 125.0, true, yellow);
+            rw_quad(mb, f, x - 4.0, x + 4.0, ap0 + 125.0, ap0 + 125.6, true, yellow);
+            for (c0, c1) in [(ap0 + 70.0, ap0 + 70.4), (ap0 + 150.0, ap0 + 150.4)] {
+                rw_quad(mb, f, x - 30.0, x + 30.0, c0, c1, true, white);
+            }
+            for xs in [x - 30.0, x + 29.6] {
+                rw_quad(mb, f, xs, xs + 0.4, ap0 + 70.0, ap0 + 150.4, true, white);
+            }
+            x += 65.0;
+        }
+    }
+    // Hangars en arrière de l'aire de trafic
+    if dist < 25_000.0 {
+        let wall = if dark { [70, 72, 76, 255] } else { [168, 170, 172, 255] };
+        let roof = if dark { [60, 62, 66, 255] } else { [140, 142, 146, 255] };
+        let (c0, c1, h) = (ap1 + 25.0, ap1 + 85.0, 20.0);
+        let mut x = aa0 + 30.0;
+        while x + 70.0 < aa1 {
+            let (x0, x1) = (x, x + 70.0);
+            let q = |a: f64, c: f64, z: f64| f.p(a, c, z);
+            mb.quad([q(x0, c0, 0.0), q(x1, c0, 0.0), q(x1, c0, h), q(x0, c0, h)], wall);
+            mb.quad([q(x1, c0, 0.0), q(x1, c1, 0.0), q(x1, c1, h), q(x1, c0, h)], wall);
+            mb.quad([q(x0, c1, 0.0), q(x0, c0, 0.0), q(x0, c0, h), q(x0, c1, h)], wall);
+            mb.quad([q(x0, c0, h), q(x1, c0, h), q(x1, c1, h), q(x0, c1, h)], roof);
+            // Porte du hangar (face à l'aire de trafic)
+            mb.quad([q(x0 + 8.0, c0 - 0.2, 0.0), q(x1 - 8.0, c0 - 0.2, 0.0), q(x1 - 8.0, c0 - 0.2, h * 0.75), q(x0 + 8.0, c0 - 0.2, h * 0.75)], [40, 42, 46, 255]);
+            x += 110.0;
+        }
+    }
+    // Feux de bord de taxiway (bleus)
+    if dist < 8_000.0 {
+        let blue = Color::new(0.25, 0.45, 1.0, 1.0);
+        let mut a = -l2 - 40.0;
+        while a <= l2 + 40.0 {
+            for c in [tc - tw / 2.0 - 1.0, tc + tw / 2.0 + 1.0] {
+                lights.pts.push((f.p(a, c, 0.4), blue, 1.2));
+            }
+            a += 60.0;
+        }
+    }
+}
+
 /// Segments de chiffres 7-segments : (x0, y0, x1, y1) dans une cellule 1 x 2.
 fn seg_rects(d: u32) -> Vec<(f64, f64, f64, f64)> {
     let t = 0.22;
@@ -425,14 +521,9 @@ pub fn draw_svs(world: &World, tiles: &mut Tiles, wx: &crate::weather::Weather, 
             outlines.push([f.p(-l2, -w2, 0.0), f.p(l2, -w2, 0.0), f.p(l2, w2, 0.0), f.p(-l2, w2, 0.0)]);
             let white = [235, 235, 235, 255];
             let concrete = [150, 148, 140, 255];
-            // Taxiway, aire de trafic, bretelles
-            rw_quad(&mut mb, &f, -l2, l2, w2 + 160.0, w2 + 185.0, false, [70, 70, 72, 255]);
-            let mut a = -l2 + 100.0;
-            while a < l2 {
-                rw_quad(&mut mb, &f, a - 12.0, a + 12.0, w2, w2 + 170.0, false, [70, 70, 72, 255]);
-                a += 900.0;
-            }
-            rw_quad(&mut mb, &f, -600.0, 600.0, w2 + 185.0, w2 + 380.0, false, concrete);
+            // Taxiway parallèle, bretelles, aire de trafic, postes de stationnement, hangars
+            airside(&mut mb, &mut lights, &f, rw.len, rw.width, dist, dark);
+            let _ = concrete;
             // Piste + prolongements
             let asphalt = if dark { [118, 118, 124, 255] } else { [52, 52, 55, 255] };
             rw_quad(&mut mb, &f, -l2 - 60.0, l2 + 60.0, -w2, w2, false, asphalt);

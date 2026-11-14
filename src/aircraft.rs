@@ -269,6 +269,8 @@ pub struct Aircraft {
     pub skin_temp: f64,
     /// Vitres (fenêtres capteurs, carénage avant) : température (°C), temps de surchauffe (s),
     /// état 0 intactes, 1 fissurées, 2 rompues ; surchauffe moteur annoncée
+    /// Dernier toucher : (vario ft/min, g, KEAS, distance au seuil m, écart à l'axe m, âge s)
+    pub last_landing: Option<(f64, f64, f64, f64, f64, f64)>,
     pub win_temp: f64,
     pub win_hot_t: f64,
     pub win_state: u8,
@@ -478,6 +480,7 @@ impl Aircraft {
                 scram_wall: 15.0,
             },
             skin_temp: 293.0,
+            last_landing: None,
             win_temp: 20.0,
             win_hot_t: 0.0,
             win_state: 0,
@@ -825,6 +828,24 @@ impl Aircraft {
 
     /// Configuration d'atterrissage : train sorti en vol, en approche (ILS / autoland) ou à moins
     /// de 12 NM d'un aérodrome. Les alarmes de rapprochement du sol (PULL UP) y sont inhibées.
+    /// Fiche du dernier toucher (affichée quelques secondes sur l'horizon).
+    pub fn landing_rating(fpm: f64) -> (&'static str, Level) {
+        let s = -fpm;
+        if s <= 60.0 {
+            ("BUTTER", Level::Info)
+        } else if s <= 120.0 {
+            ("TRES DOUX", Level::Info)
+        } else if s <= 240.0 {
+            ("BON", Level::Info)
+        } else if s <= 400.0 {
+            ("FERME", Level::Info)
+        } else if s <= 600.0 {
+            ("DUR", Level::Caution)
+        } else {
+            ("TRES DUR — INSPECTION TRAIN", Level::Warning)
+        }
+    }
+
     pub fn landing_config(&self) -> bool {
         self.gear_down
             && !self.on_ground
@@ -1059,6 +1080,9 @@ impl Aircraft {
     pub fn step(&mut self, dt: f64, pitch_in: f64, roll_in: f64) {
         if self.crashed.is_some() {
             return;
+        }
+        if let Some(l) = self.last_landing.as_mut() {
+            l.5 += dt;
         }
         let elev = ground_elev(self.lat, self.lon);
         let air = isa(self.alt);
@@ -1503,10 +1527,11 @@ impl Aircraft {
         // --- Aérodynamique ---
         let a_stall = 20f64.to_radians();
         let mut cl = if alpha <= a_stall { cla * alpha } else { cla * a_stall * (1.0 - (alpha - a_stall) * 2.0).max(0.3) };
-        if agl < 30.0 {
-            cl *= 1.0 + 0.15 * (1.0 - agl.max(0.0) / 30.0);
-        }
-        let k_ind = if mach < 0.9 { 0.22 } else { (1.0 / cla).max(0.3) };
+        // Effet de sol (aile delta, envergure ~20 m) : coussin d'air sous une demi-envergure,
+        // portance accrue et traînée induite réduite — l'avion « flotte » à l'arrondi
+        let ge = if self.on_ground { 0.0 } else { (1.0 - agl.max(0.0) / 22.0).clamp(0.0, 1.0) };
+        cl *= 1.0 + 0.22 * ge * ge + 0.06 * ge;
+        let k_ind = if mach < 0.9 { 0.22 } else { (1.0 / cla).max(0.3) } * (1.0 - 0.35 * ge);
         let keas = v * (air.rho / RHO0).sqrt() / KT;
         let mut cd = cd0(mach) + k_ind * cl * cl + 0.015 * self.gear_pos;
         if self.speedbrake {
@@ -1744,9 +1769,13 @@ impl Aircraft {
             self.gamma = 0.0;
             self.phi = 0.0;
             self.ap.on = false;
-            let l = if vs < -2.5 { Level::Caution } else { Level::Info };
-            let q = if vs < -2.5 { "DUR" } else if vs > -1.0 { "KISS" } else { "BON" };
-            self.msg(l, format!("TOUCHER DES ROUES : {fpm:.0} FT/MIN ({q}) à {:.0} KEAS", self.d.keas));
+            // Facteur de charge à l'écrasement des amortisseurs (course ~0,25 s)
+            let g_td = 1.0 + (-vs).max(0.0) / (G0 * 0.25);
+            let (tdz, dev) = crate::airports::runway_under(self.lat, self.lon, self.hdg_deg()).map(|(_, _, len, ahead, cross)| (len - ahead, cross)).unwrap_or((0.0, 0.0));
+            let (q, l) = Aircraft::landing_rating(fpm);
+            self.last_landing = Some((fpm, g_td, self.d.keas, tdz, dev, 0.0));
+            let zone = if tdz > 900.0 { " — HORS ZONE DE TOUCHER (LONG)" } else if tdz < 100.0 { " — COURT" } else { "" };
+            self.msg(l, format!("TOUCHER DES ROUES : {fpm:.0} FT/MIN ({q}), {g_td:.2} G a {:.0} KEAS, {tdz:.0} M DU SEUIL, AXE {:.1} M {}{zone}", self.d.keas, dev.abs(), if dev > 0.0 { "D" } else { "G" }));
         }
     }
 

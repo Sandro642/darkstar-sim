@@ -574,6 +574,7 @@ fn draw_svs_overlay(ac: &Aircraft, v: &View, s: Rect, info: &PfdInfo) {
     hud_cues(ac, cx, cy, bank_rad, info.time, fpv);
     takeoff_pitch(ac, v, cx, cy, info.time);
     runway_hud(ac, cx, cy);
+    touchdown_card(ac, cx, cy);
     // Au-dessus de la bannière d'approche / des barres ILS quand elles sont affichées
     let floor = if crate::appr::visible(ac) { s.y + s.h - crate::appr::BANNER_H - 64.0 } else { s.y + s.h - 60.0 };
     alarm_window(ac, info, cx, (cy + 118.0).min(floor - 10.0));
@@ -774,12 +775,37 @@ fn gcas_done_recently(ac: &Aircraft, time: f64) -> bool {
     })
 }
 
+/// Fiche du toucher (8 s, façon HUD) : vario, appréciation (BUTTER … DUR), g, vitesse, distance au
+/// seuil (zone de toucher 150-900 m), écart à l'axe.
+fn touchdown_card(ac: &Aircraft, cx: f32, cy: f32) {
+    let Some((fpm, g, keas, tdz, dev, age)) = ac.last_landing else { return };
+    if age > 8.0 || ac.crashed.is_some() {
+        return;
+    }
+    let (q, l) = Aircraft::landing_rating(fpm);
+    let col = match l {
+        Level::Info if -fpm <= 120.0 => GREEN_S,
+        Level::Info => line(),
+        Level::Caution => AMBER,
+        _ => RED,
+    };
+    let y = cy - 120.0;
+    let sh = |s: &str, y: f32, size: f32, c: Color| {
+        txt_c(s, cx + 1.0, y + 1.0, size, Color::new(0.0, 0.0, 0.0, 0.75));
+        txt_c(s, cx, y, size, c);
+    };
+    sh(&format!("TOUCHDOWN  {fpm:.0} FPM"), y, 20.0, col);
+    sh(q, y + 24.0, 24.0, col);
+    let zc = if (150.0..=900.0).contains(&tdz) { label_c() } else { AMBER };
+    sh(&format!("{g:.2} G   {keas:.0} KEAS   TDZ {tdz:.0} M   AXE {:.1} M {}", dev.abs(), if dev > 0.0 { "D" } else { "G" }), y + 44.0, 12.0, zc);
+}
+
 /// Piste sous l'avion (au sol), façon HUD : désignation, terrain, longueur totale et restante.
 fn runway_hud(ac: &Aircraft, cx: f32, cy: f32) {
     if !ac.on_ground || ac.crashed.is_some() {
         return;
     }
-    let Some((a, id, len, ahead)) = crate::airports::runway_under(ac.lat, ac.lon, ac.hdg_deg()) else { return };
+    let Some((a, id, len, ahead, _)) = crate::airports::runway_under(ac.lat, ac.lon, ac.hdg_deg()) else { return };
     let y = cy + 64.0;
     let c = line();
     let main = format!("RWY {id}  {}", a.icao);

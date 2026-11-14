@@ -780,3 +780,9 @@ Le SR-72 est un avion de reconnaissance : sa charge utile est simulée.
 - v1.55.4 : plus aucune panne injectée automatiquement — l'Auto-GCAS ne bascule plus le FCS en loi
   directe après une ressource à 5 g ; la vitre avant rompue dégrade les données air sans
   enregistrer de panne. Seul l'opérateur injecte les pannes.
+- v1.56.0 : atterrissages — effet de sol réaliste (coussin sous une demi-envergure, traînée induite
+  réduite), ressenti et son du toucher proportionnels au taux de chute (butter quasi
+  imperceptible, posé dur sec), fiche TOUCHDOWN façon HUD (ft/min, BUTTER / TRES DOUX / BON /
+  FERME / DUR, g, KEAS, distance au seuil, écart à l'axe). Aérodromes : taxiway parallèle avec
+  axe jaune et feux bleus, bretelles avec points d'arrêt, aire de trafic avec postes de
+  stationnement (ligne d'entrée, barre d'arrêt, cadre), hangars.
