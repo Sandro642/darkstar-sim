@@ -849,3 +849,5 @@ Le SR-72 est un avion de reconnaissance : sa charge utile est simulée.
   scramjet), manche.
 - v1.63.1 : prototype de vue cockpit pilote retiré (instruction COCKPIT et menu DISPOSITION) ; les
   panneaux du poste pilote restent disponibles en fenêtres dans la version développeur.
+- v1.63.2 : écran de lancement — choix du mode SIMULATION / DEVELOPPEUR (retenu pour les lancements
+  suivants) ; Maj+Entrée ouvre bien l'écran de choix (la touche n'y valide plus aussitôt la liaison).

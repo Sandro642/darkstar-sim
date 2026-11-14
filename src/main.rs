@@ -1933,10 +1933,12 @@ impl Game {
                     self.dev = None;
                     self.layout = dev::DevUi::new();
                     pfd::hide_menu(false);
+                    connect::save_mode(false);
                     reply = Ok("VERSION SIMULATEUR".into());
                 } else {
                     self.dev = Some(dev::DevUi::new());
                     pfd::hide_menu(true);
+                    connect::save_mode(true);
                     reply = Ok("VERSION DEVELOPPEUR — FENETRES DEPLACABLES, CONSOLE DANS LA BARRE (MENU CONSOLE)".into());
                 }
             }
@@ -2742,6 +2744,11 @@ async fn main() {
     if (scenario.is_empty() && shot.is_none()) || std::env::var("DARKSTAR_CONNECT").is_ok() {
         let ui = connect::ConnectUi::new();
         last_spawn = Some(ui.clone());
+        connect::arm();
+        if connect::saved_mode() && g.dev.is_none() {
+            g.dev = Some(dev::DevUi::new());
+            pfd::hide_menu(true);
+        }
         g.place_at(ui.sel, ui.apt, &ui.rwy);
         g.link.state = link::State::Idle;
         g.log.clear();
@@ -2801,6 +2808,7 @@ async fn main() {
             // Nouvel essai : l'écran de lancement repropose l'appareil, l'aérodrome et la piste
             if let Some(ui) = last_spawn.clone().filter(|_| shot.is_none()) {
                 let ui = connect::ConnectUi { query: String::new(), ..ui };
+                connect::arm();
                 g.place_at(ui.sel, ui.apt, &ui.rwy);
                 g.link.state = link::State::Idle;
                 g.log.clear();
@@ -2941,6 +2949,7 @@ async fn main() {
             if quit {
                 pfd::hide_menu(false);
                 g.layout = dev::DevUi::new();
+                connect::save_mode(false);
                 g.push(Level::Info, "VERSION SIMULATEUR");
             } else {
                 g.dev = Some(d);
@@ -3104,7 +3113,18 @@ async fn main() {
             panels::draw_help(Rect::new(0.0, 0.0, sw, sh));
         }
         if let Some(ui) = &g.connect {
-            match connect::draw(ui, &g.link, &g.link_msg, sw, sh, time) {
+            let dev_on = g.dev.is_some();
+            match connect::draw(ui, dev_on, &g.link, &g.link_msg, sw, sh, time) {
+                Some(connect::ConnectAction::Mode(dev)) => {
+                    if dev && g.dev.is_none() {
+                        g.dev = Some(dev::DevUi::new());
+                    } else if !dev && g.dev.is_some() {
+                        g.dev = None;
+                        g.layout = dev::DevUi::new();
+                    }
+                    pfd::hide_menu(dev);
+                    connect::save_mode(dev);
+                }
                 Some(connect::ConnectAction::Select(i)) => {
                     // Appareil de la flotte : son terrain de base par défaut
                     let apt = apt_index(link::FLEET[i].1);

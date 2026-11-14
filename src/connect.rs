@@ -18,6 +18,8 @@ pub struct ConnectUi {
 }
 
 pub enum ConnectAction {
+    /// Mode : false simulation, true développeur
+    Mode(bool),
     Select(usize),
     Airport(usize),
     Runway(String),
@@ -47,7 +49,31 @@ pub fn default_rwy(apt: usize) -> String {
         .unwrap_or_default()
 }
 
-pub fn draw(ui: &ConnectUi, link: &crate::link::Link, last: &str, sw: f32, sh: f32, time: f64) -> Option<ConnectAction> {
+thread_local! {
+    /// Instant d'ouverture de l'écran : la touche Entrée qui l'a ouvert (nouvel essai) est ignorée
+    static OPENED: std::cell::Cell<f64> = const { std::cell::Cell::new(-100.0) };
+}
+
+/// À appeler à l'ouverture de l'écran de lancement.
+pub fn arm() {
+    OPENED.with(|c| c.set(get_time()));
+}
+
+fn mode_path() -> std::path::PathBuf {
+    let home = std::env::var("HOME").unwrap_or_else(|_| ".".into());
+    std::path::Path::new(&home).join("Library/Application Support/Darkstar/mode.txt")
+}
+
+/// Dernier mode choisi (vrai = développeur).
+pub fn saved_mode() -> bool {
+    std::fs::read_to_string(mode_path()).map(|s| s.trim() == "dev").unwrap_or(false)
+}
+
+pub fn save_mode(dev: bool) {
+    let _ = std::fs::write(mode_path(), if dev { "dev" } else { "sim" });
+}
+
+pub fn draw(ui: &ConnectUi, dev: bool, link: &crate::link::Link, last: &str, sw: f32, sh: f32, time: f64) -> Option<ConnectAction> {
     let mut out = None;
     draw_rectangle(0.0, 0.0, sw, sh, Color::new(0.02, 0.03, 0.05, 0.94));
     let w = (sw * 0.62).clamp(560.0, 900.0);
@@ -55,9 +81,21 @@ pub fn draw(ui: &ConnectUi, link: &crate::link::Link, last: &str, sw: f32, sh: f
     let r = Rect::new((sw - w) / 2.0, (sh - h) / 2.0, w, h);
     rrect(r, 12.0, Color::new(0.06, 0.07, 0.09, 1.0));
     rrect_lines(r, 12.0, 1.5, PANEL_BORDER);
-    txt("STATION SOL GCS-1 — ETABLISSEMENT DE LA LIAISON", r.x + 24.0, r.y + 36.0, 20.0, ACCENT);
-    txt("Choisir l'appareil, l'aerodrome de depart (taper le code OACI, Tab = 1re suggestion) et la piste, puis etablir la liaison.", r.x + 24.0, r.y + 58.0, 12.0, DIM);
+    txt("ETABLISSEMENT DE LA LIAISON", r.x + 24.0, r.y + 36.0, 20.0, ACCENT);
+    txt("Mode, appareil, aerodrome (code OACI, Tab = 1re suggestion) et piste.", r.x + 24.0, r.y + 58.0, 12.0, DIM);
     let connecting = matches!(link.state, State::Connecting { .. });
+    // Mode : simulation ou développeur (version embarquée)
+    for (k, (l, sub)) in [("SIMULATION", "station sol GCS"), ("DEVELOPPEUR", "poste pilote / fenetres")].iter().enumerate() {
+        let b = Rect::new(r.x + r.w - 334.0 + k as f32 * 160.0, r.y + 14.0, 154.0, 40.0);
+        let on = (k == 1) == dev;
+        rrect(b, 8.0, if on { Color::new(0.07, 0.16, 0.2, 1.0) } else if hovered(b) { Color::new(0.1, 0.12, 0.15, 1.0) } else { Color::new(0.08, 0.09, 0.11, 1.0) });
+        rrect_lines(b, 8.0, if on { 2.0 } else { 1.0 }, if on { ACCENT } else { PANEL_BORDER });
+        txt_c(l, b.x + b.w / 2.0, b.y + 18.0, 13.0, if on { WHITE } else { DIM });
+        txt_c(sub, b.x + b.w / 2.0, b.y + 33.0, 9.0, DIM);
+        if !connecting && clicked(b) {
+            out = Some(ConnectAction::Mode(k == 1));
+        }
+    }
 
     // --- Flotte ---
     txt("FLOTTE DARKSTAR", r.x + 24.0, r.y + 92.0, 13.0, WHITE);
@@ -193,7 +231,8 @@ pub fn draw(ui: &ConnectUi, link: &crate::link::Link, last: &str, sw: f32, sh: f
     rrect(b, 8.0, if connecting { Color::new(0.1, 0.12, 0.14, 1.0) } else if hovered(b) { Color::new(0.1, 0.35, 0.4, 1.0) } else { Color::new(0.07, 0.26, 0.3, 1.0) });
     rrect_lines(b, 8.0, 1.5, ACCENT);
     txt_c(lbl, b.x + b.w / 2.0, b.y + 23.0, 14.0, WHITE);
-    if !connecting && (clicked(b) || is_key_pressed(KeyCode::Enter)) {
+    let enter_ok = get_time() - OPENED.with(|c| c.get()) > 0.4;
+    if !connecting && (clicked(b) || (enter_ok && is_key_pressed(KeyCode::Enter))) {
         out = Some(ConnectAction::Connect);
     }
     out
