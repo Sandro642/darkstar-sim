@@ -163,6 +163,8 @@ pub struct DevUi {
     work: Rect,
     /// Version normale : l'écran principal affiche la page 1 composée
     pub main_screen: bool,
+    /// Vue cockpit pilote (prototype 3D) à la place des fenêtres
+    pub cockpit3d: bool,
 }
 
 pub const BAR_H: f32 = 30.0;
@@ -214,13 +216,13 @@ fn elem_of(name: &str) -> Option<Elem> {
 
 impl Default for DevUi {
     fn default() -> Self {
-        DevUi { wins: default_wins(), widgets: default_widgets(), page: Page::Horizon, menu: None, drag: None, work: Rect::new(0.0, BAR_H, 1.0, 1.0), main_screen: true }
+        DevUi { wins: default_wins(), widgets: default_widgets(), page: Page::Horizon, menu: None, drag: None, work: Rect::new(0.0, BAR_H, 1.0, 1.0), main_screen: true, cockpit3d: false }
     }
 }
 
 impl DevUi {
     pub fn new() -> DevUi {
-        let mut d = DevUi { wins: default_wins(), widgets: default_widgets(), page: Page::Horizon, menu: None, drag: None, work: Rect::new(0.0, BAR_H, 1.0, 1.0), main_screen: false };
+        let mut d = DevUi { wins: default_wins(), widgets: default_widgets(), page: Page::Horizon, menu: None, drag: None, work: Rect::new(0.0, BAR_H, 1.0, 1.0), main_screen: false, cockpit3d: false };
         d.load();
         d
     }
@@ -569,7 +571,7 @@ impl DevUi {
             let b = rects[k];
             let items: Vec<(String, bool)> = match k {
                 0 => self.wins.iter().map(|w| (win_name(w.kind).to_string(), w.open)).collect(),
-                2 => vec![("ENREGISTRER LA DISPOSITION".into(), false), ("DISPOSITION PAR DEFAUT".into(), false), ("PAGE 1 PAR DEFAUT".into(), false)],
+                2 => vec![("ENREGISTRER LA DISPOSITION".into(), false), ("DISPOSITION PAR DEFAUT".into(), false), ("PAGE 1 PAR DEFAUT".into(), false), (if self.cockpit3d { "VUE FENETRES".into() } else { "VUE COCKPIT PILOTE".into() }, false)],
                 _ => vec![("QUITTER LA VERSION DEV".into(), false)],
             };
             let w = 240.0;
@@ -609,6 +611,7 @@ impl DevUi {
                         match i {
                             1 => self.wins = default_wins(),
                             2 => self.widgets = default_widgets(),
+                            3 => self.cockpit3d = !self.cockpit3d,
                             _ => {}
                         }
                         self.save();

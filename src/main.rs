@@ -12,6 +12,7 @@ mod apu;
 mod dev;
 mod fcu;
 mod cockpit;
+mod cockpit3d;
 mod airports;
 mod atmosphere;
 mod elec;
@@ -1928,6 +1929,16 @@ impl Game {
                     false => Err("DEV PAGE 1..7 / CONFIG / ARMEMENT / MOTEUR".into()),
                 };
             }
+            // Vue cockpit pilote (version développeur)
+            "COCKPIT" => {
+                if self.dev.is_none() {
+                    self.dev = Some(dev::DevUi::new());
+                    pfd::hide_menu(true);
+                }
+                let d = self.dev.as_mut().unwrap();
+                d.cockpit3d = arg(1) != "OFF" && !(arg(1).is_empty() && d.cockpit3d);
+                reply = Ok(if d.cockpit3d { "VUE COCKPIT PILOTE".into() } else { "VUE FENETRES".into() });
+            }
             "DEV" => {
                 if self.dev.is_some() || arg(1) == "OFF" {
                     self.dev = None;
@@ -3350,8 +3361,57 @@ fn draw_tab_page(g: &mut Game, tab: gcs::Tab, cr: Rect, alerts: &[(Level, String
 /// menus avec la console. Renvoie vrai pour revenir à la version simulateur.
 #[allow(clippy::too_many_arguments)]
 fn draw_dev(g: &mut Game, d: &mut dev::DevUi, world: &world::World, tiles: &mut tiles::Tiles, alerts: &[(Level, String)], sw: f32, sh: f32, time: f64, ln: &str, lat: f64, warp: f64, warn: bool, caut: bool) -> bool {
-    d.begin(sw, sh);
+    if d.cockpit3d {
+        draw_cockpit_view(g, d, world, tiles, alerts, sw, sh, time, ln, lat, warp);
+    } else {
+        d.begin(sw, sh);
+    }
     let console_open = g.console.is_some();
+    if !d.cockpit3d {
+        draw_dev_windows(g, d, world, tiles, alerts, sw, time, ln, lat, warp, console_open);
+    }
+    ui::set_blockers(Vec::new());
+    dev_bar(g, d, sw, warp, ln, warn, caut)
+}
+
+/// Vue cockpit pilote (prototype) : vue extérieure, verrière, structure, panneaux encastrés.
+#[allow(clippy::too_many_arguments)]
+fn draw_cockpit_view(g: &mut Game, d: &mut dev::DevUi, world: &world::World, tiles: &mut tiles::Tiles, alerts: &[(Level, String)], sw: f32, sh: f32, time: f64, ln: &str, lat: f64, warp: f64) {
+    clear_background(BLACK);
+    let l = cockpit3d::layout(sw, sh, dev::BAR_H);
+    {
+        let shown = g.stale.as_ref().unwrap_or(&g.ac);
+        let view = svs::draw_svs(world, tiles, &g.wx, &g.refuel, shown, l.outside, time, g.style, g.feel.cam());
+        wx3d::draw(&g.wx, shown, &view, time);
+    }
+    cockpit3d::structure(&l, sw, sh, dev::BAR_H);
+    cockpit3d::canopy(&l, sw);
+    for r in [l.radio, l.screen, l.engines, l.elec, l.throttle, l.eng_apu, l.scram] {
+        cockpit3d::bezel(r);
+    }
+    ui::set_blockers(Vec::new());
+    let ils = g.fms.ils.as_ref().map(|t| t.mhz);
+    if let Some(m) = cockpit::radio(&mut g.radio, l.radio, ils, time) {
+        g.push(Level::Info, m);
+    }
+    ui::scissor(Some(l.screen));
+    let _ = draw_screen(g, d, l.screen, world, tiles, alerts, time, ln, lat, warp);
+    ui::scissor(None);
+    let mut p = g.eng_page;
+    cockpit::engines(&g.ac, &g.chambers, l.engines, &mut p, time);
+    g.eng_page = p;
+    ui::scissor(Some(l.elec));
+    let _ = draw_tab_page(g, gcs::Tab::Elec, l.elec, alerts, tiles, time);
+    ui::scissor(None);
+    for a in [cockpit::throttle(&g.ac, l.throttle), cockpit::eng_apu_clim(&g.ac, l.eng_apu), cockpit::scram(&g.ac, l.scram, time)].into_iter().flatten() {
+        apply_cockpit(g, a);
+    }
+    cockpit3d::stick(sw, sh, g.stick.0 as f32, g.stick.1 as f32);
+}
+
+/// Fenêtres de la version développeur (arrière vers avant).
+#[allow(clippy::too_many_arguments)]
+fn draw_dev_windows(g: &mut Game, d: &mut dev::DevUi, world: &world::World, tiles: &mut tiles::Tiles, alerts: &[(Level, String)], sw: f32, time: f64, ln: &str, lat: f64, warp: f64, console_open: bool) {
     for (i, kind) in d.order() {
         ui::set_blockers(d.blockers_above(i, sw, console_open));
         let Some(cr) = d.frame(i) else { continue };
@@ -3415,7 +3475,10 @@ fn draw_dev(g: &mut Game, d: &mut dev::DevUi, world: &world::World, tiles: &mut 
         }
         ui::scissor(None);
     }
-    ui::set_blockers(Vec::new());
+}
+
+/// Barre de menus de la version développeur ; vrai pour quitter.
+fn dev_bar(g: &mut Game, d: &mut dev::DevUi, sw: f32, warp: f64, ln: &str, warn: bool, caut: bool) -> bool {
     let mut status = format!("SIM {}   x{:.0}   LIAISON {}", mission::fmt_time(g.sim_time), warp, ln);
     if warn {
         status = format!("MASTER WARNING   {status}");

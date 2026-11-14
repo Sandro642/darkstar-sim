@@ -842,3 +842,8 @@ Le SR-72 est un avion de reconnaissance : sa charge utile est simulée.
   moteurs simple, données moteur, manette 0-100 %), ECRAN au centre, ELEC à droite ; en bas
   MANETTE (manette des gaz à glisser, levier de train, JETTISON protégé), MESSAGES, SCRAMJET,
   PANNES, MOTEURS / APU / CLIM. Page 8 COMMANDES dans l'écran. Instruction JETTISON.
+- v1.63.0 : prototype VUE COCKPIT PILOTE (version développeur, instruction COCKPIT ou menu
+  DISPOSITION) : vue extérieure réelle à travers la verrière (montants, reflet), auvent, planche
+  de bord et consoles latérales en relief, panneaux réels encastrés dans des lunettes (radio sur
+  l'auvent, écran à pages, moteurs, élec, manette / train / jettison, moteurs / APU / clim,
+  scramjet), manche.
