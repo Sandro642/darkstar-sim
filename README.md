@@ -859,3 +859,5 @@ Le SR-72 est un avion de reconnaissance : sa charge utile est simulée.
   câble. Page COMMANDES réorganisée en sous-menus (PILOTE AUTO, MOTEURS, CONFIGURATION,
   NAVIGATION, URGENCE / LIAISON, SIMULATION) avec des cartes explicatives. Fenêtre
   MOTEURS / APU / CLIM retirée (panneau droit APU à la place dans la disposition dev).
+- v1.64.1 : poste pilote (version dev) — bouton BATTERIE rond (comme le bouton scramjet) : ON / OFF
+  et charge, à côté du SCRAMJET.

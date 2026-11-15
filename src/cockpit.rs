@@ -304,3 +304,25 @@ pub fn scram(ac: &Aircraft, r: Rect, time: f64) -> Option<Act> {
     }
     None
 }
+
+// ---------- BATTERIE ----------
+
+/// Bouton batterie principale (comme le bouton scramjet) : ON / OFF, charge.
+pub fn battery(ac: &Aircraft, r: Rect) -> Option<Act> {
+    rrect(r, 8.0, FACE);
+    let el = &ac.elec;
+    let on = el.batt_sw;
+    let c = if !on { LBL } else if el.batt < 0.25 { AMBER } else { GREEN_S };
+    let rad = (r.w.min(r.h - 30.0) * 0.36).max(18.0);
+    let (cx, cy) = (r.x + r.w / 2.0, r.y + r.h / 2.0 - 6.0);
+    draw_circle(cx, cy, rad + 4.0, Color::new(0.2, 0.22, 0.25, 1.0));
+    draw_circle(cx, cy, rad, if on { Color::new(0.08, 0.3, 0.12, 1.0) } else { Color::new(0.08, 0.08, 0.1, 1.0) });
+    draw_circle_lines(cx, cy, rad, 2.0, c);
+    txt_c("BATT", cx, cy + 4.0, 14.0, WHITE);
+    txt_c(if on { "ON" } else { "OFF" }, cx, r.y + r.h - 10.0, 11.0, c);
+    txt_c(&format!("CHARGE {:.0} %", el.batt * 100.0), cx, r.y + 14.0, 9.0, c);
+    if clicked(Rect::new(cx - rad, cy - rad, 2.0 * rad, 2.0 * rad)) {
+        return Some(Act::Cmd(if on { "BATT OFF".into() } else { "BATT ON".into() }));
+    }
+    None
+}

@@ -3429,6 +3429,11 @@ fn draw_dev_windows(g: &mut Game, d: &mut dev::DevUi, world: &world::World, tile
                     apply_cockpit(g, a);
                 }
             }
+            dev::WinKind::Batterie => {
+                if let Some(a) = cockpit::battery(&g.ac, cr) {
+                    apply_cockpit(g, a);
+                }
+            }
             dev::WinKind::Elec => {
                 let _ = draw_tab_page(g, gcs::Tab::Elec, cr, alerts, tiles, time);
             }
