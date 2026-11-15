@@ -71,7 +71,8 @@ impl Fire {
     /// Taux d'inflammation (1/s) de chaque zone d'après l'état de l'avion.
     fn hazard(&self, ac: &Aircraft) -> [f64; 4] {
         let e = &ac.eng;
-        let mut h = [2e-7; 4];
+        // Aucun feu spontané : seulement des causes physiques ou des pannes injectées
+        let mut h = [0.0; 4];
         for k in 0..2 {
             if e.side[k] == TurbState::Running {
                 if e.egt > 1000.0 {

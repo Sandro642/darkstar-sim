@@ -902,3 +902,5 @@ Le SR-72 est un avion de reconnaissance : sa charge utile est simulée.
   / PRESS TO RESET » qui s'éclaire en ambre (rouge clignotant pour WARNING), enfoncement à l'appui.
 - v1.69.2 : version normale — boutons MASTER WARNING / MASTER CAUTION (modèle réel) dans l'auvent
   de l'écran principal, à la place des voyants plats de la barre du haut.
+- v1.69.3 : plus aucun feu spontané — un feu n'a plus que des causes réelles (panne injectée par
+  l'opérateur, EGT excessive, surchauffe de peau / parois, fuite H2) ; risque de fond supprimé.
