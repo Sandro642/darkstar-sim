@@ -939,3 +939,9 @@ Le SR-72 est un avion de reconnaissance : sa charge utile est simulée.
   le calage ne change que si l'écart ≥ 1 hPa persiste 20 s (pas de fluctuation). STD automatique au-
   dessus de l'altitude de transition, retour au QNH sous le niveau de transition (valeurs SimBrief,
   sinon 18 000 ft). Affichage PFD : « QNH 1018 AUTO » ou « FL093 STD ». FLY UP affiche le g calculé.
+- v1.71.1 : Auto-GCAS de dernier instant — déclenchement seulement quand la récupération deviendrait
+  impossible (marge calculée avec le g réellement atteignable : limite structurale, autorité en
+  tangage, portance max ; garde au sol ~150-300 ft), jamais quand le pilote se dégage lui-même
+  (ailes à plat, ressource en cours, trajectoire qui passe). Toute récupération tire à la limite
+  calculée. Tests : ressource pilote respectée, split-S du 15/11, paraboles d'essai (limite de casse
+  structure / FCS par vitesse, avec et sans roulis ; loi normale jamais en casse).

@@ -941,7 +941,7 @@ impl Aircraft {
         let dgam = ((1.0 - self.phi.cos()) * g / v * t_roll * 0.5).min(1.2);
         // Piqué en train de se creuser (ressource sur le dos, split-S) : il continue pendant le temps
         // de réaction et une partie du roulis
-        let dgam = (dgam + (-self.d.gamma_dot).max(0.0) * (0.8 + 0.3 * t_roll)).min(1.5);
+        let dgam = (dgam + (-self.d.gamma_dot).max(0.0) * 0.5).min(1.5);
         let gam_end = (gam - dgam).clamp(-1.5, 0.0);
         let h_roll = (-v * ((gam + gam_end) / 2.0).sin()).max(0.0) * t_roll;
         let r = v * v / (g * (n - 1.0).max(0.3));
@@ -954,7 +954,8 @@ impl Aircraft {
             let (la, lo) = destination(self.lat, self.lon, self.track_deg(), d);
             terr = terr.max(ground_elev(la, lo));
         }
-        let buffer = 90.0 + v * 0.35;
+        // Marge de garde minimale au sol en fin de ressource (dernier instant, ~150-300 ft)
+        let buffer = 45.0 + v * 0.2;
         let m = self.alt - terr - (h_roll + h_pull + buffer);
         let closing = sink.max(1.0);
         (m, if sink > 0.5 { m / closing } else { f64::INFINITY })
@@ -1297,7 +1298,21 @@ impl Aircraft {
         // --- Auto-GCAS : récupération automatique avant impact (prioritaire sur le manche et l'AP) ---
         if !self.on_ground {
             let inhibit = !self.gcas_on || self.gear_down || self.autoland.is_some();
-            let (m, t) = if inhibit { (f64::INFINITY, f64::INFINITY) } else { self.gcas_margin(self.nz_law_max() * 0.95) };
+            // Dernier instant : marge calculée avec la ressource que la récupération peut réellement
+            // tirer (limite structurale calculée, montée en g comprise). Tant qu'une récupération
+            // reste possible, le pilote garde la main.
+            // g réellement atteignable par la ressource : limite structurale calculée, autorité en
+            // tangage de la récupération (vitesse de rotation) et portance maximale (incidence 20°)
+            let n_struct = 1.0 + 0.85 * (self.n_recovery() - 1.0);
+            let q_rate = (12.0f64).to_radians() / (1.0 + mach / 3.0) * hyd;
+            let n_rate = 1.0 + 0.85 * q_rate * v / G0;
+            let n_aero = q * S_WING * cla * 20f64.to_radians() / (mass * G0);
+            let n_pred = n_struct.min(n_rate).min(n_aero).max(1.5);
+            let (m, t) = if inhibit { (f64::INFINITY, f64::INFINITY) } else { self.gcas_margin(n_pred) };
+            // Le pilote se dégage déjà (ailes à peu près à plat, ressource en cours) et sa propre
+            // trajectoire passe : pas de déclenchement
+            let pilot_ok = !self.gcas_active && self.phi.abs() < 45f64.to_radians() && self.d.nz > 1.3 && self.d.gamma_dot > 0.0 && self.gcas_margin(self.d.nz).0 > 0.0;
+            let (m, t) = if pilot_ok { (m.max(1.0), t.max(1.0)) } else { (m, t) };
             self.gcas_t = t;
             self.gcas_m = m;
             if self.gcas_active && !self.gcas_on {
@@ -1310,16 +1325,13 @@ impl Aircraft {
                 self.gcas_clear_t = 0.0;
                 self.gcas_g_max = self.d.nz;
                 self.ap.on = false;
+                // Dernier instant : la récupération va au-delà de la loi normale (limite calculée)
+                self.gcas_ovr = true;
                 let n = self.n_recovery();
-                self.msg(Level::Warning, format!("AUTO-GCAS : FLY UP — AILES A PLAT, RESSOURCE {n:.1} G (LIMITE CALCULEE)"));
+                self.msg(Level::Warning, format!("AUTO-GCAS : FLY UP — RECUPERATION IMPOSSIBLE AU-DELA : AILES A PLAT, RESSOURCE {n:.1} G (LIMITE CALCULEE)"));
             }
             if self.gcas_active {
                 // En retard sur la loi normale : on dépasse les protections (jusqu'à 5 g) pour sauver l'avion
-                if !self.gcas_ovr && m < -(90.0 + 0.35 * v) && self.gamma < 0.0 {
-                    self.gcas_ovr = true;
-                    let n = self.n_recovery();
-                    self.msg(Level::Warning, format!("AUTO-GCAS : PROTECTIONS FCS DEPASSEES — RESSOURCE {n:.1} G (90 % RUPTURE CALCULEE)"));
-                }
                 let pmax_r = (35.0f64).to_radians() / (1.0 + mach / 6.0) * hyd;
                 let qmax_r = (12.0f64).to_radians() / (1.0 + mach / 3.0) * hyd;
                 roll_rate = (3.0 * wrap_pi(-self.phi)).clamp(-pmax_r, pmax_r);
@@ -2615,6 +2627,116 @@ mod tests {
 
     /// Auto-GCAS : piqué à 30°, 120° d'inclinaison, sans action pilote → récupération sans impact ;
     /// GCAS coupé → impact. Départ tardif → protections dépassées mais avion sauvé.
+    /// Paraboles d'essai : à chaque vitesse, ressource (manche k) puis poussée vers 0 g, amplitude
+    /// croissante jusqu'à la casse, FBW OVERRIDE (protections coupées). Donne la limite de casse
+    /// réelle (structure : facteur de charge ; FCS : charge de charnière des gouvernes) et vérifie
+    /// qu'elle correspond aux courbes calculées ; en loi normale, la parabole manche à fond ne
+    /// casse jamais.
+    #[test]
+    fn parabolas_break_limit() {
+        let start = |keas: f64, ovr: bool| {
+            let mut ac = Aircraft::new_on_runway(0);
+            ac.on_ground = false;
+            ac.gear_down = false;
+            ac.gear_pos = 0.0;
+            ac.brakes = false;
+            ac.alt = 25_000.0 * FT;
+            ac.tas = keas * KT / (isa(ac.alt).rho / RHO0).sqrt();
+            ac.gamma = 0.0;
+            ac.theta = 2f64.to_radians();
+            ac.set_turbines(TurbState::Running, 1.0);
+            ac.throttle = 1.0;
+            ac.gcas_on = false;
+            ac.ovr_fbw = ovr;
+            ac
+        };
+        // Une parabole : ressource 4 s (manche k), poussée 3 s (0 g), stabilisation 3 s
+        let parabola = |ac: &mut Aircraft, k: f64, roll: f64| -> (f64, f64) {
+            let (mut gmax, mut dmax) = (0.0f64, 0.0f64);
+            for i in 0..(10 * 120) {
+                let t = i as f64 / 120.0;
+                let p = if t < 4.0 { k } else if t < 7.0 { (-(ac.d.nz) * 0.6).clamp(-1.0, 1.0) } else { (-ac.gamma * 3.0).clamp(-0.5, 0.5) };
+                let r = if t < 4.0 { roll * if (t * 0.5).fract() < 0.5 { 1.0 } else { -1.0 } } else { (-ac.phi * 2.0).clamp(-1.0, 1.0) };
+                ac.step(1.0 / 120.0, p, r);
+                gmax = gmax.max(ac.d.nz);
+                dmax = dmax.max(ac.fcs.defl_cmd);
+                if ac.crashed.is_some() {
+                    break;
+                }
+            }
+            (gmax, dmax)
+        };
+        for (roll, titre) in [(0.0, "RESSOURCE PURE"), (1.0, "RESSOURCE + ROULIS ALTERNE")] {
+        println!("--- PARABOLES {titre} (FBW OVERRIDE) ---");
+        println!("KEAS | q kPa | n rupture calc | g max sans casse | casse a k / g | cause");
+        for keas in [300.0, 400.0, 500.0, 600.0, 700.0, 800.0, 860.0, 880.0] {
+            let mut last_ok = 0.0;
+            let mut broke = None;
+            let mut k = 0.2;
+            while k <= 1.0 + 1e-9 {
+                let mut ac = start(keas, true);
+                let nb = ac.n_break().0;
+                let (g, _d) = parabola(&mut ac, k, roll);
+                match &ac.crashed {
+                    None => last_ok = g,
+                    Some(c) => {
+                        broke = Some((k, g, c.clone(), nb));
+                        break;
+                    }
+                }
+                k += 0.1;
+            }
+            let nb = start(keas, true).n_break().0;
+            let qk = 0.5 * RHO0 * (keas * KT).powi(2) / 1000.0;
+            match &broke {
+                Some((k, g, c, _)) => println!("{keas:4.0} | {qk:5.0} | {nb:5.2} g | {last_ok:5.2} g | k {k:.1} / {g:5.2} g | {c}"),
+                None => println!("{keas:4.0} | {qk:5.0} | {nb:5.2} g | {last_ok:5.2} g | pas de casse (portance / autorite limitee)"),
+            }
+            if let Some((_, g, c, nb)) = &broke {
+                if c.contains("FACTEUR DE CHARGE") {
+                    // La structure casse exactement à la limite calculée
+                    assert!((g - nb).abs() < 0.25, "casse structurale a {g:.2} g pour {nb:.2} g calcules");
+                }
+            }
+            // Loi normale : parabole manche à fond sans casse, g sous la limite de la loi
+            let mut ac = start(keas, false);
+            let (g, _) = parabola(&mut ac, 1.0, roll);
+            assert!(ac.crashed.is_none(), "loi normale {keas} KEAS : {:?}", ac.crashed);
+            assert!(g < ac.n_break().0, "loi normale {keas} KEAS : {g:.2} g");
+        }
+        }
+    }
+
+    /// Pilote qui se dégage lui-même d'un piqué (ailes à plat, ressource franche) : l'Auto-GCAS ne
+    /// doit pas prendre la main tant que la récupération du pilote passe.
+    #[test]
+    fn gcas_respects_pilot_pullout() {
+        let mut ac = Aircraft::new_on_runway(0);
+        let elev = ground_elev(ac.lat, ac.lon);
+        ac.on_ground = false;
+        ac.gear_down = false;
+        ac.gear_pos = 0.0;
+        ac.brakes = false;
+        ac.alt = elev + 6_000.0 * FT;
+        ac.tas = 400.0 * KT / (isa(ac.alt).rho / RHO0).sqrt();
+        ac.gamma = (-25f64).to_radians();
+        ac.theta = ac.gamma + 2f64.to_radians();
+        ac.set_turbines(TurbState::Running, 1.0);
+        ac.throttle = 0.6;
+        ac.gcas_on = true;
+        let (mut trig, mut min_agl) = (false, f64::MAX);
+        for _ in 0..(20 * 120) {
+            ac.step(1.0 / 120.0, 1.0, 0.0);
+            trig |= ac.gcas_active;
+            min_agl = min_agl.min((ac.alt - ground_elev(ac.lat, ac.lon)) / FT);
+            if ac.crashed.is_some() || ac.gamma > 10f64.to_radians() {
+                break;
+            }
+        }
+        println!("ressource pilote : declenchement {trig}, hauteur mini {min_agl:.0} ft, crash {:?}", ac.crashed);
+        assert!(!trig && ac.crashed.is_none());
+    }
+
     /// Vol du 15/11 (KXTA) : split-S sur le dos à 11 450 ft sol, plein gaz, manche tiré en continu.
     /// L'Auto-GCAS doit déclencher à temps, remettre à plat déchargé puis tirer, sans rupture.
     #[test]
