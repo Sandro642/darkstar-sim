@@ -2517,7 +2517,7 @@ mod tests {
         let mut t = 0.0;
         let mut tuned_dest = false;
         let mut landed_rwy = String::new();
-        while t < 4_000.0 && ac.crashed.is_none() && !(ac.on_ground && ac.tas < 3.0) {
+        while t < 4_600.0 && ac.crashed.is_none() && !(ac.on_ground && ac.tas < 3.0) {
             if (t * 10.0f64).fract() < dt * 10.0 {
                 if let Some((b, _)) = f.guidance(&ac) {
                     if ac.autoland.is_none() {

@@ -887,3 +887,7 @@ Le SR-72 est un avion de reconnaissance : sa charge utile est simulée.
   Aérofreins déplacés sur K, accélération du temps sur H. Lettres ignorées pendant une saisie.
   Minimums : sans décision (CONTINUE) à la DA, remise des gaz automatique. Vecteur vitesse bloqué
   au bord de l'horizon (pointillé ambre en butée) au lieu de sortir de l'écran.
+- v1.68.1 : pilote automatique — montée / descente à vitesse verticale régulière : la vitesse
+  verticale commandée varie linéairement (rampe ~0,15 g) et la mise en palier suit un profil à
+  décélération constante, proportionnel tout près de l'altitude. Relever la consigne d'altitude
+  pendant la montée ne provoque plus de mise en palier puis de cabré à chaque incrément.

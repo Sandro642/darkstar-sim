@@ -96,6 +96,9 @@ pub struct Autopilot {
     /// Mode performances maximales : l'AP utilise tout le domaine de la loi FBW normale
     /// (facteur de charge, inclinaison, vitesses angulaires) — les protections restent actives.
     pub max_perf: bool,
+    /// Vitesse verticale commandée (m/s), lissée : varie linéairement (pas de cabré à chaque
+    /// changement de consigne d'altitude)
+    pub vs_f: f64,
 }
 
 #[derive(Clone)]
@@ -515,6 +518,7 @@ impl Aircraft {
                 loc_armed: false,
                 gs_armed: false,
                 max_perf: false,
+                vs_f: 0.0,
             },
             d: Derived { elev: a.elev, oat: 15.0, ..Default::default() },
             crashed: None,
@@ -1139,12 +1143,26 @@ impl Aircraft {
         let nz_law = self.nz_law_max();
         let perf = self.ap.max_perf && !matches!(self.ap.vert, VertMode::Gs | VertMode::Flare) && self.autoland.is_none();
         let ap_rate = if perf { 1.0 } else { 0.6 };
+        // Hors tenue d'altitude AP : la vitesse verticale commandée suit l'avion (reprise sans à-coup)
+        if !(self.ap.on && !self.on_ground && self.ap.vert == VertMode::Alt) {
+            self.ap.vs_f = self.d.vs;
+        }
         if self.ap.on && !self.on_ground {
             let gamma_cmd = match self.ap.vert {
                 VertMode::Alt => {
                     let vs_max = if perf { (0.35 * v).clamp(5.0, 300.0) } else { (0.2 * v).clamp(5.0, 120.0) };
-                    let vs_cmd = ((self.ap.alt_tgt_ft * FT - self.alt) / 25.0).clamp(-vs_max, vs_max);
-                    (vs_cmd / v).clamp(-0.5, 0.5).asin()
+                    // Profil de capture à décélération constante : la vitesse verticale reste au palier
+                    // de montée jusqu'à la distance de mise en palier, puis décroît linéairement dans le
+                    // temps ; proportionnel à l'écart tout près de l'altitude (pas d'oscillation)
+                    let err = self.ap.alt_tgt_ft * FT - self.alt;
+                    let a_cap = if perf { 3.0 } else { 1.5 };
+                    let want = err.signum() * (2.0 * a_cap * err.abs()).sqrt().min(err.abs() / 12.0).min(vs_max);
+                    // Rampe : la vitesse verticale commandée change au plus de a_cap m/s chaque seconde
+                    // (une nouvelle consigne d'altitude ne provoque pas de cabré brutal)
+                    self.ap.vs_f += (want - self.ap.vs_f).clamp(-a_cap * dt, a_cap * dt);
+                    // Pas d'emballement quand l'avion est retenu (protections) : consigne près du réel
+                    self.ap.vs_f = self.ap.vs_f.clamp(self.d.vs - 12.0, self.d.vs + 12.0);
+                    (self.ap.vs_f / v).clamp(-0.5, 0.5).asin()
                 }
                 VertMode::Gs => {
                     if let Some((_, tla, tlo, th, tel)) = self.approach {
@@ -2083,6 +2101,43 @@ impl Aircraft {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Montée AP avec consigne d'altitude relevée de 1000 ft à l'approche de chaque palier : la
+    /// vitesse verticale reste régulière (pas de mise en palier puis cabré à chaque incrément).
+    #[test]
+    fn ap_climb_increments_smooth() {
+        let mut ac = Aircraft::new_on_runway(0);
+        ac.on_ground = false;
+        ac.gear_down = false;
+        ac.gear_pos = 0.0;
+        ac.brakes = false;
+        ac.alt = 15_000.0 * FT;
+        ac.tas = 230.0;
+        ac.throttle = 1.0;
+        ac.set_turbines(TurbState::Running, 1.0);
+        ac.ap.on = true;
+        ac.ap.at_on = true;
+        ac.ap.mach_tgt = 0.75;
+        ac.ap.hdg_tgt = ac.hdg_deg();
+        ac.ap.alt_tgt_ft = 16_000.0;
+        let (mut vmin, mut vmax, mut steps) = (f64::MAX, 0.0f64, 0);
+        let mut t = 0.0f64;
+        while t < 900.0 && ac.ap.alt_tgt_ft < 25_000.0 {
+            ac.step(1.0 / 60.0, 0.0, 0.0);
+            t += 1.0 / 60.0;
+            if ac.alt / FT > ac.ap.alt_tgt_ft - 600.0 {
+                ac.ap.alt_tgt_ft += 1_000.0;
+                steps += 1;
+            }
+            if t > 40.0 {
+                vmin = vmin.min(ac.d.vs);
+                vmax = vmax.max(ac.d.vs);
+            }
+        }
+        println!("increments {steps} vs min {vmin:.1} max {vmax:.1} m/s t {t:.0}");
+        assert!(ac.crashed.is_none() && steps >= 8);
+        assert!(vmin > 0.6 * vmax, "vitesse verticale irreguliere : {vmin:.1} .. {vmax:.1}");
+    }
 
     /// Démarrage réaliste : cold & dark -> batterie -> APU -> turbines (air APU) -> APU coupé.
     #[test]
