@@ -891,3 +891,9 @@ Le SR-72 est un avion de reconnaissance : sa charge utile est simulée.
   verticale commandée varie linéairement (rampe ~0,15 g) et la mise en palier suit un profil à
   décélération constante, proportionnel tout près de l'altitude. Relever la consigne d'altitude
   pendant la montée ne provoque plus de mise en palier puis de cabré à chaque incrément.
+- v1.69.0 : décision aux minimums (CONTINUE / GO AROUND) affichée sur l'horizon dans toutes les
+  versions (dev, composition de la page 1) ; T/D : seul le bloc d'arrivée final du plan compte
+  comme STAR (plafonné à 300 NM) — un point de procédure au milieu de la route faisait descendre
+  ~1000 NM trop tôt (vol KLAX-LFBD). Boutons-poussoirs MASTER WARNING / MASTER CAUTION (fenêtre
+  dédiée en dev, barre du haut en normal) pour acquitter, à la place de la touche Espace ; les
+  pannes du panneau d'annonciateurs allument désormais MASTER CAUTION / WARNING.

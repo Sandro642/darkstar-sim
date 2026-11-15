@@ -585,7 +585,7 @@ pub fn draw_help(r: Rect) {
         ("6 boutons de l'ecran Darkstar = 6 premieres pages ; CONSOLE : bouton MENU", WHITE),
         ("V carte plein ecran  C recentrer  H temps (ou clic TEMPS)", WHITE),
         ("Carte : bouton PLAN / SAT (tuiles reelles) ; SVS : satellite + relief reel", WHITE),
-        ("ESPACE acquitter  J son  MAJ+ENTREE nouvel essai  TAB aide", WHITE),
+        ("MASTER WARN / CAUT (clic) acquitter  J son  MAJ+ENTREE nouvel essai  TAB aide", WHITE),
         ("", WHITE),
         ("Ecran Darkstar : clic sur DUMP (vidange), fleches de portee HSI.", DIM),
         ("Onglet OVERRIDE : interrupteurs gardes. Onglet CONSOLE : moteurs.", DIM),

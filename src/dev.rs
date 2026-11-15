@@ -24,9 +24,10 @@ pub enum WinKind {
     Manette,
     Scram,
     Batterie,
+    Master,
 }
 
-pub const WINS: [(WinKind, &str); 13] = [
+pub const WINS: [(WinKind, &str); 14] = [
     (WinKind::Ecran, "ECRAN"),
     (WinKind::Messages, "MESSAGES / GCS"),
     (WinKind::Train, "TRAIN"),
@@ -40,6 +41,7 @@ pub const WINS: [(WinKind, &str); 13] = [
     (WinKind::Manette, "MANETTE / TRAIN"),
     (WinKind::Scram, "SCRAMJET"),
     (WinKind::Batterie, "BATTERIE"),
+    (WinKind::Master, "MASTER WARNING / CAUTION"),
 ];
 
 fn win_name(k: WinKind) -> &'static str {
@@ -193,6 +195,7 @@ fn default_wins() -> Vec<Win> {
         w(WinKind::Elec, 0.785, 0.18, 0.215, 0.36, true),
         w(WinKind::Manette, 0.0, 0.66, 0.215, 0.34, true),
         w(WinKind::Batterie, 0.425, 0.77, 0.073, 0.23, true),
+        w(WinKind::Master, 0.685, 0.0, 0.095, 0.17, true),
         w(WinKind::Scram, 0.502, 0.77, 0.073, 0.23, true),
         w(WinKind::Messages, 0.22, 0.77, 0.20, 0.23, true),
         w(WinKind::Pannes, 0.575, 0.77, 0.205, 0.23, true),

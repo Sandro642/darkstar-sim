@@ -1028,6 +1028,13 @@ impl Game {
         a.extend(self.thermal.alerts());
         a.extend(self.recon.alerts());
         a.extend(self.combat.alerts());
+        // Voyants du panneau d'annonciateurs (pannes de systèmes) : allument aussi MASTER CAUTION /
+        // MASTER WARNING tant qu'ils ne sont pas acquittés
+        for (name, lvl) in alarms::lit(ac, &a) {
+            if lvl > 0 && !a.iter().any(|(_, s)| s.starts_with(name)) {
+                a.push((if lvl >= 2 { Level::Warning } else { Level::Caution }, name.to_string()));
+            }
+        }
         a
     }
 
@@ -2887,10 +2894,6 @@ async fn main() {
                 }
             }
         }
-        let alerts = g.alerts();
-        if is_key_pressed(KeyCode::Space) && g.console.is_none() {
-            g.acked = alerts.iter().map(|(_, s)| s.clone()).collect();
-        }
         if let Some(line) = g.console.as_mut() {
             while let Some(ch) = get_char_pressed() {
                 if !ch.is_control() && line.len() < 60 {
@@ -3065,28 +3068,6 @@ async fn main() {
                 let fcs = g.ac.fails.has(systems::Fail::FcsDirect) && g.ac.fails.has(systems::Fail::Hyd);
                 let m = if fcs { "IRIDIUM — TELEMESURE, CAMERA, TERMINAL — FCS PERDU" } else { "IRIDIUM — TELEMESURE, CAMERA, TERMINAL — MANCHE INDISPONIBLE" };
                 ui::tag(svs_r.x + svs_r.w / 2.0, svs_r.y + 18.0, "LIAISON", m, if fcs { Color::new(1.0, 0.3, 0.25, 1.0) } else { ui::AMBER }, 12.0, false, true);
-            }
-            // Décision aux minimums : CONTINUE ou GO AROUND
-            if g.mins == 2 {
-                let (cx, y) = (svs_r.x + svs_r.w / 2.0, svs_r.y + svs_r.h * 0.62);
-                let blink = (time * 2.0).fract() < 0.6;
-                ui::rrect(Rect::new(cx - 160.0, y - 30.0, 320.0, 86.0), 8.0, Color::new(0.0, 0.0, 0.0, 0.8));
-                if blink {
-                    ui::txt_c("MINIMUMS", cx, y - 10.0, 20.0, ui::AMBER);
-                }
-                ui::txt_c("SANS DECISION : REMISE DES GAZ", cx, y + 46.0, 11.0, ui::AMBER);
-                let bc = Rect::new(cx - 150.0, y + 4.0, 140.0, 26.0);
-                let bg = Rect::new(cx + 10.0, y + 4.0, 140.0, 26.0);
-                for (b, l, c) in [(bc, "CONTINUE", ui::GREEN_S), (bg, "GO AROUND", ui::AMBER)] {
-                    ui::rrect(b, 6.0, if ui::hovered(b) { Color::new(0.15, 0.17, 0.2, 1.0) } else { Color::new(0.08, 0.09, 0.11, 1.0) });
-                    ui::rrect_lines(b, 6.0, 1.5, c);
-                    ui::txt_c(l, b.x + b.w / 2.0, b.y + 18.0, 14.0, c);
-                }
-                if ui::clicked(bc) {
-                    g.exec_command("CONTINUE");
-                } else if ui::clicked(bg) {
-                    g.exec_command("GO AROUND");
-                }
             }
             // Liaison perdue ou réduite au secours : bandeau et choix du relais
             // (en mode dégradé après reconnexion, le canal d'urgence est voulu : pas de panneau)
@@ -3470,6 +3451,14 @@ fn draw_dev_windows(g: &mut Game, d: &mut dev::DevUi, world: &world::World, tile
                     apply_cockpit(g, a);
                 }
             }
+            dev::WinKind::Master => {
+                let un = |lv: Level| alerts.iter().any(|(l, s)| *l == lv && !g.acked.contains(s));
+                let (w, c) = (un(Level::Warning) || g.ac.crashed.is_some(), un(Level::Caution));
+                if cockpit::master(cr, w, c, time) {
+                    g.acked = alerts.iter().map(|(_, s)| s.clone()).collect();
+                    g.cues.push(audio::Cue::Switch);
+                }
+            }
             dev::WinKind::Batterie => {
                 if let Some(a) = cockpit::battery(&g.ac, cr) {
                     apply_cockpit(g, a);
@@ -3637,6 +3626,35 @@ fn draw_commandes_only(g: &mut Game, cr: Rect, only: Option<usize>) {
     }
 }
 
+/// Décision aux minimums sur l'horizon (version normale et dev, toute composition) :
+/// CONTINUE ou GO AROUND ; sans décision, remise des gaz automatique.
+fn decision_box(g: &mut Game, svs_r: Rect, time: f64) {
+    if g.mins != 2 {
+        return;
+    }
+    let w = 320.0f32.min(svs_r.w - 20.0);
+    let (cx, y) = (svs_r.x + svs_r.w / 2.0, svs_r.y + svs_r.h * 0.62);
+    let blink = (time * 2.0).fract() < 0.6;
+    ui::rrect(Rect::new(cx - w / 2.0, y - 30.0, w, 86.0), 8.0, Color::new(0.0, 0.0, 0.0, 0.8));
+    if blink {
+        ui::txt_c("MINIMUMS", cx, y - 10.0, 20.0, ui::AMBER);
+    }
+    ui::txt_c("SANS DECISION : REMISE DES GAZ", cx, y + 46.0, 11.0, ui::AMBER);
+    let bw = (w - 40.0) / 2.0;
+    let bc = Rect::new(cx - bw - 10.0, y + 4.0, bw, 26.0);
+    let bg = Rect::new(cx + 10.0, y + 4.0, bw, 26.0);
+    for (b, l, c) in [(bc, "CONTINUE", ui::GREEN_S), (bg, "GO AROUND", ui::AMBER)] {
+        ui::rrect(b, 6.0, if ui::hovered(b) { Color::new(0.15, 0.17, 0.2, 1.0) } else { Color::new(0.08, 0.09, 0.11, 1.0) });
+        ui::rrect_lines(b, 6.0, 1.5, c);
+        ui::txt_c(l, b.x + b.w / 2.0, b.y + 18.0, 14.0, c);
+    }
+    if ui::clicked(bc) {
+        g.exec_command("CONTINUE");
+    } else if ui::clicked(bg) {
+        g.exec_command("GO AROUND");
+    }
+}
+
 /// Élément de la page 1 (ou fenêtre) dessiné dans `r`.
 #[allow(clippy::too_many_arguments)]
 fn draw_elem(g: &mut Game, e: dev::Elem, r: Rect, world: &world::World, tiles: &mut tiles::Tiles, alerts: &[(Level, String)], time: f64, ln: &str, lat: f64, warp: f64) {
@@ -3646,6 +3664,7 @@ fn draw_elem(g: &mut Game, e: dev::Elem, r: Rect, world: &world::World, tiles: &
             let info = pfd_info(g, alerts, ln, lat, warp, time);
             let shown = g.stale.as_ref().unwrap_or(&g.ac);
             let _ = mfd::draw_horizon(world, tiles, &g.wx, &g.refuel, shown, &g.recon, r, &mut g.mfd, &info, g.style, time, &g.feel);
+            decision_box(g, pfd::geo(r).inner, time);
             None
         }
         dev::Elem::Carburant => {

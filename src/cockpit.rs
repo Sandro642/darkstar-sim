@@ -326,3 +326,60 @@ pub fn battery(ac: &Aircraft, r: Rect) -> Option<Act> {
     }
     None
 }
+
+// ---------- MASTER WARNING / MASTER CAUTION ----------
+
+/// Boutons-poussoirs lumineux de l'auvent : MASTER WARNING (rouge, clignotant) et MASTER CAUTION
+/// (ambre). Façon poussoir d'avion de combat : collerette métallique, verre teinté, légende
+/// gravée deux lignes, halo quand il est allumé, enfoncement à l'appui. Un appui acquitte.
+pub fn master(r: Rect, warn: bool, caut: bool, time: f64) -> bool {
+    rrect(r, 8.0, FACE);
+    let blink = (time * 2.5).fract() < 0.6;
+    let vertical = r.h > r.w * 1.2;
+    let pad = 10.0;
+    let gap = 10.0;
+    let (bw, bh) = if vertical { (r.w - 2.0 * pad, (r.h - 2.0 * pad - gap) / 2.0) } else { ((r.w - 2.0 * pad - gap) / 2.0, r.h - 2.0 * pad) };
+    // Poussoir carré ou presque, centré dans sa case
+    let side = bw.min(bh).max(30.0);
+    let mut pressed = false;
+    for k in 0..2 {
+        let cell = if vertical { Rect::new(r.x + pad, r.y + pad + k as f32 * (bh + gap), bw, bh) } else { Rect::new(r.x + pad + k as f32 * (bw + gap), r.y + pad, bw, bh) };
+        let (w, h) = (side.min(cell.w), (side * 0.8).min(cell.h));
+        let b = Rect::new(cell.x + (cell.w - w) / 2.0, cell.y + (cell.h - h) / 2.0, w, h);
+        let (l2, lit, on, glow, txt_on) = if k == 0 {
+            ("WARNING", warn && blink, Color::new(1.0, 0.16, 0.12, 1.0), Color::new(1.0, 0.1, 0.05, 0.25), Color::new(1.0, 0.95, 0.9, 1.0))
+        } else {
+            ("CAUTION", caut, Color::new(1.0, 0.74, 0.12, 1.0), Color::new(1.0, 0.7, 0.1, 0.22), Color::new(0.12, 0.06, 0.0, 1.0))
+        };
+        let down = hovered(b) && is_mouse_button_down(MouseButton::Left);
+        // Halo autour du poussoir allumé
+        if lit {
+            for g in 1..=3 {
+                let e = g as f32 * 4.0;
+                rrect(Rect::new(b.x - e, b.y - e, b.w + 2.0 * e, b.h + 2.0 * e), 8.0 + e, Color::new(glow.r, glow.g, glow.b, glow.a / g as f32));
+            }
+        }
+        // Collerette métallique (dégradé simple) et ombre
+        rrect(Rect::new(b.x + 2.0, b.y + 3.0, b.w, b.h), 7.0, Color::new(0.0, 0.0, 0.0, 0.5));
+        rrect(b, 7.0, Color::new(0.30, 0.31, 0.33, 1.0));
+        rrect(Rect::new(b.x, b.y, b.w, b.h * 0.5), 7.0, Color::new(0.38, 0.39, 0.41, 1.0));
+        // Verre : enfoncé de 2 px à l'appui
+        let inset = if down { 6.0 } else { 4.0 };
+        let gl = Rect::new(b.x + inset, b.y + inset + if down { 1.0 } else { 0.0 }, b.w - 2.0 * inset, b.h - 2.0 * inset);
+        let off = Color::new(on.r * 0.16, on.g * 0.16, on.b * 0.16, 1.0);
+        rrect(gl, 4.0, if lit { on } else { off });
+        // Reflet du verre
+        rrect(Rect::new(gl.x + 3.0, gl.y + 2.0, gl.w - 6.0, gl.h * 0.18), 3.0, Color::new(1.0, 1.0, 1.0, if lit { 0.18 } else { 0.06 }));
+        rrect_lines(gl, 4.0, 1.0, Color::new(0.08, 0.08, 0.09, 1.0));
+        // Légende gravée
+        let sz = (gl.w / 7.5).clamp(9.0, 16.0);
+        let tc = if lit { txt_on } else { Color::new(on.r * 0.45, on.g * 0.45, on.b * 0.45, 1.0) };
+        let cy = gl.y + gl.h / 2.0;
+        txt_c("MASTER", gl.x + gl.w / 2.0, cy - 3.0, sz, tc);
+        txt_c(l2, gl.x + gl.w / 2.0, cy + sz + 1.0, sz, tc);
+        if clicked(b) {
+            pressed = true;
+        }
+    }
+    pressed
+}

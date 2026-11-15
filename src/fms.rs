@@ -391,15 +391,34 @@ impl Fpln {
         self.h2_req = h2 * 1.10;
     }
 
+    /// Début de l'arrivée : premier point du bloc STAR / approche qui termine le plan (un point
+    /// marqué « procédure » plus tôt dans la route n'est pas l'arrivée).
+    pub fn star_start(&self) -> Option<usize> {
+        let n = self.wpts.len();
+        let mut k = n;
+        // Le terrain de destination (dernier point) ne fait pas partie de la procédure
+        let end = if n > 0 && self.wpts[n - 1].proc < 2 { n - 1 } else { n };
+        k = k.min(end);
+        while k > 0 && self.wpts[k - 1].proc >= 2 {
+            k -= 1;
+        }
+        (k < end).then_some(k)
+    }
+
+    /// Longueur de l'arrivée prise en compte (m), plafonnée à 300 NM.
+    pub fn star_len(&self) -> f64 {
+        self.star_start()
+            .map(|k| self.wpts[k..].windows(2).map(|w| dist_brg(w[0].lat, w[0].lon, w[1].lat, w[1].lon).0).sum::<f64>())
+            .unwrap_or(0.0)
+            .min(300.0 * NM)
+    }
+
     /// Point de début de descente (distance à destination, m).
     pub fn tod(&self) -> f64 {
         // Avec une STAR : la descente hypersonique doit finir à son entrée (puis la STAR est volée
         // aux altitudes prévues)
-        match self.wpts.iter().position(|w| w.proc >= 2) {
-            Some(k) => {
-                let star: f64 = self.wpts[k..].windows(2).map(|w| dist_brg(w[0].lat, w[0].lon, w[1].lat, w[1].lon).0).sum();
-                star + ((self.crz_fl / 10.0) * (1.0 + 0.5 * self.crz_mach) * hyper_k(self.crz_mach) + 30.0) * NM
-            }
+        match self.star_start() {
+            Some(_) => self.star_len() + ((self.crz_fl / 10.0) * (1.0 + 0.5 * self.crz_mach) * hyper_k(self.crz_mach) + 30.0) * NM,
             None => tod_dist(self.crz_fl, self.crz_mach),
         }
     }
@@ -747,14 +766,15 @@ impl Fms {
         let crz_max = fp.crz_max;
         // Procédures IFR : point actif dans une SID / STAR et altitudes prévues par SimBrief
         let act = fp.wpts.get(fp.active).cloned().unwrap_or_default();
-        let star_first = fp.wpts.iter().find(|w| w.proc >= 2).map(|w| w.sb_alt).unwrap_or(0.0);
+        let star_k = fp.star_start();
+        let star_first = star_k.map(|k| fp.wpts[k].sb_alt).unwrap_or(0.0);
         // Distance par la route jusqu'à l'entrée de la STAR / de l'approche
         let d_star = {
             let mut d = 0.0;
             let (mut pl, mut po) = (ac.lat, ac.lon);
-            for w in &fp.wpts[fp.active.min(fp.wpts.len())..] {
+            for (i, w) in fp.wpts.iter().enumerate().skip(fp.active.min(fp.wpts.len())) {
                 d += dist_brg(pl, po, w.lat, w.lon).0;
-                if w.proc >= 2 {
+                if star_k.is_some_and(|k| i >= k) {
                     break;
                 }
                 pl = w.lat;
@@ -2430,6 +2450,26 @@ mod tests {
         println!("AIRAC {} ALTN {} {} TA {} TL {} ; pistes {:?}", fp.airac, fp.altn, fp.altn_rwy, fp.trans_alt, fp.trans_lvl, fp.rwys.iter().map(|r| format!("{} {} {:.0} {:.2}", r.apt, r.ident, r.true_course, r.ils_mhz)).collect::<Vec<_>>());
         println!("balises {:?}", fp.wpts.iter().filter(|w| !w.freq.is_empty()).map(|w| format!("{} {} {}", w.ident, w.kind, w.freq)).take(6).collect::<Vec<_>>());
         assert!(!fp.wpts.iter().any(|w| w.ident == "TOC" || w.ident == "TOD"));
+    }
+
+    /// Point marqué « procédure d'arrivée » au milieu de la route (océanique) : il ne compte pas
+    /// dans la STAR, le T/D reste calculé depuis le vrai bloc d'arrivée (vol KLAX-LFBD trop tôt).
+    #[test]
+    fn tod_ignores_midroute_star_flag() {
+        let body = r#"{"fetch":{"status":"Success"},"origin":{"icao_code":"KLAX","pos_lat":"33.94","pos_long":"-118.40","plan_rwy":"25R"},
+            "destination":{"icao_code":"LFBD","pos_lat":"44.83","pos_long":"-0.72","plan_rwy":"23"},
+            "navlog":{"fix":[
+            {"ident":"ORCKA","type":"wpt","stage":"CLB","is_sid_star":"1","via_airway":"ORCKA5","altitude_feet":"15000","pos_lat":"34.20","pos_long":"-119.20"},
+            {"ident":"ODD1","type":"wpt","stage":"DSC","is_sid_star":"1","via_airway":"X","altitude_feet":"0","pos_lat":"50.0","pos_long":"-60.0"},
+            {"ident":"MID","type":"wpt","stage":"CRZ","is_sid_star":"0","via_airway":"NAT","altitude_feet":"37000","pos_lat":"50.0","pos_long":"-30.0"},
+            {"ident":"CNA","type":"vor","stage":"DSC","is_sid_star":"1","via_airway":"CNA2K","altitude_feet":"12000","pos_lat":"45.6","pos_long":"-1.4"},
+            {"ident":"D173K","type":"wpt","stage":"DSC","is_sid_star":"1","via_airway":"CNA2K","altitude_feet":"6000","pos_lat":"45.2","pos_long":"-1.0"}]}}"#;
+        let fp = from_simbrief(&parse_json(body).unwrap(), 1210.0, 11.0, false).unwrap();
+        let k = fp.star_start().expect("bloc STAR final");
+        assert_eq!(fp.wpts[k].ident, "CNA");
+        let hyper = (121.0 * (1.0 + 0.5 * 11.0) * (11.0 / 6.0) + 30.0) * NM;
+        println!("T/D {:.0} NM (descente {:.0} NM, STAR {:.0} NM)", fp.tod() / NM, hyper / NM, fp.star_len() / NM);
+        assert!(fp.tod() < hyper + 200.0 * NM);
     }
 
     /// OFP IFR avec SID et STAR : procédures reconnues, T/D avant l'entrée de STAR.
