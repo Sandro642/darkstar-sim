@@ -15,7 +15,13 @@ if [ $# -gt 0 ] && [[ "$1" != *=* ]]; then
   SCEN="$1"
   shift
 fi
-APP=target/shotapp/DarkstarShot.app
+# Paquet temporaire hors du projet (jamais indexé par Spotlight / Launchpad), supprimé à la fin
+TMPD=$(mktemp -d /tmp/darkstar_shot.XXXXXX)
+touch "$TMPD/.metadata_never_index"
+APP="$TMPD/DarkstarShot.app"
+LSR=/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister
+cleanup() { "$LSR" -u "$APP" >/dev/null 2>&1 || true; rm -rf "$TMPD"; }
+trap cleanup EXIT
 mkdir -p "$APP/Contents/MacOS"
 cp target/release/darkstar_sim "$APP/Contents/MacOS/darkstar_sim"
 cat > "$APP/Contents/Info.plist" <<'EOF'
@@ -38,7 +44,7 @@ CMD+=("$APP")
 # Session root (Claude Code) : lancement au nom de l'utilisateur de la session graphique
 if [ "$(id -u)" = "0" ]; then
   U=$(stat -f %Su /dev/console)
-  chown -R "$U" target/shotapp "$(dirname "$OUT")"
+  chown -R "$U" "$TMPD" "$(dirname "$OUT")"
   launchctl asuser "$(id -u "$U")" sudo -u "$U" "${CMD[@]}"
 else
   "${CMD[@]}"
