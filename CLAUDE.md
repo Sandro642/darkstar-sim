@@ -30,5 +30,6 @@
 - Capacité d'appel de dessin faible (4000 sommets / 6000 indices) : un tampon GPU est alloué par
   appel. Gros maillages via `svs::draw_mesh_chunked`.
 - Raccourcis clavier : codes physiques ; n'utiliser que des touches identiques en AZERTY/QWERTY
-  (pas A, Q, Z, W, M).
+  (pas A, Q, Z, W, M), SAUF les commandes de vol voulues par l'utilisateur en AZERTY : Z/S tangage
+  (codes W/S), Q/D roulis (codes A/D), A/E palonnier (codes Q/E). Aérofreins = K, temps = H.
 

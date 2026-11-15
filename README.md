@@ -881,3 +881,9 @@ Le SR-72 est un avion de reconnaissance : sa charge utile est simulée.
   grille adaptée à la taille (mode compact pour les petites cases, défilement à la molette).
   CONFIG : éléments CMD PILOTE AUTO / MOTEURS / CONFIGURATION / NAVIGATION / URGENCE / SIMULATION
   pour afficher un seul sous-menu sur l'écran.
+- v1.68.0 : commandes de vol au clavier (AZERTY) — Z/S tangage, Q/D roulis, A/E palonnier
+  (QWERTY : W/S, A/D, Q/E) ; flèches toujours actives pour tangage / roulis. Palonnier séparé du
+  roulis : lacet seul en vol (dérives), roue avant au sol (le manche ne dirige plus au sol).
+  Aérofreins déplacés sur K, accélération du temps sur H. Lettres ignorées pendant une saisie.
+  Minimums : sans décision (CONTINUE) à la DA, remise des gaz automatique. Vecteur vitesse bloqué
+  au bord de l'horizon (pointillé ambre en butée) au lieu de sortir de l'écran.

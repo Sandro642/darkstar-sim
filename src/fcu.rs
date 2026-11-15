@@ -332,7 +332,7 @@ fn sections(tab: usize, ac: &Aircraft, cx: &Ctx) -> Vec<(&'static str, Vec<Card>
         2 => vec![
             ("TRAIN ET FREINAGE", vec![
                 c("TRAIN", if ac.gear_down { "SORTI" } else { "RENTRE" }, "Sortir avant l'atterrissage", on(ac.gear_down), Some(ac.gear_down), key(KeyCode::G)),
-                c("AEROFREINS", if ac.speedbrake { "SORTIS" } else { "RENTRES" }, "Freinent en vol et au roulage", on(ac.speedbrake), Some(ac.speedbrake), key(KeyCode::S)),
+                c("AEROFREINS", if ac.speedbrake { "SORTIS" } else { "RENTRES" }, "Freinent en vol et au roulage", on(ac.speedbrake), Some(ac.speedbrake), key(KeyCode::K)),
                 c("FREINS DE ROUES", if ac.brakes { "SERRES" } else { "LIBRES" }, "Au sol : arret / frein de parc", on(ac.brakes), Some(ac.brakes), key(KeyCode::B)),
             ]),
             ("CARBURANT (allege l'avion en urgence)", vec![
@@ -382,7 +382,7 @@ fn sections(tab: usize, ac: &Aircraft, cx: &Ctx) -> Vec<(&'static str, Vec<Card>
             ]
         }
         _ => vec![("SIMULATION", vec![
-            c("ACCELERER LE TEMPS", format!("x{:.0}", cx.warp), "x1 a x32 (limite pres du sol)", on(cx.warp > 1.0), None, key(KeyCode::E)),
+            c("ACCELERER LE TEMPS", format!("x{:.0}", cx.warp), "x1 a x32 (limite pres du sol)", on(cx.warp > 1.0), None, key(KeyCode::H)),
             c("SON", if cx.muted { "COUPE" } else { "ON" }, "Son et alarmes", if cx.muted { amb(true) } else { g }, Some(!cx.muted), key(KeyCode::J)),
         ])],
     }

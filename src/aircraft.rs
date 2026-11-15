@@ -293,6 +293,8 @@ pub struct Aircraft {
     pub elec: systems::Elec,
     /// Groupe auxiliaire de puissance
     pub apu: crate::apu::Apu,
+    /// Palonnier pilote (-1..+1), séparé du roulis
+    pub rudder_in: f64,
     /// Centrale inertielle (attitude, cap, position)
     pub ins: crate::ins::Ins,
     /// Démarrage réaliste (cold & dark) : turbines au sol avec l'air de l'APU, APU coupé ensuite
@@ -490,6 +492,7 @@ impl Aircraft {
             last_landing: None,
             apu: crate::apu::Apu::new(),
             ins: crate::ins::Ins::ready(),
+            rudder_in: 0.0,
             cold_start: false,
             apu_off_t: 0.0,
             win_temp: 20.0,
@@ -1533,7 +1536,7 @@ impl Aircraft {
         fcs.elevon_l = (-pitch_def + roll_def).clamp(-30.0, 30.0);
         fcs.elevon_r = (-pitch_def - roll_def).clamp(-30.0, 30.0);
         let asym_y = (self.eng.t_side[0] - self.eng.t_side[1]) / 240_000.0;
-        fcs.rudder = (self.yaw_trim * 15.0 - asym_y * 10.0).clamp(-25.0, 25.0);
+        fcs.rudder = (self.yaw_trim * 15.0 - asym_y * 10.0 + self.rudder_in * 25.0).clamp(-25.0, 25.0);
         self.fcs = fcs;
         // Lacet : poussée dissymétrique des turbines et compensateur YAW TRIM
         let asym = (self.eng.t_side[0] - self.eng.t_side[1]) / 240_000.0;
@@ -1541,7 +1544,9 @@ impl Aircraft {
             let want = (-asym * 2.5).clamp(-1.0, 1.0);
             self.yaw_trim += (want - self.yaw_trim).clamp(-0.2 * dt, 0.2 * dt);
         }
-        let yaw_rate = (asym * 2.5 + self.yaw_trim * 1.0).to_radians() / (1.0 + mach);
+        // Palonnier en vol : lacet seul (pas de roulis induit), efficacité réduite avec le Mach
+        let pedal = if self.on_ground { 0.0 } else { self.rudder_in * 4.0 };
+        let yaw_rate = (asym * 2.5 + self.yaw_trim * 1.0 + pedal).to_radians() / (1.0 + mach);
         if self.tas > 5.0 {
             self.psi += yaw_rate * dt;
         }

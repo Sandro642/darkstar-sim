@@ -93,6 +93,8 @@ struct Game {
     dest: usize,
     sim_time: f64,
     stick: (f64, f64),
+    /// Palonnier (-1 gauche .. +1 droite), indépendant du roulis : lacet en vol, roue avant au sol
+    rudder: f64,
     link_buf: VecDeque<(f64, f64, f64)>,
     last_cmd: (f64, f64),
     acked: Vec<String>,
@@ -294,6 +296,7 @@ impl Game {
             dest,
             sim_time: 0.0,
             stick: (0.0, 0.0),
+            rudder: 0.0,
             link_buf: VecDeque::new(),
             last_cmd: (0.0, 0.0),
             acked: Vec::new(),
@@ -1042,23 +1045,27 @@ impl Game {
         let shift = is_key_down(KeyCode::LeftShift) || is_key_down(KeyCode::RightShift);
         let ac = &mut self.ac;
 
-        // Manche (clavier lissé)
+        // Manche (clavier lissé) : flèches, ou Z/S tangage et Q/D roulis (disposition AZERTY ;
+        // codes physiques : Z = W, Q = A, A = Q en QWERTY, soit WASD + Q/E). Lettres ignorées
+        // pendant une saisie (console, MCDU).
+        let letters = !self.typing;
+        let down = |k: KeyCode| is_key_down(k);
         let fine = if shift { 0.3 } else { 1.0 };
         let mut tp = 0.0;
         let mut tr = 0.0;
         if !ac.ap.on {
-            if is_key_down(KeyCode::Down) {
+            if down(KeyCode::Down) || (letters && down(KeyCode::S)) {
                 tp += fine;
             }
-            if is_key_down(KeyCode::Up) {
+            if down(KeyCode::Up) || (letters && down(KeyCode::W)) {
                 tp -= fine;
             }
         }
-        if !ac.ap.on || ac.on_ground {
-            if is_key_down(KeyCode::Right) {
+        if !ac.ap.on {
+            if down(KeyCode::Right) || (letters && down(KeyCode::D)) {
                 tr += fine;
             }
-            if is_key_down(KeyCode::Left) {
+            if down(KeyCode::Left) || (letters && down(KeyCode::A)) {
                 tr -= fine;
             }
         }
@@ -1067,6 +1074,15 @@ impl Game {
             cur + (tgt - cur).clamp(-rate * real_dt, rate * real_dt)
         };
         self.stick = (mv(self.stick.0, tp), mv(self.stick.1, tr));
+        // Palonnier (lacet) : A gauche, E droite en AZERTY (codes physiques Q / E)
+        let mut ty = 0.0;
+        if letters && down(KeyCode::Q) {
+            ty -= fine;
+        }
+        if letters && down(KeyCode::E) {
+            ty += fine;
+        }
+        self.rudder = mv(self.rudder, ty);
         if self.typing {
             return;
         }
@@ -1141,7 +1157,7 @@ impl Game {
         if kp(KeyCode::B) {
             ac.brakes = !ac.brakes;
         }
-        if kp(KeyCode::S) {
+        if kp(KeyCode::K) {
             ac.speedbrake = !ac.speedbrake;
         }
         if kp(KeyCode::P) {
@@ -1222,7 +1238,7 @@ impl Game {
             ac.autotakeoff = None;
             msgs.push((Level::Caution, "REPRISE EN MAIN MANUELLE — AP / A/THR / AUTOLAND OFF".into()));
         }
-        if kp(KeyCode::E) {
+        if kp(KeyCode::H) {
             self.warp_idx = (self.warp_idx + 1) % WARPS.len();
         }
         if kp(KeyCode::C) {
@@ -1343,9 +1359,16 @@ impl Game {
         let n = (sim_dt / PHYS_DT).ceil().max(1.0) as usize;
         let h = sim_dt / n as f64;
         let was_ground = self.ac.on_ground;
+        let rud = if self.link.full() && self.degraded.is_none() { self.rudder } else { 0.0 };
         for _ in 0..n {
-            let c = self.ac.autoflight().unwrap_or(cmd);
-            self.ac.step(h, c.0, c.1);
+            let (c, auto) = match self.ac.autoflight() {
+                Some(c) => (c, true),
+                None => (cmd, false),
+            };
+            self.ac.rudder_in = if auto { 0.0 } else { rud };
+            // Au sol, la roue avant suit le palonnier (le manche ne commande que le roulis en vol)
+            let lat = if self.ac.on_ground && !auto { rud } else { c.1 };
+            self.ac.step(h, c.0, lat);
         }
         if was_ground && !self.ac.on_ground {
             self.ac.landed = false;
@@ -1494,10 +1517,12 @@ impl Game {
                     self.flash("MINIMUMS", ui::AMBER);
                     self.cues.push(audio::Cue::Minimums);
                     self.push(Level::Caution, "MINIMUMS — DECISION : CONTINUE OU GO AROUND");
-                } else if self.mins == 2 && h < (da * 0.3).min(60.0) {
-                    // Sans décision avant 60 ft : l'approche continue
+                } else if self.mins == 2 && h < (da - 60.0).max(da * 0.5) {
+                    // Pas de décision (pas de références visuelles confirmées) : remise des gaz
                     self.mins = 3;
-                    self.push(Level::Info, "MINIMUMS : PAS DE DECISION — APPROCHE CONTINUEE");
+                    self.push(Level::Warning, "MINIMUMS : PAS DE DECISION — REMISE DES GAZ AUTOMATIQUE");
+                    self.flash("GO AROUND", ui::AMBER);
+                    self.exec_command("GO AROUND");
                 }
             }
             None => self.mins = 0,
@@ -3045,10 +3070,11 @@ async fn main() {
             if g.mins == 2 {
                 let (cx, y) = (svs_r.x + svs_r.w / 2.0, svs_r.y + svs_r.h * 0.62);
                 let blink = (time * 2.0).fract() < 0.6;
-                ui::rrect(Rect::new(cx - 160.0, y - 30.0, 320.0, 68.0), 8.0, Color::new(0.0, 0.0, 0.0, 0.8));
+                ui::rrect(Rect::new(cx - 160.0, y - 30.0, 320.0, 86.0), 8.0, Color::new(0.0, 0.0, 0.0, 0.8));
                 if blink {
                     ui::txt_c("MINIMUMS", cx, y - 10.0, 20.0, ui::AMBER);
                 }
+                ui::txt_c("SANS DECISION : REMISE DES GAZ", cx, y + 46.0, 11.0, ui::AMBER);
                 let bc = Rect::new(cx - 150.0, y + 4.0, 140.0, 26.0);
                 let bg = Rect::new(cx + 10.0, y + 4.0, 140.0, 26.0);
                 for (b, l, c) in [(bc, "CONTINUE", ui::GREEN_S), (bg, "GO AROUND", ui::AMBER)] {

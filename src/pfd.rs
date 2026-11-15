@@ -425,11 +425,32 @@ fn draw_svs_overlay(ac: &Aircraft, v: &View, s: Rect, info: &PfdInfo) {
     // Marqueur de trajectoire : cercle, ailes et dérive
     // Vecteur vitesse sur la route sol : la dérive due au vent le décale latéralement
     let fpv = if !ac.on_ground && ac.tas > 20.0 { v.project_dir(dir(ac.track_deg().to_radians(), ac.gamma)) } else { v.project_dir(dir(ac.psi, ac.theta)) };
+    // Butée : le vecteur reste dans l'horizon (marge pour les ailes), affiché en pointillé ambre
+    // quand il est bloqué au bord (« caged / limited », comme sur un HUD réel)
+    let fpv = fpv.map(|f| {
+        let (mx, my) = (66.0, 40.0);
+        vec2(f.x.clamp(s.x + mx, s.x + s.w - mx), f.y.clamp(s.y + my, s.y + s.h - my))
+    });
+    let limited = match (v.project_dir(dir(ac.track_deg().to_radians(), ac.gamma)), fpv) {
+        (Some(raw), Some(f)) if !ac.on_ground && ac.tas > 20.0 => raw.distance(f) > 1.0,
+        (None, Some(_)) => true,
+        _ => false,
+    };
     if let Some(f) = fpv {
         let (sn, co) = (ac.phi.sin() as f32, ac.phi.cos() as f32);
         let rot = |x: f32, y: f32| vec2(f.x + x * co - y * sn, f.y + x * sn + y * co);
-        for (w, col) in [(4.0, Color::new(0.0, 0.0, 0.0, 0.6)), (2.0, line())] {
-            draw_circle_lines(f.x, f.y, 10.0, w, col);
+        let fc = if limited { AMBER } else { line() };
+        for (w, col) in [(4.0, Color::new(0.0, 0.0, 0.0, 0.6)), (2.0, fc)] {
+            if limited {
+                // Cercle en pointillé
+                for k in 0..8 {
+                    let a0 = k as f32 / 8.0 * std::f32::consts::TAU;
+                    let a1 = a0 + std::f32::consts::TAU / 16.0;
+                    draw_line(f.x + 10.0 * a0.cos(), f.y + 10.0 * a0.sin(), f.x + 10.0 * a1.cos(), f.y + 10.0 * a1.sin(), w, col);
+                }
+            } else {
+                draw_circle_lines(f.x, f.y, 10.0, w, col);
+            }
             for (x0, x1) in [(-46.0, -10.0), (10.0, 46.0)] {
                 let (a, b) = (rot(x0, 0.0), rot(x1, 0.0));
                 draw_line(a.x, a.y, b.x, b.y, w, col);
@@ -989,8 +1010,8 @@ fn config_cues(ac: &Aircraft, cx: f32, y: f32, time: f64) {
         items.push(("GEAR DOWN  (G)", GREEN_S));
     }
     match ac.cue_sb {
-        Some(true) => items.push(("SPEED BRAKE EXT  (S)", CYAN_S)),
-        Some(false) => items.push(("SPEED BRAKE RET  (S)", CYAN_S)),
+        Some(true) => items.push(("SPEED BRAKE EXT  (K)", CYAN_S)),
+        Some(false) => items.push(("SPEED BRAKE RET  (K)", CYAN_S)),
         None => {}
     }
     let blink = (time * 2.0).fract() < 0.7;
