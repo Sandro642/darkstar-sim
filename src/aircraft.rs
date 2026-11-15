@@ -931,6 +931,9 @@ impl Aircraft {
         let sink = (-v * gam.sin()).max(0.0);
         // Pendant la remise à plat la pente continue de se creuser (portance hors de la verticale)
         let dgam = ((1.0 - self.phi.cos()) * g / v * t_roll * 0.5).min(1.2);
+        // Piqué en train de se creuser (ressource sur le dos, split-S) : il continue pendant le temps
+        // de réaction et une partie du roulis
+        let dgam = (dgam + (-self.d.gamma_dot).max(0.0) * (0.8 + 0.3 * t_roll)).min(1.5);
         let gam_end = (gam - dgam).clamp(-1.5, 0.0);
         let h_roll = (-v * ((gam + gam_end) / 2.0).sin()).max(0.0) * t_roll;
         let r = v * v / (g * (n - 1.0).max(0.3));
@@ -1312,7 +1315,14 @@ impl Aircraft {
                 let pmax_r = (35.0f64).to_radians() / (1.0 + mach / 6.0) * hyd;
                 let qmax_r = (12.0f64).to_radians() / (1.0 + mach / 3.0) * hyd;
                 roll_rate = (3.0 * wrap_pi(-self.phi)).clamp(-pmax_r, pmax_r);
-                pitch_rate = if self.phi.abs() < 60f64.to_radians() { qmax_r } else { 0.0 };
+                // Remise à plat DÉCHARGÉE (comme l'Auto-GCAS réel) : tirer sur le dos creuse le piqué ;
+                // incidence ramenée vers ~0,3 g pendant le roulis, ressource seulement ailes presque à plat
+                pitch_rate = if self.phi.abs() < 45f64.to_radians() {
+                    qmax_r
+                } else {
+                    let a1g = mass * g / (q.max(1.0) * S_WING * cla);
+                    ((0.3 * a1g - alpha) * 3.0 + self.d.gamma_dot).clamp(-qmax_r * 2.0, qmax_r)
+                };
                 self.gcas_g_max = self.gcas_g_max.max(self.d.nz);
                 let (m_ok, _) = self.gcas_margin(self.nz_law_max() * 0.95);
                 if self.gamma > 3f64.to_radians() && m_ok > 150.0 {
@@ -1563,7 +1573,8 @@ impl Aircraft {
             // Incidence donnant nmax (portance linéaire), corrigée par le g mesuré : le modèle linéaire
             // sous-estime la portance réelle (effet de sol, rafales, composante de poussée) ; la
             // correction intégrale garantit que la récupération ne dépasse pas sa cible
-            let alpha_g = nmax * mass * g / (q.max(1.0) * S_WING * cla);
+            let ge_l = (1.0 - agl.max(0.0) / 22.0).clamp(0.0, 1.0);
+            let alpha_g = nmax * mass * g / (q.max(1.0) * S_WING * cla * (1.0 + 0.22 * ge_l * ge_l + 0.06 * ge_l));
             if self.d.nz > nmax {
                 // Dépassement : on réduit l'incidence autorisée (correction rapide)
                 self.nz_trim = (self.nz_trim - (self.d.nz - nmax) / nmax * 6.0 * dt).max(0.4);
@@ -2596,6 +2607,41 @@ mod tests {
 
     /// Auto-GCAS : piqué à 30°, 120° d'inclinaison, sans action pilote → récupération sans impact ;
     /// GCAS coupé → impact. Départ tardif → protections dépassées mais avion sauvé.
+    /// Vol du 15/11 (KXTA) : split-S sur le dos à 11 450 ft sol, plein gaz, manche tiré en continu.
+    /// L'Auto-GCAS doit déclencher à temps, remettre à plat déchargé puis tirer, sans rupture.
+    #[test]
+    fn gcas_split_s() {
+        let mut ac = Aircraft::new_on_runway(0);
+        let elev = ground_elev(ac.lat, ac.lon);
+        ac.on_ground = false;
+        ac.gear_down = false;
+        ac.gear_pos = 0.0;
+        ac.brakes = false;
+        ac.alt = elev + 11_450.0 * FT;
+        ac.tas = 287.0 * KT / (isa(ac.alt).rho / RHO0).sqrt();
+        ac.gamma = 8f64.to_radians();
+        ac.theta = ac.gamma + 16f64.to_radians();
+        ac.phi = 167f64.to_radians();
+        ac.set_turbines(TurbState::Running, 1.0);
+        ac.throttle = 1.0;
+        ac.gcas_on = true;
+        let (mut min_agl, mut gmax, mut trig_agl) = (f64::MAX, 0.0f64, None);
+        for _ in 0..(60 * 120) {
+            ac.step(1.0 / 120.0, 1.0, 0.0);
+            let agl = (ac.alt - ground_elev(ac.lat, ac.lon)) / FT;
+            if ac.gcas_active && trig_agl.is_none() {
+                trig_agl = Some((agl, ac.gamma.to_degrees()));
+            }
+            min_agl = min_agl.min(agl);
+            gmax = gmax.max(ac.d.nz);
+            if ac.crashed.is_some() || (trig_agl.is_some() && !ac.gcas_active) {
+                break;
+            }
+        }
+        println!("declenchement {trig_agl:?} ; hauteur mini {min_agl:.0} ft ; g max {gmax:.2} (rupture {:.2}) ; crash {:?}", ac.n_break().0, ac.crashed);
+        assert!(ac.crashed.is_none() && min_agl > 300.0);
+    }
+
     /// Enveloppe structurale : la récupération automatique tire jusqu'à 90 % de la rupture
     /// calculée (plus de g quand l'avion est léger), sans jamais l'atteindre.
     #[test]

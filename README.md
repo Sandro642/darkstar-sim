@@ -930,3 +930,7 @@ Le SR-72 est un avion de reconnaissance : sa charge utile est simulée.
   dépassement) ; la loi normale ne dépasse jamais cette marge. Graphe ENVELOPPE STRUCTURALE sur la
   page FCS (rupture et cible recovery en fonction de la température, masse actuelle / maximale,
   point actuel). Message de rupture avec la limite calculée.
+- v1.70.1 : Auto-GCAS (analyse du crash du 15/11, split-S sur le dos) — remise à plat DÉCHARGÉE
+  (~0,3 g pendant le roulis, ressource seulement ailes presque à plat) au lieu de tirer sur le dos,
+  prédiction qui tient compte du piqué en train de se creuser (déclenchement plus tôt), limiteur de
+  g qui intègre l'effet de sol (plus de dépassement près du sol). Test du scénario du vol.
