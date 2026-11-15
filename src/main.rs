@@ -3031,6 +3031,13 @@ async fn main() {
             drop(info);
             let _ = shown;
             let bez = mfd::bezel_only(mfd_r, lit, time);
+            // Auvent : boutons MASTER WARNING / MASTER CAUTION (modèle réel), acquittement
+            let mw = (mfd_r.w * 0.3).clamp(170.0, 240.0);
+            let mr = Rect::new(mfd_r.x + mfd_r.w - 64.0 - mw, mfd_r.y + 5.0, mw, 50.0);
+            if cockpit::master_pair(mr, master_warn, master_caut, time) {
+                g.acked = alerts.iter().map(|(_, s)| s.clone()).collect();
+                g.cues.push(audio::Cue::Switch);
+            }
             handle_mfd(&mut g, mfd::MfdActions { bezel: bez, ..Default::default() });
             let disp = mfd::display_rect(mfd_r);
             draw_rectangle(disp.x, disp.y, disp.w, disp.h, BLACK);
@@ -3128,8 +3135,6 @@ async fn main() {
                 warp: warp_eff,
                 warp_capped,
                 link: &ln,
-                master_warn,
-                master_caut,
                 muted: g.muted,
                 time,
             },

@@ -329,25 +329,40 @@ pub fn battery(ac: &Aircraft, r: Rect) -> Option<Act> {
 
 // ---------- MASTER WARNING / MASTER CAUTION ----------
 
-/// Boutons MASTER WARNING / MASTER CAUTION reproduits sur le modèle réel : boîtier noir mat
-/// rectangulaire fixé par deux vis cruciformes, poussoir en relief gris foncé, légende gravée
-/// « MASTER / CAUTION / PRESS TO RESET ». Allumé, la gravure s'éclaire (ambre, ou rouge
-/// clignotant pour WARNING). Le poussoir s'enfonce à l'appui ; un appui acquitte les alarmes.
+/// Boutons MASTER WARNING / MASTER CAUTION reproduits sur le modèle réel, côte à côte (ou
+/// l'un sous l'autre) dans `r` ; vrai si l'un est appuyé (acquittement).
 pub fn master(r: Rect, warn: bool, caut: bool, time: f64) -> bool {
     rrect(r, 8.0, FACE);
+    master_pair(Rect::new(r.x + 8.0, r.y + 8.0, r.w - 16.0, r.h - 16.0), warn, caut, time)
+}
+
+/// Les deux boutons dans `r`, sans fond (pour l'auvent de l'écran de la version normale).
+pub fn master_pair(r: Rect, warn: bool, caut: bool, time: f64) -> bool {
     let blink = (time * 2.5).fract() < 0.6;
     let vertical = r.h > r.w * 0.9;
-    let pad = 8.0;
     let gap = 8.0;
-    let (cw, chh) = if vertical { (r.w - 2.0 * pad, (r.h - 2.0 * pad - gap) / 2.0) } else { ((r.w - 2.0 * pad - gap) / 2.0, r.h - 2.0 * pad) };
-    // Boîtier aux proportions du bouton réel (~1,95:1)
+    let (cw, chh) = if vertical { (r.w, (r.h - gap) / 2.0) } else { ((r.w - gap) / 2.0, r.h) };
     let aspect = 1.95;
     let (hw, hh) = if cw / chh > aspect { (chh * aspect, chh) } else { (cw, cw / aspect) };
     let mut pressed = false;
     for k in 0..2 {
-        let cell = if vertical { Rect::new(r.x + pad, r.y + pad + k as f32 * (chh + gap), cw, chh) } else { Rect::new(r.x + pad + k as f32 * (cw + gap), r.y + pad, cw, chh) };
+        let cell = if vertical { Rect::new(r.x, r.y + k as f32 * (chh + gap), cw, chh) } else { Rect::new(r.x + k as f32 * (cw + gap), r.y, cw, chh) };
         let hb = Rect::new(cell.x + (cell.w - hw) / 2.0, cell.y + (cell.h - hh) / 2.0, hw, hh);
-        let (l2, lit, lamp) = if k == 0 { ("WARNING", warn && blink, Color::new(1.0, 0.22, 0.16, 1.0)) } else { ("CAUTION", caut, Color::new(1.0, 0.72, 0.16, 1.0)) };
+        let lit = if k == 0 { warn && blink } else { caut };
+        if master_button(hb, k == 0, lit) {
+            pressed = true;
+        }
+    }
+    pressed
+}
+
+/// Un bouton (boîtier `hb`) : boîtier noir mat, deux vis cruciformes, poussoir en relief gris
+/// foncé, légende gravée « MASTER / CAUTION / PRESS TO RESET » qui s'éclaire (ambre, ou rouge
+/// pour WARNING) ; s'enfonce à l'appui. Vrai si cliqué.
+pub fn master_button(hb: Rect, warning: bool, lit: bool) -> bool {
+    let (hw, hh) = (hb.w, hb.h);
+    let (l2, lamp) = if warning { ("WARNING", Color::new(1.0, 0.22, 0.16, 1.0)) } else { ("CAUTION", Color::new(1.0, 0.72, 0.16, 1.0)) };
+    {
         // --- Boîtier ---
         rrect(Rect::new(hb.x + 1.5, hb.y + 2.5, hb.w, hb.h), 3.0, Color::new(0.0, 0.0, 0.0, 0.55));
         rrect(hb, 3.0, Color::new(0.075, 0.075, 0.08, 1.0));
@@ -388,7 +403,8 @@ pub fn master(r: Rect, warn: bool, caut: bool, time: f64) -> bool {
         let y2 = lp.y + lp.h * 0.68;
         let y3 = lp.y + lp.h * 0.92;
         // Gravure : liseré sombre décalé (creux), puis le texte ; halo quand la lampe éclaire
-        for (t, y, sz) in [("MASTER", y1, big), (l2, y2, big), ("PRESS TO RESET", y3, small)] {
+        let lines: Vec<(&str, f32, f32)> = if small >= 7.0 { vec![("MASTER", y1, big), (l2, y2, big), ("PRESS TO RESET", y3, small)] } else { vec![("MASTER", lp.y + lp.h * 0.42, big * 1.15), (l2, lp.y + lp.h * 0.82, big * 1.15)] };
+        for (t, y, sz) in lines {
             if lit {
                 txt_c(t, cx + 0.8, y + 0.8, sz, Color::new(lamp.r, lamp.g, lamp.b, 0.35));
                 txt_c(t, cx - 0.8, y - 0.8, sz, Color::new(lamp.r, lamp.g, lamp.b, 0.35));
@@ -397,9 +413,8 @@ pub fn master(r: Rect, warn: bool, caut: bool, time: f64) -> bool {
             }
             txt_c(t, cx, y, sz, tc);
         }
-        if clicked(btn) || clicked(hb) {
-            pressed = true;
-        }
+        // Légende fine illisible en petit : omise
+        let _ = small;
+        clicked(btn) || clicked(hb)
     }
-    pressed
 }

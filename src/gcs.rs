@@ -12,8 +12,6 @@ pub struct TopBar<'a> {
     pub warp: f64,
     pub warp_capped: bool,
     pub link: &'a str,
-    pub master_warn: bool,
-    pub master_caut: bool,
     pub muted: bool,
     pub time: f64,
 }
@@ -60,7 +58,6 @@ pub fn draw_topbar(r: Rect, t: &TopBar) -> TopActions {
     chip(x, y, "LINK", t.link, lc);
 
     // Droite : alarmes maîtres, son, aide
-    let blink = (t.time * 2.5).fract() < 0.6;
     let mut rx = r.x + r.w - 12.0;
     let help = Rect::new(rx - 54.0, y, 54.0, 22.0);
     rrect(help, 6.0, Color::new(0.09, 0.11, 0.14, 1.0));
@@ -71,15 +68,6 @@ pub fn draw_topbar(r: Rect, t: &TopBar) -> TopActions {
     rrect(snd, 6.0, Color::new(0.09, 0.11, 0.14, 1.0));
     txt_c(if t.muted { "SON OFF" } else { "SON ON" }, snd.x + snd.w / 2.0, y + 16.0, 13.0, if t.muted { AMBER } else { DIM });
     act.mute = clicked(snd);
-    rx -= 78.0;
-    let caut = Rect::new(rx - 112.0, y, 112.0, 22.0);
-    rrect(caut, 6.0, if t.master_caut { AMBER } else { Color::new(0.2, 0.15, 0.02, 1.0) });
-    txt_c("MASTER CAUT", caut.x + caut.w / 2.0, y + 16.0, 13.0, if t.master_caut { BLACK } else { DIM });
-    rx -= 120.0;
-    let warn = Rect::new(rx - 112.0, y, 112.0, 22.0);
-    rrect(warn, 6.0, if t.master_warn && blink { RED } else { Color::new(0.22, 0.03, 0.03, 1.0) });
-    txt_c("MASTER WARN", warn.x + warn.w / 2.0, y + 16.0, 13.0, if t.master_warn { WHITE } else { DIM });
-    act.ack = clicked(warn) || clicked(caut);
     act
 }
 
