@@ -73,6 +73,8 @@ pub struct Elec {
     pub sel_ebay: bool,  // sélecteur d'indication : E BAY (sinon CKPT)
     pub auto_temp: bool, // HOLD AUTO TEMP
     pub lost: bool,      // perte totale d'alimentation
+    /// Interrupteur batterie principale (cold & dark : coupé)
+    pub batt_sw: bool,
 }
 
 pub const ELEC_LOAD_KW: f64 = 40.0;
@@ -82,6 +84,7 @@ pub const FC_MAX_KW: f64 = 50.0;
 impl Elec {
     pub fn new() -> Self {
         Elec {
+            batt_sw: true,
             batt: 1.0,
             o2: 1.0,
             fc_on: false,
@@ -100,11 +103,22 @@ impl Elec {
     }
 
     /// `gens` : nombre de génératrices en ligne ; renvoie la consommation H2 de la pile (kg/s).
-    pub fn update(&mut self, dt: f64, gens: u32, h2_avail: bool, skin_c: f64) -> f64 {
+    pub fn update(&mut self, dt: f64, gens: u32, h2_avail: bool, skin_c: f64, ground: bool) -> f64 {
         self.gen_kw = gens as f64 * GEN_KW;
+        // Batterie coupée et aucune génératrice : avion éteint (pas de perte « en vol » au sol)
+        if !self.batt_sw && gens == 0 {
+            self.fc_on = false;
+            self.fc_kw = 0.0;
+            self.bus_ok = false;
+            if !ground {
+                self.lost = true;
+            }
+            return 0.0;
+        }
         let deficit = (ELEC_LOAD_KW - self.gen_kw).max(0.0);
         let mut h2_use = 0.0;
-        self.fc_on = deficit > 0.0 && h2_avail && self.o2 > 0.0;
+        // Pile à combustible H2/O2 : source de secours en vol seulement
+        self.fc_on = deficit > 0.0 && h2_avail && self.o2 > 0.0 && !ground;
         self.fc_kw = if self.fc_on { deficit.min(FC_MAX_KW) } else { 0.0 };
         if self.fc_on {
             // ~0.06 kg H2 par kWh électrique (rendement ~50 %)
@@ -117,12 +131,13 @@ impl Elec {
         if supplied >= ELEC_LOAD_KW {
             self.batt = (self.batt + dt / 1800.0).min(1.0);
         } else {
-            // Batterie seule : ~30 min à pleine charge du bus
+            // Batterie seule : ~10 min au sol (démarrer l'APU), ~30 min en vol (charge réduite)
             let short = (ELEC_LOAD_KW - supplied) / ELEC_LOAD_KW;
-            self.batt = (self.batt - short * dt / 1800.0).max(0.0);
+            let cap = if ground { 600.0 } else { 1800.0 };
+            self.batt = (self.batt - short * dt / cap).max(0.0);
         }
         self.bus_ok = supplied >= ELEC_LOAD_KW || self.batt > 0.0;
-        if !self.bus_ok {
+        if !self.bus_ok && !ground {
             self.lost = true;
         }
         // Baie équipements : refroidie par la boucle carburant, consigne du sélecteur TEMP

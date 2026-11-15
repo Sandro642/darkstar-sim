@@ -28,6 +28,7 @@ pub enum MenuAction {
     GLim(bool),
     PitotHeat(bool),
     Nws(bool),
+    Batt(bool),
     ApuMaster(bool),
     ApuStart,
     ApuStop,
@@ -382,28 +383,34 @@ pub fn right_console(ac: &Aircraft, r: Rect, time: f64) -> Option<MenuAction> {
     let yl = p.y + 22.0;
     let yt = p.y + 74.0;
     // MASTER (interrupteur), START (bouton-poussoir), GEN et BLEED (interrupteurs)
-    txt_c("MASTER", col(0.12), yl, 12.0, LEGEND);
-    if let Some(np) = toggle(col(0.12), yt, if a.master { 0 } else { 1 }, 2) {
+    // Batterie principale (cold & dark : coupée) — à mettre en premier
+    txt_c("BATT", col(0.06), yl, 12.0, LEGEND);
+    if let Some(np) = toggle(col(0.06), yt, if ac.elec.batt_sw { 0 } else { 1 }, 2) {
+        out = Some(MenuAction::Batt(np == 0));
+    }
+    txt_c(&format!("{:.0} %", ac.elec.batt * 100.0), col(0.06), yt + 44.0, 11.0, if !ac.elec.batt_sw { DIM } else if ac.elec.batt < 0.25 { AMBER } else { GREEN_S });
+    txt_c("MASTER", col(0.28), yl, 12.0, LEGEND);
+    if let Some(np) = toggle(col(0.28), yt, if a.master { 0 } else { 1 }, 2) {
         out = Some(MenuAction::ApuMaster(np == 0));
     }
-    txt_c(if a.master { "ON" } else { "OFF" }, col(0.12), yt + 44.0, 11.0, if a.master { GREEN_S } else { DIM });
-    txt_c("START", col(0.40), yl, 12.0, LEGEND);
+    txt_c(if a.master { "ON" } else { "OFF" }, col(0.28), yt + 44.0, 11.0, if a.master { GREEN_S } else { DIM });
+    txt_c("START", col(0.50), yl, 12.0, LEGEND);
     let starting = a.state == ApuState::Starting;
     let avail = a.state == ApuState::Running && a.n > 0.95;
     let blink = (time * 2.0).fract() < 0.6;
-    if pushbutton(Rect::new(col(0.40) - 29.0, yt - 22.0, 58.0, 44.0), "START", (starting && blink).then_some(white), "AVAIL", avail.then_some(GREEN_S)) {
+    if pushbutton(Rect::new(col(0.50) - 29.0, yt - 22.0, 58.0, 44.0), "START", (starting && blink).then_some(white), "AVAIL", avail.then_some(GREEN_S)) {
         out = Some(if matches!(a.state, ApuState::Starting | ApuState::Running) { MenuAction::ApuStop } else { MenuAction::ApuStart });
     }
-    txt_c("GEN", col(0.66), yl, 12.0, LEGEND);
-    if let Some(np) = toggle(col(0.66), yt, if a.generator { 0 } else { 1 }, 2) {
+    txt_c("GEN", col(0.72), yl, 12.0, LEGEND);
+    if let Some(np) = toggle(col(0.72), yt, if a.generator { 0 } else { 1 }, 2) {
         out = Some(MenuAction::ApuGen(np == 0));
     }
-    txt_c(if a.gen_online() { "ON LINE" } else if a.generator { "ON" } else { "OFF" }, col(0.66), yt + 44.0, 11.0, if a.gen_online() { GREEN_S } else { LEGEND });
-    txt_c("BLEED", col(0.90), yl, 12.0, LEGEND);
-    if let Some(np) = toggle(col(0.90), yt, if a.bleed { 0 } else { 1 }, 2) {
+    txt_c(if a.gen_online() { "ON LINE" } else if a.generator { "ON" } else { "OFF" }, col(0.72), yt + 44.0, 11.0, if a.gen_online() { GREEN_S } else { LEGEND });
+    txt_c("BLEED", col(0.93), yl, 12.0, LEGEND);
+    if let Some(np) = toggle(col(0.93), yt, if a.bleed { 0 } else { 1 }, 2) {
         out = Some(MenuAction::ApuBleed(np == 0));
     }
-    txt_c(if a.bleed_air() { "AIR" } else if a.bleed { "ON" } else { "OFF" }, col(0.90), yt + 44.0, 11.0, if a.bleed_air() { GREEN_S } else { LEGEND });
+    txt_c(if a.bleed_air() { "AIR" } else if a.bleed { "ON" } else { "OFF" }, col(0.93), yt + 44.0, 11.0, if a.bleed_air() { GREEN_S } else { LEGEND });
     // Cadrans N et EGT
     let gy = (yt + 66.0 + 30.0).min(p.y + p.h - 26.0);
     let gr = 26.0f32;
@@ -421,7 +428,14 @@ pub fn right_console(ac: &Aircraft, r: Rect, time: f64) -> Option<MenuAction> {
     };
     txt_r(st.0, p.x + p.w - 30.0, p.y + p.h - 12.0, 11.0, st.1);
     // Check-list APU
-    let steps: [(&str, bool); 3] = [("APU MASTER ON", a.master), ("APU START -> AVAIL", avail), ("APU BLEED ON (AIR DE DEMARRAGE)", a.bleed_air())];
+    let turb_run = ac.eng.side.iter().all(|s| *s == TurbState::Running);
+    let steps: [(&str, bool); 5] = [
+        ("BATTERIE ON", ac.elec.batt_sw),
+        ("APU MASTER ON", a.master || turb_run),
+        ("APU START -> AVAIL", avail || turb_run),
+        ("APU BLEED ON (AIR DE DEMARRAGE)", a.bleed_air() || turb_run),
+        ("MOTEURS : CONSOLE GAUCHE, START (APU S'ARRETE SEUL)", turb_run),
+    ];
     let mut y = gy + gr + 34.0;
     for (k, (l, ok)) in steps.iter().enumerate() {
         if y + 4.0 > p.y + p.h - 24.0 {

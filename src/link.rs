@@ -111,7 +111,8 @@ impl Link {
         if p == Path::Emerg {
             return Ok((0.0, 1.0));
         }
-        if !ac.elec.bus_ok {
+        // Au sol, la station est reliée à l'avion par câble : la liaison ne dépend du bord qu'en vol
+        if !ac.elec.bus_ok && !ac.on_ground {
             return Err("EMETTEUR HORS TENSION");
         }
         if self.tx_fail {

@@ -624,6 +624,7 @@ impl Game {
         use menu::MenuAction::*;
         match a {
             EngSwitch(i, sw) => self.ac.cmd_eng_switch(i, sw),
+            Batt(on) => self.exec_command(if on { "BATT ON" } else { "BATT OFF" }),
             ApuMaster(on) => {
                 if on {
                     self.ac.apu.master = true;
@@ -884,6 +885,8 @@ impl Game {
             ac.lon = lo;
             ac.psi = e.hdg.to_radians();
         }
+        // Arrivée dans l'avion : cold & dark (BATTERIE -> APU -> moteurs)
+        ac.cold_and_dark();
         self.taxi = None;
         self.hold_apt = None;
         self.ac = ac;
@@ -1942,6 +1945,15 @@ impl Game {
                     reply = Ok("VERSION DEVELOPPEUR — FENETRES DEPLACABLES, CONSOLE DANS LA BARRE (MENU CONSOLE)".into());
                 }
             }
+            // Batterie principale
+            "BATT" | "BATTERIE" | "BATTERY" => {
+                let on = !matches!(arg(1), "OFF" | "COUPER");
+                if !on && ac.eng.side.iter().all(|s| *s != TurbState::Running) && !ac.apu.gen_online() {
+                    ac.elec.bus_ok = false;
+                }
+                ac.elec.batt_sw = on;
+                reply = Ok(if on { format!("BATTERIE ON — {:.0} %", ac.elec.batt * 100.0) } else { "BATTERIE OFF".into() });
+            }
             // Largage d'urgence : vidange JP-7 et H2
             "JETTISON" | "LARGAGE" => {
                 ac.cmd_fuel_dump(true);
@@ -1959,7 +1971,7 @@ impl Game {
                 let ac = &mut self.ac;
                 reply = match (arg(1), arg(2)) {
                     ("START" | "ON" | "", _) => {
-                        let (alt, batt, fuel) = (ac.alt / FT, ac.elec.bus_ok || ac.elec.batt > 0.05, ac.fuel > 0.0);
+                        let (alt, batt, fuel) = (ac.alt / FT, ac.elec.bus_ok, ac.fuel > 0.0);
                         ac.apu.start(alt, batt, fuel)
                     }
                     ("STOP" | "OFF", _) => ac.apu.stop(),
@@ -3390,8 +3402,11 @@ fn draw_dev_windows(g: &mut Game, d: &mut dev::DevUi, world: &world::World, tile
             }
             dev::WinKind::Messages => panels::draw_messages(&g.log, cr),
             dev::WinKind::Train => draw_elem(g, dev::Elem::Train, cr, world, tiles, alerts, time, ln, lat, warp),
+            dev::WinKind::Nd if no_power(g, cr) => {}
             dev::WinKind::Nd => draw_elem(g, dev::Elem::Nd, cr, world, tiles, alerts, time, ln, lat, warp),
             // Poste pilote
+            dev::WinKind::Moteurs if no_power(g, cr) => {}
+            dev::WinKind::Radio if no_power(g, cr) => {}
             dev::WinKind::Moteurs => {
                 let mut p = g.eng_page;
                 cockpit::engines(&g.ac, &g.chambers, cr, &mut p, time);
@@ -3411,11 +3426,6 @@ fn draw_dev_windows(g: &mut Game, d: &mut dev::DevUi, world: &world::World, tile
             }
             dev::WinKind::Scram => {
                 if let Some(a) = cockpit::scram(&g.ac, cr, time) {
-                    apply_cockpit(g, a);
-                }
-            }
-            dev::WinKind::MotApuClim => {
-                if let Some(a) = cockpit::eng_apu_clim(&g.ac, cr) {
                     apply_cockpit(g, a);
                 }
             }
@@ -3462,11 +3472,25 @@ fn dev_bar(g: &mut Game, d: &mut dev::DevUi, sw: f32, warp: f64, ln: &str, warn:
     out.quit
 }
 
+/// Écran éteint faute d'alimentation (cold & dark) : vrai si l'écran est noir.
+fn no_power(g: &Game, r: Rect) -> bool {
+    if g.ac.elec.bus_ok {
+        return false;
+    }
+    draw_rectangle(r.x, r.y, r.w, r.h, Color::new(0.01, 0.012, 0.015, 1.0));
+    ui::txt_c("PAS D'ALIMENTATION", r.x + r.w / 2.0, r.y + r.h / 2.0 - 4.0, 13.0, Color::new(0.35, 0.37, 0.4, 1.0));
+    ui::txt_c("BATTERIE SUR ON (CONSOLE, PANNEAU DROIT)", r.x + r.w / 2.0, r.y + r.h / 2.0 + 14.0, 10.0, Color::new(0.28, 0.3, 0.33, 1.0));
+    true
+}
+
 /// ECRAN à pages (version dev et écran du cockpit de la version normale) : bandeau des pages,
 /// page 1 composée, pages FCS / THERMIQUE / RECON / SYSTEMES (+ ARMEMENT, DONNEES MOTEUR) /
 /// INCENDIE / MCDU, page CONFIG. Renvoie la zone de l'horizon (bandeaux et alertes de l'horizon).
 #[allow(clippy::too_many_arguments)]
 fn draw_screen(g: &mut Game, d: &mut dev::DevUi, cr: Rect, world: &world::World, tiles: &mut tiles::Tiles, alerts: &[(Level, String)], time: f64, ln: &str, lat: f64, warp: f64) -> Option<Rect> {
+    if no_power(g, cr) {
+        return None;
+    }
     let area = d.screen_tabs(cr);
     let tab = match d.page {
         dev::Page::Fcs => Some(gcs::Tab::Fcs),
@@ -3528,16 +3552,6 @@ fn apply_cockpit(g: &mut Game, a: cockpit::Act) {
                 }
             }
             return;
-        }
-        cockpit::Act::Menu(m) => g.apply_menu(m),
-        cockpit::Act::Env(e) => {
-            let el = &mut g.ac.elec;
-            match e {
-                elec::EnvAction::TempKnob(v) => el.temp_knob = v,
-                elec::EnvAction::FaceHeat(v) => el.faceheat = v,
-                elec::EnvAction::SelToggle => el.sel_ebay = !el.sel_ebay,
-                elec::EnvAction::AutoToggle => el.auto_temp = !el.auto_temp,
-            }
         }
     }
     g.cues.push(audio::Cue::Switch);

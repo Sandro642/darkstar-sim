@@ -24,10 +24,9 @@ pub enum WinKind {
     Radio,
     Manette,
     Scram,
-    MotApuClim,
 }
 
-pub const WINS: [(WinKind, &str); 14] = [
+pub const WINS: [(WinKind, &str); 13] = [
     (WinKind::Ecran, "ECRAN"),
     (WinKind::Messages, "MESSAGES / GCS"),
     (WinKind::Train, "TRAIN"),
@@ -41,7 +40,6 @@ pub const WINS: [(WinKind, &str); 14] = [
     (WinKind::Radio, "RADIO / TRANSPONDEUR"),
     (WinKind::Manette, "MANETTE / TRAIN"),
     (WinKind::Scram, "SCRAMJET"),
-    (WinKind::MotApuClim, "MOTEURS / APU / CLIM"),
 ];
 
 fn win_name(k: WinKind) -> &'static str {
@@ -185,10 +183,9 @@ fn default_wins() -> Vec<Win> {
         w(WinKind::Scram, 0.43, 0.77, 0.14, 0.23, true),
         w(WinKind::Messages, 0.22, 0.77, 0.205, 0.23, true),
         w(WinKind::Pannes, 0.575, 0.77, 0.205, 0.23, true),
-        w(WinKind::MotApuClim, 0.785, 0.66, 0.215, 0.34, true),
+        w(WinKind::PanneauDroit, 0.785, 0.66, 0.215, 0.34, true),
         w(WinKind::Train, 0.0, 0.0, 0.10, 0.17, false),
         w(WinKind::Nd, 0.70, 0.0, 0.30, 0.17, false),
-        w(WinKind::PanneauDroit, 0.74, 0.01, 0.255, 0.56, false),
         w(WinKind::PanneauGauche, 0.30, 0.22, 0.43, 0.50, false),
         w(WinKind::Commandes, 0.36, 0.06, 0.37, 0.90, false),
     ]
@@ -253,14 +250,14 @@ impl DevUi {
                 wins.push(d);
             }
         }
-        if !wins.is_empty() && s.lines().any(|l| l.trim() == "V 2") {
+        if !wins.is_empty() && s.lines().any(|l| l.trim() == "V 3") {
             self.wins = wins;
         }
         self.widgets = wids;
     }
 
     pub fn save(&self) {
-        let mut s = String::from("V 2\n");
+        let mut s = String::from("V 3\n");
         for w in &self.wins {
             s.push_str(&format!("W {} {:.4} {:.4} {:.4} {:.4} {}\n", win_name(w.kind).replace(' ', "_"), w.r[0], w.r[1], w.r[2], w.r[3], w.open as u8));
         }

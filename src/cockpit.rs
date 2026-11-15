@@ -5,7 +5,6 @@
 //!   3 pourcentage manette 0-100 % ;
 //! - MANETTE (bas gauche) : manette des gaz, levier de train, JETTISON protégé ;
 //! - SCRAM (bas milieu) : bouton scramjet ;
-//! - MOTEURS / APU / CLIM (bas droite) : interrupteurs moteurs, START / STOP, APU, climatisation.
 
 use crate::aircraft::*;
 use crate::ui::*;
@@ -16,8 +15,6 @@ pub enum Act {
     Cmd(String),
     Key(KeyCode),
     Throttle(f64),
-    Menu(crate::menu::MenuAction),
-    Env(crate::elec::EnvAction),
 }
 
 const FACE: Color = Color::new(0.07, 0.08, 0.09, 1.0);
@@ -306,82 +303,4 @@ pub fn scram(ac: &Aircraft, r: Rect, time: f64) -> Option<Act> {
         return Some(Act::Key(KeyCode::U));
     }
     None
-}
-
-// ---------- MOTEURS / APU / CLIM ----------
-
-pub fn eng_apu_clim(ac: &Aircraft, r: Rect) -> Option<Act> {
-    use crate::apu::ApuState;
-    use crate::menu::MenuAction as M;
-    let mut out = None;
-    rrect(r, 8.0, FACE);
-    let pad = 6.0;
-    let cols = 4.0;
-    let bw = (r.w - pad * (cols + 1.0)) / cols;
-    let bh = ((r.h - 3.0 * 16.0 - 4.0 * pad) / 3.0).clamp(30.0, 44.0);
-    let mut y = r.y + 4.0;
-    let sec = |y: &mut f32, t: &str| {
-        txt(t, r.x + pad, *y + 11.0, 10.0, LBL);
-        *y += 15.0;
-    };
-    let bx = |k: usize| r.x + pad + k as f32 * (bw + pad);
-    // Moteurs
-    sec(&mut y, "MOTEURS");
-    let e = &ac.eng;
-    for i in 0..2 {
-        let on = e.sw[i] == EngSw::On;
-        if push(Rect::new(bx(i), y, bw, bh), ["ENG L", "ENG R"][i], if on { "ON" } else { "OFF" }, on.then_some(GREEN_S)) {
-            out = Some(Act::Menu(M::EngSwitch(i, if on { EngSw::Off } else { EngSw::On })));
-        }
-    }
-    let starting = e.side.contains(&TurbState::Starting);
-    let running = e.side.contains(&TurbState::Running);
-    if push(Rect::new(bx(2), y, bw, bh), "START", if starting { "EN COURS" } else { "" }, starting.then_some(CYAN_S)) {
-        out = Some(Act::Menu(M::Start));
-    }
-    if push(Rect::new(bx(3), y, bw, bh), "STOP", if running { "RUN" } else { "OFF" }, running.then_some(GREEN_S)) {
-        out = Some(Act::Menu(M::Stop));
-    }
-    y += bh + pad;
-    // APU
-    sec(&mut y, "APU");
-    let a = &ac.apu;
-    let avail = a.state == ApuState::Running && a.n > 0.95;
-    if push(Rect::new(bx(0), y, bw, bh), "MASTER", if a.master { "ON" } else { "OFF" }, a.master.then_some(GREEN_S)) {
-        out = Some(Act::Menu(M::ApuMaster(!a.master)));
-    }
-    let st = match a.state {
-        ApuState::Starting => format!("{:.0} %", a.n * 100.0),
-        ApuState::Running if avail => "AVAIL".into(),
-        ApuState::Stopping => "COOL".into(),
-        _ => String::new(),
-    };
-    if push(Rect::new(bx(1), y, bw, bh), "START", &st, if avail { Some(GREEN_S) } else if a.state == ApuState::Starting { Some(CYAN_S) } else { None }) {
-        out = Some(Act::Menu(if matches!(a.state, ApuState::Starting | ApuState::Running) { M::ApuStop } else { M::ApuStart }));
-    }
-    if push(Rect::new(bx(2), y, bw, bh), "GEN", if a.gen_online() { "ON LINE" } else if a.generator { "ON" } else { "OFF" }, if a.gen_online() { Some(GREEN_S) } else { None }) {
-        out = Some(Act::Menu(M::ApuGen(!a.generator)));
-    }
-    if push(Rect::new(bx(3), y, bw, bh), "BLEED", if a.bleed_air() { "AIR" } else if a.bleed { "ON" } else { "OFF" }, if a.bleed_air() { Some(GREEN_S) } else { None }) {
-        out = Some(Act::Menu(M::ApuBleed(!a.bleed)));
-    }
-    y += bh + pad;
-    // Climatisation (baie équipements / poste)
-    sec(&mut y, "CLIMATISATION");
-    let el = &ac.elec;
-    if push(Rect::new(bx(0), y, bw, bh), "AUTO TEMP", if el.auto_temp { "ON" } else { "OFF" }, el.auto_temp.then_some(GREEN_S)) {
-        out = Some(Act::Env(crate::elec::EnvAction::AutoToggle));
-    }
-    if push(Rect::new(bx(1), y, bw, bh), "TEMP -", "FROID", None) {
-        out = Some(Act::Env(crate::elec::EnvAction::TempKnob((el.temp_knob - 0.1).max(0.0))));
-    }
-    if push(Rect::new(bx(2), y, bw, bh), "TEMP +", "CHAUD", None) {
-        out = Some(Act::Env(crate::elec::EnvAction::TempKnob((el.temp_knob + 0.1).min(1.0))));
-    }
-    let tc = if el.ebay_temp > 45.0 { AMBER } else { GREEN_S };
-    let tb = Rect::new(bx(3), y, bw, bh);
-    rrect(tb, 4.0, Color::new(0.02, 0.03, 0.03, 1.0));
-    txt_c("E BAY", tb.x + tb.w / 2.0, tb.y + 14.0, 9.0, LBL);
-    txt_c(&format!("{:.0} C", el.ebay_temp), tb.x + tb.w / 2.0, tb.y + tb.h - 8.0, 12.0, tc);
-    out
 }

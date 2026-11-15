@@ -293,6 +293,9 @@ pub struct Aircraft {
     pub elec: systems::Elec,
     /// Groupe auxiliaire de puissance
     pub apu: crate::apu::Apu,
+    /// Démarrage réaliste (cold & dark) : turbines au sol avec l'air de l'APU, APU coupé ensuite
+    pub cold_start: bool,
+    apu_off_t: f64,
     /// Sortie de secours du train (gravité) engagée.
     pub gear_alt: bool,
     fcs_overload_t: f64,
@@ -484,6 +487,8 @@ impl Aircraft {
             skin_temp: 293.0,
             last_landing: None,
             apu: crate::apu::Apu::new(),
+            cold_start: false,
+            apu_off_t: 0.0,
             win_temp: 20.0,
             win_hot_t: 0.0,
             win_state: 0,
@@ -727,6 +732,10 @@ impl Aircraft {
             Some("MACH > 2.5".into())
         } else if self.fuel <= 0.0 {
             Some("CARBURANT".into())
+        } else if self.cold_start && !self.elec.bus_ok {
+            Some("PAS D'ALIMENTATION : BATTERIE SUR ON".into())
+        } else if self.cold_start && self.on_ground && !self.apu.bleed_air() {
+            Some("PAS D'AIR DE DEMARRAGE : DEMARRER L'APU (APU AVAIL, BLEED ON)".into())
         } else {
             None
         }
@@ -756,6 +765,18 @@ impl Aircraft {
         } else {
             self.msg(Level::Caution, "START : AUCUN MOTEUR SUR ON (interrupteurs L/R ENG)");
         }
+    }
+
+    /// Avion « cold & dark » : batterie coupée, APU et moteurs arrêtés, freins serrés. Séquence
+    /// réaliste : BATTERIE -> APU -> moteurs (air de l'APU) -> arrêt automatique de l'APU.
+    pub fn cold_and_dark(&mut self) {
+        self.cold_start = true;
+        self.elec.batt_sw = false;
+        self.elec.bus_ok = false;
+        self.set_turbines(TurbState::Off, 0.0);
+        self.apu = crate::apu::Apu::new();
+        self.throttle = 0.0;
+        self.brakes = true;
     }
 
     /// Bouton STOP : coupure carburant des deux turbines.
@@ -1755,7 +1776,20 @@ impl Aircraft {
             .filter(|&i| self.eng.side[i] == TurbState::Running && self.eng.n2s[i] > 0.55 && !self.fails.has(if i == 0 { Fail::GenL } else { Fail::GenR }))
             .count() as u32
             + self.apu.gen_online() as u32;
-        let h2_use = self.elec.update(dt, gens, self.h2 > 0.0, self.skin_temp - 273.15);
+        let h2_use = self.elec.update(dt, gens, self.h2 > 0.0, self.skin_temp - 273.15, self.on_ground);
+        // APU : arrêt automatique une fois les moteurs en marche et leurs génératrices en ligne
+        if self.cold_start && self.apu.running() {
+            let eng_gens = (0..2).filter(|&i| self.eng.side[i] == TurbState::Running && self.eng.n2s[i] > 0.55).count();
+            if eng_gens == 2 {
+                self.apu_off_t += dt;
+                if self.apu_off_t > 8.0 {
+                    let _ = self.apu.stop();
+                    self.msg(Level::Info, "APU : ARRET AUTOMATIQUE — MOTEURS EN MARCHE, GENERATRICES EN LIGNE");
+                }
+            } else {
+                self.apu_off_t = 0.0;
+            }
+        }
         self.h2 = (self.h2 - h2_use * dt).max(0.0);
         if self.elec.lost {
             self.crash("PERTE TOTALE D'ALIMENTATION ÉLECTRIQUE — LIAISON PERDUE");
@@ -2028,6 +2062,38 @@ impl Aircraft {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Démarrage réaliste : cold & dark -> batterie -> APU -> turbines (air APU) -> APU coupé.
+    #[test]
+    fn cold_dark_start_sequence() {
+        let mut ac = Aircraft::new_on_runway(0);
+        ac.cold_and_dark();
+        let run = |ac: &mut Aircraft, secs: f64| {
+            for _ in 0..(secs * 120.0) as usize {
+                ac.step(1.0 / 120.0, 0.0, 0.0);
+            }
+        };
+        run(&mut ac, 1.0);
+        assert!(!ac.elec.bus_ok && ac.crashed.is_none(), "avion eteint sans crash au sol");
+        // Turbines refusées sans alimentation / sans air
+        ac.cmd_turbine();
+        assert!(ac.eng.side.iter().all(|s| *s == TurbState::Off));
+        // Batterie, puis APU
+        ac.elec.batt_sw = true;
+        run(&mut ac, 1.0);
+        assert!(ac.elec.bus_ok);
+        assert!(ac.apu.start(0.0, ac.elec.bus_ok, true).is_ok());
+        run(&mut ac, 40.0);
+        assert!(ac.apu.bleed_air(), "APU disponible");
+        // Turbines avec l'air de l'APU
+        ac.cmd_turbine();
+        run(&mut ac, 45.0);
+        assert!(ac.eng.side.iter().all(|s| *s == TurbState::Running), "{:?}", ac.eng.side);
+        // L'APU s'arrête tout seul, l'avion reste alimenté par les génératrices
+        run(&mut ac, 40.0);
+        assert!(!ac.apu.running(), "APU arrete automatiquement");
+        assert!(ac.elec.bus_ok && ac.crashed.is_none());
+    }
 
     /// Très haute vitesse en air dense (M11, q ~100 kPa) : vitres fissurées et surchauffe moteurs ;
     /// le FCS, plus robuste, tient une petite ressource à cette pression dynamique.

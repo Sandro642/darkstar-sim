@@ -851,3 +851,11 @@ Le SR-72 est un avion de reconnaissance : sa charge utile est simulée.
   panneaux du poste pilote restent disponibles en fenêtres dans la version développeur.
 - v1.63.2 : écran de lancement — choix du mode SIMULATION / DEVELOPPEUR (retenu pour les lancements
   suivants) ; Maj+Entrée ouvre bien l'écran de choix (la touche n'y valide plus aussitôt la liaison).
+- v1.64.0 : démarrage réaliste — arrivée dans l'avion COLD & DARK (écrans éteints) : BATTERIE
+  principale (durée limitée ~10 min au sol), puis APU (courant + air), puis turbines (au sol :
+  air de l'APU requis) ; l'APU s'arrête tout seul une fois les deux moteurs et leurs
+  génératrices en ligne. Interrupteur BATT (panneau droit de la console, COMMANDES > MOTEURS),
+  instruction BATT ON / OFF ; pile à combustible réservée au vol ; au sol la liaison passe par
+  câble. Page COMMANDES réorganisée en sous-menus (PILOTE AUTO, MOTEURS, CONFIGURATION,
+  NAVIGATION, URGENCE / LIAISON, SIMULATION) avec des cartes explicatives. Fenêtre
+  MOTEURS / APU / CLIM retirée (panneau droit APU à la place dans la disposition dev).
