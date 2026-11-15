@@ -1054,7 +1054,7 @@ fn hud_cues(ac: &Aircraft, cx: f32, cy: f32, bank_rad: f32, time: f64, fpv: Opti
         draw_triangle(vec2(f.x, ay - 34.0), vec2(f.x - 26.0, ay), vec2(f.x + 26.0, ay), RED);
         draw_rectangle(f.x - 8.0, ay, 16.0, 28.0, RED);
         let what = if ac.osr_active { "SURVITESSE" } else { "GCAS" };
-        let body = if ac.gcas_ovr { format!("FLY UP  5G  {:.1} G", ac.d.nz) } else { format!("FLY UP  {:.1} G", ac.d.nz) };
+        let body = if ac.gcas_ovr { format!("FLY UP  {:.1}G  {:.1} G", ac.n_recovery(), ac.d.nz) } else { format!("FLY UP  {:.1} G", ac.d.nz) };
         tag(cx, y - 24.0, what, &body, RED, 22.0, false, true);
         tag(cx, y + 6.0, "AUTO", "RECUPERATION EN COURS — MANCHE INHIBE", CYAN_S, 13.0, false, true);
         return;
@@ -1417,7 +1417,7 @@ fn draw_altitude(ac: &Aircraft, g: &Geo, da_ft: Option<f64>) {
     if ac.ap.on && ac.ap.vert == VertMode::Alt {
         txt(&format!("{:.0}", ac.ap.alt_tgt_ft), t.x + 4.0, t.y - 6.0, 14.0, MAGENTA_S);
     } else {
-        txt("STD", t.x + 4.0, t.y - 6.0, 12.0, label_c());
+        txt(if ac.baro_std { "STD" } else { "QNH" }, t.x + 4.0, t.y - 6.0, 12.0, label_c());
     }
     // Altitude de décision (seuil + hauteur de décision) en approche
     if let (Some((_, _, _, _, el)), Some(da_ft)) = (ac.approach, da_ft) {
@@ -1428,7 +1428,14 @@ fn draw_altitude(ac: &Aircraft, g: &Geo, da_ft: Option<f64>) {
     // En dessous : niveau de vol, pression dynamique, peau
     let y = t.y + t.h + 24.0;
     rrect(Rect::new(t.x, t.y + t.h + 4.0, g.vsi.x + g.vsi.w - t.x, 60.0), 5.0, BLOCK);
-    txt(&format!("FL{:03.0}", alt / 100.0), t.x + 2.0, y, 20.0, WHITE);
+    // Calage automatique : STD (niveau de vol) ou QNH (altitude)
+    if ac.baro_std {
+        txt(&format!("FL{:03.0}", alt / 100.0), t.x + 2.0, y, 20.0, WHITE);
+        txt_r("STD", g.vsi.x + g.vsi.w - 4.0, y, 13.0, CYAN_S);
+    } else {
+        txt(&format!("QNH {:.0}", ac.qnh), t.x + 2.0, y, 18.0, CYAN_S);
+        txt_r("AUTO", g.vsi.x + g.vsi.w - 4.0, y, 11.0, label_c());
+    }
     let qcol = if d.q > Q_LIMIT { RED } else if d.q > 90_000.0 { AMBER } else { label_c() };
     txt(&format!("q {:.0} kPa", d.q / 1000.0), t.x + 2.0, y + 17.0, 13.0, qcol);
     let skin = ac.skin_temp - 273.15;

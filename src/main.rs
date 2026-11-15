@@ -1487,6 +1487,48 @@ impl Game {
             self.link_msg = s.clone();
             self.push(l, s);
         }
+        // Calage altimétrique automatique (stable) : QNH du terrain proche (départ / arrivée) ou du
+        // point survolé, d'après la météo réelle ; le calage ne change que si l'écart ≥ 1 hPa dure
+        // plus de 20 s. STD au-dessus de l'altitude de transition en montée, QNH sous le niveau de
+        // transition en descente.
+        {
+            let ac = &self.ac;
+            let dest = &AIRPORTS[self.dest];
+            let near = airports::near(ac.lat, ac.lon).into_iter().min_by(|a, b| dist_brg(ac.lat, ac.lon, a.lat, a.lon).0.total_cmp(&dist_brg(ac.lat, ac.lon, b.lat, b.lon).0));
+            let (rlat, rlon) = if dist_brg(ac.lat, ac.lon, dest.lat, dest.lon).0 < 60.0 * NM {
+                (dest.lat, dest.lon)
+            } else if let Some(n) = near.filter(|n| dist_brg(ac.lat, ac.lon, n.lat, n.lon).0 < 40.0 * NM) {
+                (n.lat, n.lon)
+            } else {
+                (ac.lat, ac.lon)
+            };
+            let target = self.wx.sample(rlat, rlon, 0.0).map(|s| s.qnh).filter(|q| (900.0..1100.0).contains(q)).unwrap_or(1013.25).round();
+            let (ta, tl) = match self.fms.fpln.as_ref() {
+                Some(p) => (p.trans_alt.parse::<f64>().unwrap_or(18_000.0), p.trans_lvl.parse::<f64>().unwrap_or(18_000.0)),
+                None => (18_000.0, 18_000.0),
+            };
+            let alt_ft = self.ac.alt / FT;
+            let vs = self.ac.d.vs;
+            let ac = &mut self.ac;
+            if !ac.baro_std && alt_ft > ta + 200.0 && (vs > 0.0 || alt_ft > ta + 3_000.0) {
+                ac.baro_std = true;
+                ac.msg(Level::Info, format!("ALTITUDE DE TRANSITION {ta:.0} FT : CALAGE STD 1013"));
+            } else if ac.baro_std && alt_ft < tl - 200.0 && (vs < 0.0 || alt_ft < tl - 3_000.0) {
+                ac.baro_std = false;
+                ac.qnh = target;
+                ac.qnh_pending = 0.0;
+                ac.msg(Level::Info, format!("NIVEAU DE TRANSITION FL{:.0} : CALAGE QNH {target:.0}", tl / 100.0));
+            }
+            if (target - ac.qnh).abs() >= 1.0 {
+                ac.qnh_pending += sim_dt;
+                if ac.qnh_pending > 20.0 || ac.on_ground && ac.tas < 1.0 {
+                    ac.qnh = target;
+                    ac.qnh_pending = 0.0;
+                }
+            } else {
+                ac.qnh_pending = 0.0;
+            }
+        }
         // Minimums (hauteur de décision 200 ft au-dessus du seuil) en approche ILS / autoland
         match self.ac.approach.filter(|_| in_approach(&self.ac)) {
             Some((_, _, _, _, tel)) => {

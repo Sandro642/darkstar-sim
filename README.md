@@ -934,3 +934,8 @@ Le SR-72 est un avion de reconnaissance : sa charge utile est simulée.
   (~0,3 g pendant le roulis, ressource seulement ailes presque à plat) au lieu de tirer sur le dos,
   prédiction qui tient compte du piqué en train de se creuser (déclenchement plus tôt), limiteur de
   g qui intègre l'effet de sol (plus de dépassement près du sol). Test du scénario du vol.
+- v1.71.0 : calage altimétrique automatique et stable — QNH réel (pression mer de la météo réelle,
+  1013 en météo simulée) du terrain d'arrivée (60 NM), du terrain proche (40 NM) ou du point survolé ;
+  le calage ne change que si l'écart ≥ 1 hPa persiste 20 s (pas de fluctuation). STD automatique au-
+  dessus de l'altitude de transition, retour au QNH sous le niveau de transition (valeurs SimBrief,
+  sinon 18 000 ft). Affichage PFD : « QNH 1018 AUTO » ou « FL093 STD ». FLY UP affiche le g calculé.

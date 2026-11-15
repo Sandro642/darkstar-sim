@@ -311,6 +311,11 @@ pub struct Aircraft {
     pub apu: crate::apu::Apu,
     /// Palonnier pilote (-1..+1), séparé du roulis
     pub rudder_in: f64,
+    /// Calage altimétrique automatique : STD (1013) ou QNH affiché (hPa, entier)
+    pub baro_std: bool,
+    pub qnh: f64,
+    /// Durée pendant laquelle le QNH de référence diffère du calage (s) — stabilisation
+    pub qnh_pending: f64,
     /// Correction du limiteur de facteur de charge (g mesuré / g visé)
     nz_trim: f64,
     /// Centrale inertielle (attitude, cap, position)
@@ -511,6 +516,9 @@ impl Aircraft {
             apu: crate::apu::Apu::new(),
             ins: crate::ins::Ins::ready(),
             rudder_in: 0.0,
+            baro_std: false,
+            qnh: 1013.0,
+            qnh_pending: 0.0,
             nz_trim: 1.0,
             cold_start: false,
             apu_off_t: 0.0,

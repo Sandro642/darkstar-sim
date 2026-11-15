@@ -35,6 +35,8 @@ pub struct Point {
     pub cc_high: f64,
     pub code: f64,
     pub elev: f64,
+    /// Pression ramenée au niveau de la mer (hPa) : QNH
+    pub qnh: f64,
 }
 
 pub struct Grid {
@@ -62,6 +64,8 @@ pub struct Sample {
     pub cc_high: f64,
     pub code: f64,
     pub elev: f64,
+    /// QNH (hPa)
+    pub qnh: f64,
 }
 
 pub struct Real {
@@ -78,7 +82,7 @@ fn vars() -> String {
             v.push(format!("{k}_{l}hPa"));
         }
     }
-    for k in ["cape", "precipitation", "cloud_cover_low", "cloud_cover_mid", "cloud_cover_high", "weather_code"] {
+    for k in ["cape", "precipitation", "cloud_cover_low", "cloud_cover_mid", "cloud_cover_high", "weather_code", "pressure_msl"] {
         v.push(k.into());
     }
     v.join(",")
@@ -129,6 +133,7 @@ fn parse(body: &str, lat0: f64, lon0: f64, step: f64, now: f64) -> Result<Grid, 
             cc_high: f("cloud_cover_high"),
             code: f("weather_code"),
             elev: field(seg, "elevation").unwrap_or(0.0),
+            qnh: first(seg, "pressure_msl").unwrap_or(1013.25),
         });
     }
     Ok(Grid { lat0, lon0, step, pts, fetched: now })
@@ -216,6 +221,7 @@ impl Grid {
             s.cc_high += p.cc_high * w;
             s.code = s.code.max(if w > 0.2 { p.code } else { 0.0 });
             s.elev += p.elev * w;
+            s.qnh += p.qnh * w;
         }
         Some(s)
     }
