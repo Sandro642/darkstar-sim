@@ -897,3 +897,6 @@ Le SR-72 est un avion de reconnaissance : sa charge utile est simulée.
   ~1000 NM trop tôt (vol KLAX-LFBD). Boutons-poussoirs MASTER WARNING / MASTER CAUTION (fenêtre
   dédiée en dev, barre du haut en normal) pour acquitter, à la place de la touche Espace ; les
   pannes du panneau d'annonciateurs allument désormais MASTER CAUTION / WARNING.
+- v1.69.1 : boutons MASTER WARNING / MASTER CAUTION reproduits d'après le bouton réel : boîtier
+  noir mat, deux vis cruciformes, poussoir en relief gris foncé, légende gravée « MASTER / CAUTION
+  / PRESS TO RESET » qui s'éclaire en ambre (rouge clignotant pour WARNING), enfoncement à l'appui.
