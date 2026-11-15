@@ -100,13 +100,12 @@ pub enum Tab {
     Systemes,
     Incendie,
     Mcdu,
-    Apu,
     Config,
     Commandes,
 }
 
 /// Pages, dans l'ordre : touches 4..9 et 0 pour les 7 premières, boutons de lunette pour les 6 premières.
-pub const TABS: [(Tab, &str); 18] = [
+pub const TABS: [(Tab, &str); 17] = [
     (Tab::Moteurs, "MOTEURS"),
     (Tab::Alarmes, "ALARMES"),
     (Tab::Fcs, "FCS"),
@@ -116,13 +115,12 @@ pub const TABS: [(Tab, &str); 18] = [
     (Tab::Essais, "ESSAIS"),
     (Tab::Domaine, "DOMAINE"),
     (Tab::Override, "OVERRIDE"),
-    (Tab::Console, "CONSOLE"),
+    (Tab::Console, "PANNEAU DROIT"),
     (Tab::Recon, "RECON"),
     (Tab::Armement, "ARMEMENT"),
     (Tab::Systemes, "SYSTEMES"),
     (Tab::Incendie, "INCENDIE"),
     (Tab::Mcdu, "MCDU"),
-    (Tab::Apu, "APU"),
     (Tab::Config, "CONFIG"),
     (Tab::Commandes, "COMMANDES"),
 ];

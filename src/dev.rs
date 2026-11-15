@@ -19,7 +19,6 @@ pub enum WinKind {
     Elec,
     PanneauDroit,
     Pannes,
-    PanneauGauche,
     Commandes,
     Radio,
     Manette,
@@ -27,7 +26,7 @@ pub enum WinKind {
     Batterie,
 }
 
-pub const WINS: [(WinKind, &str); 14] = [
+pub const WINS: [(WinKind, &str); 13] = [
     (WinKind::Ecran, "ECRAN"),
     (WinKind::Messages, "MESSAGES / GCS"),
     (WinKind::Train, "TRAIN"),
@@ -36,7 +35,6 @@ pub const WINS: [(WinKind, &str); 14] = [
     (WinKind::Elec, "ELEC"),
     (WinKind::PanneauDroit, "PANNEAU DROIT"),
     (WinKind::Pannes, "PANNES"),
-    (WinKind::PanneauGauche, "PANNEAU GAUCHE"),
     (WinKind::Commandes, "COMMANDES"),
     (WinKind::Radio, "RADIO / TRANSPONDEUR"),
     (WinKind::Manette, "MANETTE / TRAIN"),
@@ -180,16 +178,15 @@ fn default_wins() -> Vec<Win> {
         w(WinKind::Radio, 0.32, 0.0, 0.36, 0.17, true),
         w(WinKind::Moteurs, 0.0, 0.18, 0.215, 0.47, true),
         w(WinKind::Ecran, 0.22, 0.18, 0.56, 0.58, true),
-        w(WinKind::Elec, 0.785, 0.18, 0.215, 0.47, true),
+        w(WinKind::Elec, 0.785, 0.18, 0.215, 0.36, true),
         w(WinKind::Manette, 0.0, 0.66, 0.215, 0.34, true),
         w(WinKind::Batterie, 0.425, 0.77, 0.073, 0.23, true),
         w(WinKind::Scram, 0.502, 0.77, 0.073, 0.23, true),
         w(WinKind::Messages, 0.22, 0.77, 0.20, 0.23, true),
         w(WinKind::Pannes, 0.575, 0.77, 0.205, 0.23, true),
-        w(WinKind::PanneauDroit, 0.785, 0.66, 0.215, 0.34, true),
+        w(WinKind::PanneauDroit, 0.785, 0.55, 0.215, 0.45, true),
         w(WinKind::Train, 0.0, 0.0, 0.10, 0.17, false),
         w(WinKind::Nd, 0.70, 0.0, 0.30, 0.17, false),
-        w(WinKind::PanneauGauche, 0.30, 0.22, 0.43, 0.50, false),
         w(WinKind::Commandes, 0.36, 0.06, 0.37, 0.90, false),
     ]
 }
@@ -253,14 +250,14 @@ impl DevUi {
                 wins.push(d);
             }
         }
-        if !wins.is_empty() && s.lines().any(|l| l.trim() == "V 4") {
+        if !wins.is_empty() && s.lines().any(|l| l.trim() == "V 5") {
             self.wins = wins;
         }
         self.widgets = wids;
     }
 
     pub fn save(&self) {
-        let mut s = String::from("V 4\n");
+        let mut s = String::from("V 5\n");
         for w in &self.wins {
             s.push_str(&format!("W {} {:.4} {:.4} {:.4} {:.4} {}\n", win_name(w.kind).replace(' ', "_"), w.r[0], w.r[1], w.r[2], w.r[3], w.open as u8));
         }
@@ -645,91 +642,6 @@ impl DevUi {
     }
 }
 
-/// Panneau droit : boutons-poussoirs moteurs (turbines, entrées d'air, stato, scram) et APU
-/// (MASTER / START, GEN, BLEED), jauges de l'APU. Renvoie l'instruction à exécuter.
-pub fn right_panel(ac: &crate::aircraft::Aircraft, r: Rect) -> Option<String> {
-    use crate::aircraft::*;
-    use crate::apu::ApuState;
-    let mut out = None;
-    let pad = 8.0;
-    let lbl = Color::new(0.62, 0.66, 0.7, 1.0);
-    // Bouton-poussoir lumineux : légende, voyant (vert ON / ambre / éteint)
-    let mut button = |x: f32, y: f32, w: f32, title: &str, state: &str, lit: Option<Color>, cmd: String| {
-        let b = Rect::new(x, y, w, 40.0);
-        draw_rectangle(b.x, b.y, b.w, b.h, if hovered(b) { Color::new(0.16, 0.17, 0.2, 1.0) } else { Color::new(0.11, 0.12, 0.14, 1.0) });
-        draw_rectangle_lines(b.x, b.y, b.w, b.h, 1.0, Color::new(0.3, 0.32, 0.36, 1.0));
-        txt_c(title, b.x + b.w / 2.0, b.y + 14.0, 10.0, WHITE);
-        let (c, s) = match lit {
-            Some(c) => (c, state),
-            None => (Color::new(0.3, 0.32, 0.35, 1.0), state),
-        };
-        draw_rectangle(b.x + 6.0, b.y + 21.0, b.w - 12.0, 14.0, Color::new(0.0, 0.0, 0.0, 1.0));
-        txt_c(s, b.x + b.w / 2.0, b.y + 32.0, 10.0, c);
-        if clicked(b) {
-            out = Some(cmd);
-        }
-    };
-    let cols = 2.0;
-    let bw = (r.w - pad * (cols + 1.0)) / cols;
-    let x0 = r.x + pad;
-    let x1 = x0 + bw + pad;
-    let mut y = r.y + 8.0;
-    txt("MOTEURS", r.x + pad, y + 10.0, 11.0, lbl);
-    y += 16.0;
-    let e = &ac.eng;
-    let turb_on = matches!(e.turb, TurbState::Running | TurbState::Starting);
-    let green = GREEN_S;
-    button(x0, y, bw, "TURBINES", if e.turb == TurbState::Starting { "START" } else if turb_on { "ON" } else { "OFF" }, if turb_on { Some(green) } else { None }, if turb_on { "TURB STOP".into() } else { "TURB START".into() });
-    button(x1, y, bw, "ENTREES D'AIR", if e.inlet_open { "OPEN" } else { "CLOSED" }, if e.inlet_open { Some(green) } else { Some(AMBER) }, if e.inlet_open { "INLET CLOSE".into() } else { "INLET OPEN".into() });
-    y += 46.0;
-    let (rs, rc, rcmd) = match e.ram {
-        RamState::Lit => ("LIT", Some(green), "RAM OFF"),
-        RamState::Armed => ("ARM", Some(CYAN_S), "RAM IGN"),
-        _ => ("OFF", None, "RAM ARM"),
-    };
-    button(x0, y, bw, "STATO", rs, rc, rcmd.into());
-    let (ss, sc, scmd) = match e.scram {
-        ScramState::Lit => ("LIT", Some(green), "SCRAM OFF"),
-        ScramState::Armed => ("ARM", Some(CYAN_S), "SCRAM IGN"),
-        ScramState::Unstart => ("UNSTART", Some(AMBER), "SCRAM IGN"),
-        _ => ("OFF", None, "SCRAM ARM"),
-    };
-    button(x1, y, bw, "SCRAM", ss, sc, scmd.into());
-    y += 52.0;
-    // APU
-    txt("APU", r.x + pad, y + 10.0, 11.0, lbl);
-    let a = &ac.apu;
-    let st = match a.state {
-        ApuState::Running if a.n > 0.95 => ("AVAIL", green),
-        ApuState::Starting => ("STARTING", CYAN_S),
-        ApuState::Stopping => ("COOLING", AMBER),
-        _ => ("OFF", lbl),
-    };
-    txt_r(st.0, r.x + r.w - pad, y + 10.0, 11.0, st.1);
-    y += 16.0;
-    let running = matches!(a.state, ApuState::Starting | ApuState::Running);
-    button(x0, y, bw, "MASTER / START", if running { "ON" } else { "OFF" }, if running { Some(green) } else { None }, if running { "APU STOP".into() } else { "APU START".into() });
-    button(x1, y, bw, "APU GEN", if a.generator { if a.gen_online() { "ON LINE" } else { "ON" } } else { "OFF" }, if a.gen_online() { Some(green) } else if a.generator { Some(CYAN_S) } else { None }, if a.generator { "APU GEN OFF".into() } else { "APU GEN ON".into() });
-    y += 46.0;
-    button(x0, y, bw, "APU BLEED", if a.bleed { if a.bleed_air() { "AIR" } else { "ON" } } else { "OFF" }, if a.bleed_air() { Some(green) } else if a.bleed { Some(CYAN_S) } else { None }, if a.bleed { "APU BLEED OFF".into() } else { "APU BLEED ON".into() });
-    // Jauges APU : N % et EGT
-    let gx = x1;
-    let gw = bw;
-    let bar = |yy: f32, name: &str, v: f32, txtv: String, c: Color| {
-        txt(name, gx, yy + 9.0, 10.0, lbl);
-        txt_r(&txtv, gx + gw, yy + 9.0, 10.0, WHITE);
-        draw_rectangle(gx, yy + 13.0, gw, 6.0, Color::new(0.18, 0.19, 0.22, 1.0));
-        draw_rectangle(gx, yy + 13.0, gw * v.clamp(0.0, 1.0), 6.0, c);
-    };
-    bar(y, "N", a.n as f32, format!("{:.0} %", a.n * 100.0), green);
-    let egt_c = if a.egt > 650.0 { AMBER } else { green };
-    bar(y + 21.0, "EGT", (a.egt / 800.0) as f32, format!("{:.0} C", a.egt), egt_c);
-    y += 52.0;
-    if y + 14.0 < r.y + r.h {
-        txt(&format!("CARBURANT APU {:.0} KG/H", a.ff * 3600.0), r.x + pad, y + 8.0, 10.0, lbl);
-    }
-    out
-}
 
 impl DevUi {
     /// Rectangles des fenêtres ouvertes au-dessus de la fenêtre `i`, de la barre et des menus

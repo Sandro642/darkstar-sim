@@ -150,6 +150,41 @@ pub fn set_blockers(v: Vec<Rect>) {
     BLOCK.with(|b| *b.borrow_mut() = v);
 }
 
+thread_local! {
+    /// Dessin mis à l'échelle en cours : (zone écran, zone virtuelle)
+    static XF: std::cell::Cell<Option<(Rect, Rect)>> = const { std::cell::Cell::new(None) };
+}
+
+/// Souris dans les coordonnées de dessin courantes (virtuelles pendant `scaled`).
+pub fn mouse() -> Vec2 {
+    let m: Vec2 = mouse_position().into();
+    match XF.with(|c| c.get()) {
+        Some((s, v)) => vec2(v.x + (m.x - s.x) / s.w * v.w, v.y + (m.y - s.y) / s.h * v.h),
+        None => m,
+    }
+}
+
+/// Dessine un panneau conçu pour `min_w` x `min_h` dans `r` ; s'il est plus petit, tout est réduit
+/// uniformément (dessin et souris). `f` reçoit la zone virtuelle.
+pub fn scaled<T>(r: Rect, min_w: f32, min_h: f32, f: impl FnOnce(Rect) -> T) -> T {
+    let s = (r.w / min_w).min(r.h / min_h);
+    if s >= 1.0 {
+        return f(r);
+    }
+    let v = Rect::new(0.0, 0.0, r.w / s, r.h / s);
+    let dpi = screen_dpi_scale();
+    let sh = screen_height() * dpi;
+    let mut cam = Camera2D::from_display_rect(v);
+    cam.zoom.y = -cam.zoom.y;
+    cam.viewport = Some(((r.x * dpi) as i32, (sh - (r.y + r.h) * dpi) as i32, (r.w * dpi) as i32, (r.h * dpi) as i32));
+    set_camera(&cam);
+    XF.with(|c| c.set(Some((r, v))));
+    let out = f(v);
+    XF.with(|c| c.set(None));
+    set_default_camera();
+    out
+}
+
 fn blocked() -> bool {
     let m: Vec2 = mouse_position().into();
     BLOCK.with(|b| b.borrow().iter().any(|r| r.contains(m)))
@@ -157,11 +192,11 @@ fn blocked() -> bool {
 
 /// Bouton : vrai si cliqué cette image.
 pub fn clicked(r: Rect) -> bool {
-    is_mouse_button_pressed(MouseButton::Left) && r.contains(mouse_position().into()) && !blocked()
+    is_mouse_button_pressed(MouseButton::Left) && r.contains(mouse()) && !blocked()
 }
 
 pub fn hovered(r: Rect) -> bool {
-    r.contains(mouse_position().into()) && !blocked()
+    r.contains(mouse()) && !blocked()
 }
 
 /// Jauge en arc façon écran Darkstar (vert, extrémité rouge, aiguille blanche).

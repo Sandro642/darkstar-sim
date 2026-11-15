@@ -109,45 +109,81 @@ fn lit_square(r: Rect, lit: bool, time: f64) -> bool {
     clicked(r)
 }
 
-thread_local! {
-    /// Vue de la console : false = platines gauche / centre, true = panneau droit (START / APU)
-    static RIGHT: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+pub fn draw_menu(ac: &Aircraft, bit: &BitState, r: Rect, time: f64) -> Option<MenuAction> {
+    draw_panel(ac, bit, r, time)
 }
 
-/// Affiche le panneau droit de la console (instruction / onglet).
-pub fn show_right(on: bool) {
-    RIGHT.with(|c| c.set(on));
+/// PANNEAU DROIT : platines ENGINE, FLT CNTRL et SYS en haut, platine APU (avec la batterie) en bas.
+pub fn draw_panel(ac: &Aircraft, bit: &BitState, r: Rect, time: f64) -> Option<MenuAction> {
+    let apu_h = 128.0;
+    let top = Rect::new(r.x, r.y, r.w, r.h - apu_h - 4.0);
+    let mut out = draw_platines(ac, bit, top, time);
+    let p = Rect::new(r.x + 10.0, r.y + r.h - apu_h, r.w - 20.0, apu_h - 6.0);
+    if let Some(a) = apu_plate(ac, p, time) {
+        out = Some(a);
+    }
+    out
 }
 
-pub fn draw_menu(ac: &Aircraft, bit: &BitState, r_all: Rect, time: f64) -> Option<MenuAction> {
-    // Deux vues : platines gauche / centre, ou panneau droit (démarrage moteurs / APU)
-    let right = RIGHT.with(|c| c.get());
-    let bh = 24.0;
-    let half = (r_all.w - 6.0) / 2.0;
-    for (k, l) in ["CONSOLE GAUCHE / CENTRE", "PANNEAU DROIT - APU"].iter().enumerate() {
-        let b = Rect::new(r_all.x + k as f32 * (half + 6.0), r_all.y, half, bh);
-        let on = (k == 1) == right;
-        rrect(b, 5.0, if on { Color::new(0.10, 0.16, 0.22, 1.0) } else if hovered(b) { Color::new(0.08, 0.10, 0.13, 1.0) } else { Color::new(0.06, 0.075, 0.095, 1.0) });
-        if on {
-            draw_rectangle(b.x + 8.0, b.y + b.h - 3.0, b.w - 16.0, 3.0, ACCENT);
-        }
-        txt_c(l, b.x + b.w / 2.0, b.y + 16.0, 11.0, if on { WHITE } else { DIM });
-        if clicked(b) {
-            RIGHT.with(|c| c.set(k == 1));
-        }
+/// Platine APU compacte : BATT, MASTER, START (START / AVAIL), GEN, BLEED, régime, EGT, état.
+fn apu_plate(ac: &Aircraft, p: Rect, time: f64) -> Option<MenuAction> {
+    use crate::apu::ApuState;
+    let mut out = None;
+    plate(p, "APU");
+    let a = &ac.apu;
+    let x0 = p.x + 40.0;
+    let w = p.w - 50.0;
+    let col = |f: f32| x0 + w * f;
+    let yl = p.y + 18.0;
+    let yt = p.y + 58.0;
+    let ys = (yt + 42.0).min(p.y + p.h - 6.0);
+    let white = Color::new(0.95, 0.95, 0.9, 1.0);
+    txt_c("BATT", col(0.05), yl, 12.0, LEGEND);
+    if let Some(np) = toggle(col(0.05), yt, if ac.elec.batt_sw { 0 } else { 1 }, 2) {
+        out = Some(MenuAction::Batt(np == 0));
     }
-    let r = Rect::new(r_all.x, r_all.y + bh + 4.0, r_all.w, r_all.h - bh - 4.0);
-    if right {
-        return right_console(ac, r, time);
+    txt_c(&format!("{:.0} %", ac.elec.batt * 100.0), col(0.05), ys, 11.0, if !ac.elec.batt_sw { DIM } else if ac.elec.batt < 0.25 { AMBER } else { GREEN_S });
+    txt_c("MASTER", col(0.22), yl, 12.0, LEGEND);
+    if let Some(np) = toggle(col(0.22), yt, if a.master { 0 } else { 1 }, 2) {
+        out = Some(MenuAction::ApuMaster(np == 0));
     }
-    draw_platines(ac, bit, r, time)
+    txt_c(if a.master { "ON" } else { "OFF" }, col(0.22), ys, 11.0, if a.master { GREEN_S } else { DIM });
+    txt_c("START", col(0.40), yl, 12.0, LEGEND);
+    let starting = a.state == ApuState::Starting;
+    let avail = a.state == ApuState::Running && a.n > 0.95;
+    let blink = (time * 2.0).fract() < 0.6;
+    if pushbutton(Rect::new(col(0.40) - 29.0, yt - 20.0, 58.0, 40.0), "START", (starting && blink).then_some(white), "AVAIL", avail.then_some(GREEN_S)) {
+        out = Some(if matches!(a.state, ApuState::Starting | ApuState::Running) { MenuAction::ApuStop } else { MenuAction::ApuStart });
+    }
+    txt_c("GEN", col(0.58), yl, 12.0, LEGEND);
+    if let Some(np) = toggle(col(0.58), yt, if a.generator { 0 } else { 1 }, 2) {
+        out = Some(MenuAction::ApuGen(np == 0));
+    }
+    txt_c(if a.gen_online() { "ON LINE" } else if a.generator { "ON" } else { "OFF" }, col(0.58), ys, 11.0, if a.gen_online() { GREEN_S } else { LEGEND });
+    txt_c("BLEED", col(0.74), yl, 12.0, LEGEND);
+    if let Some(np) = toggle(col(0.74), yt, if a.bleed { 0 } else { 1 }, 2) {
+        out = Some(MenuAction::ApuBleed(np == 0));
+    }
+    txt_c(if a.bleed_air() { "AIR" } else if a.bleed { "ON" } else { "OFF" }, col(0.74), ys, 11.0, if a.bleed_air() { GREEN_S } else { LEGEND });
+    // Régime, EGT et état
+    let (st, sc) = match a.state {
+        ApuState::Running if avail => ("AVAIL", GREEN_S),
+        ApuState::Running | ApuState::Starting => ("START", AMBER),
+        ApuState::Stopping => ("COOLING", AMBER),
+        ApuState::Off => ("OFF", DIM),
+    };
+    let xi = col(0.92);
+    txt_c(st, xi, yl, 12.0, sc);
+    txt_c(&format!("N {:.0} %", a.n * 100.0), xi, yt - 4.0, 11.0, WHITE);
+    txt_c(&format!("EGT {:.0} C", a.egt), xi, yt + 12.0, 11.0, if a.egt > 650.0 { AMBER } else { WHITE });
+    out
 }
 
 /// Panneau gauche / centre de la console : platines ENGINE/APU, FLT CNTRL et SYS.
 pub fn draw_platines(ac: &Aircraft, bit: &BitState, r: Rect, time: f64) -> Option<MenuAction> {
     let mut out = None;
     let e = &ac.eng;
-    panel(r, "CONSOLE - ENGINE/APU  /  FLT CNTRL  /  SYSTEMS");
+    panel(r, "PANNEAU DROIT - ENGINE / FLT CNTRL / SYS / APU");
     // Deux platines côte à côte (onglet de la colonne de droite)
     let inner_w = r.w - 30.0;
     let total_h = r.h - 40.0;
@@ -297,7 +333,7 @@ pub fn draw_platines(ac: &Aircraft, bit: &BitState, r: Rect, time: f64) -> Optio
     txt_c(&format!("{:+.1}", ac.yaw_trim * 10.0), kc.x, kc.y + 48.0, 12.0, WHITE);
     let knob = Rect::new(kc.x - 40.0, kc.y - 40.0, 80.0, 80.0);
     if clicked(knob) {
-        let dir = if mouse_position().0 < kc.x { -0.1 } else { 0.1 };
+        let dir = if crate::ui::mouse().x < kc.x { -0.1 } else { 0.1 };
         out = Some(MenuAction::YawTrim((ac.yaw_trim + dir).clamp(-1.0, 1.0)));
     }
     if hovered(knob) {
@@ -366,84 +402,3 @@ pub fn draw_platines(ac: &Aircraft, bit: &BitState, r: Rect, time: f64) -> Optio
 }
 
 
-/// Panneau droit de la console : APU. MASTER, START (START / AVAIL), GEN, BLEED, cadrans N et EGT,
-/// check-list de démarrage de l'APU.
-pub fn right_console(ac: &Aircraft, r: Rect, time: f64) -> Option<MenuAction> {
-    use crate::apu::ApuState;
-    let mut out = None;
-    panel(r, "R CONSOLE - APU");
-    let a = &ac.apu;
-    let white = Color::new(0.95, 0.95, 0.9, 1.0);
-    // --- APU ---
-    let p = Rect::new(r.x + 8.0, r.y + 30.0, r.w - 16.0, r.h - 40.0);
-    plate(p, "APU");
-    let x0 = p.x + 40.0;
-    let w = p.w - 50.0;
-    let col = |f: f32| x0 + w * f;
-    let yl = p.y + 22.0;
-    let yt = p.y + 74.0;
-    // MASTER (interrupteur), START (bouton-poussoir), GEN et BLEED (interrupteurs)
-    // Batterie principale (cold & dark : coupée) — à mettre en premier
-    txt_c("BATT", col(0.06), yl, 12.0, LEGEND);
-    if let Some(np) = toggle(col(0.06), yt, if ac.elec.batt_sw { 0 } else { 1 }, 2) {
-        out = Some(MenuAction::Batt(np == 0));
-    }
-    txt_c(&format!("{:.0} %", ac.elec.batt * 100.0), col(0.06), yt + 44.0, 11.0, if !ac.elec.batt_sw { DIM } else if ac.elec.batt < 0.25 { AMBER } else { GREEN_S });
-    txt_c("MASTER", col(0.28), yl, 12.0, LEGEND);
-    if let Some(np) = toggle(col(0.28), yt, if a.master { 0 } else { 1 }, 2) {
-        out = Some(MenuAction::ApuMaster(np == 0));
-    }
-    txt_c(if a.master { "ON" } else { "OFF" }, col(0.28), yt + 44.0, 11.0, if a.master { GREEN_S } else { DIM });
-    txt_c("START", col(0.50), yl, 12.0, LEGEND);
-    let starting = a.state == ApuState::Starting;
-    let avail = a.state == ApuState::Running && a.n > 0.95;
-    let blink = (time * 2.0).fract() < 0.6;
-    if pushbutton(Rect::new(col(0.50) - 29.0, yt - 22.0, 58.0, 44.0), "START", (starting && blink).then_some(white), "AVAIL", avail.then_some(GREEN_S)) {
-        out = Some(if matches!(a.state, ApuState::Starting | ApuState::Running) { MenuAction::ApuStop } else { MenuAction::ApuStart });
-    }
-    txt_c("GEN", col(0.72), yl, 12.0, LEGEND);
-    if let Some(np) = toggle(col(0.72), yt, if a.generator { 0 } else { 1 }, 2) {
-        out = Some(MenuAction::ApuGen(np == 0));
-    }
-    txt_c(if a.gen_online() { "ON LINE" } else if a.generator { "ON" } else { "OFF" }, col(0.72), yt + 44.0, 11.0, if a.gen_online() { GREEN_S } else { LEGEND });
-    txt_c("BLEED", col(0.93), yl, 12.0, LEGEND);
-    if let Some(np) = toggle(col(0.93), yt, if a.bleed { 0 } else { 1 }, 2) {
-        out = Some(MenuAction::ApuBleed(np == 0));
-    }
-    txt_c(if a.bleed_air() { "AIR" } else if a.bleed { "ON" } else { "OFF" }, col(0.93), yt + 44.0, 11.0, if a.bleed_air() { GREEN_S } else { LEGEND });
-    // Cadrans N et EGT
-    let gy = (yt + 66.0 + 30.0).min(p.y + p.h - 26.0);
-    let gr = 26.0f32;
-    for (k, (name, frac, red, val)) in [("N %", a.n as f32, 1.02, format!("{:.0}", a.n * 100.0)), ("EGT C", (a.egt / 800.0) as f32, 0.85, format!("{:.0}", a.egt))].iter().enumerate() {
-        let cx = col(0.28 + k as f32 * 0.44);
-        crate::ui::arc_gauge(cx, gy, gr, frac.clamp(0.0, 1.05), *red);
-        txt_c(val, cx, gy + gr * 0.55, 12.0, WHITE);
-        txt_c(name, cx, gy + gr + 12.0, 10.0, LEGEND);
-    }
-    let st = match a.state {
-        ApuState::Running if avail => ("APU AVAIL", GREEN_S),
-        ApuState::Running | ApuState::Starting => ("APU START", AMBER),
-        ApuState::Stopping => ("APU COOLING", AMBER),
-        ApuState::Off => ("APU OFF", DIM),
-    };
-    txt_r(st.0, p.x + p.w - 30.0, p.y + p.h - 12.0, 11.0, st.1);
-    // Check-list APU
-    let turb_run = ac.eng.side.iter().all(|s| *s == TurbState::Running);
-    let steps: [(&str, bool); 5] = [
-        ("BATTERIE ON", ac.elec.batt_sw),
-        ("APU MASTER ON", a.master || turb_run),
-        ("APU START -> AVAIL", avail || turb_run),
-        ("APU BLEED ON (AIR DE DEMARRAGE)", a.bleed_air() || turb_run),
-        ("MOTEURS : CONSOLE GAUCHE, START (APU S'ARRETE SEUL)", turb_run),
-    ];
-    let mut y = gy + gr + 34.0;
-    for (k, (l, ok)) in steps.iter().enumerate() {
-        if y + 4.0 > p.y + p.h - 24.0 {
-            break;
-        }
-        txt(&format!("{} {l}", k + 1), p.x + 64.0, y, 11.0, if *ok { GREEN_S } else { DIM });
-        txt_r(if *ok { "OK" } else { "--" }, p.x + p.w - 40.0, y, 11.0, if *ok { GREEN_S } else { DIM });
-        y += 15.0;
-    }
-    out
-}

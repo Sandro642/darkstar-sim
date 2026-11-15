@@ -861,3 +861,7 @@ Le SR-72 est un avion de reconnaissance : sa charge utile est simulée.
   MOTEURS / APU / CLIM retirée (panneau droit APU à la place dans la disposition dev).
 - v1.64.1 : poste pilote (version dev) — bouton BATTERIE rond (comme le bouton scramjet) : ON / OFF
   et charge, à côté du SCRAMJET.
+- v1.65.0 : un seul PANNEAU DROIT réunit les platines ENGINE, FLT CNTRL, SYS et la platine APU
+  (BATT, MASTER, START / AVAIL, GEN, BLEED, N, EGT). Version normale : onglet PANNEAU DROIT (ex-CONSOLE),
+  onglet APU retiré. Version dev : fenêtre PANNEAU DROIT unique (PANNEAU GAUCHE retiré), réduite
+  proprement à la taille de la fenêtre (dessin et clics mis à l'échelle).

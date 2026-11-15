@@ -1962,9 +1962,8 @@ impl Game {
             }
             // Panneau droit de la console (démarrage moteurs / APU)
             "PANNEAU" | "CONSOLE" if matches!(arg(1), "DROIT" | "DROITE") => {
-                menu::show_right(true);
                 self.tab = gcs::Tab::Console;
-                reply = Ok("CONSOLE : PANNEAU DROIT (APU)".into());
+                reply = Ok("CONSOLE : PANNEAU DROIT (MOTEURS / APU)".into());
             }
             // APU : APU START|ON / STOP|OFF / GEN ON|OFF / BLEED ON|OFF
             "APU" => {
@@ -2746,6 +2745,14 @@ async fn main() {
             g.tab = *tab;
         }
     }
+    // Départ imposé (essais) : DARKSTAR_START="EGLL 27L"
+    if let Ok(st) = std::env::var("DARKSTAR_START") {
+        let mut it = st.split_whitespace();
+        if let Some(i) = it.next().and_then(|c| AIRPORTS.iter().position(|a| a.icao == c)) {
+            let r = it.next().map(str::to_string).unwrap_or_else(|| connect::default_rwy(i));
+            g.place_at(0, i, &r);
+        }
+    }
     // Instructions exécutées au démarrage (tests, scénarios) : DARKSTAR_CMD="CAPTEUR 101;ALT 30000"
     if let Ok(cmds) = std::env::var("DARKSTAR_CMD") {
         for c in cmds.split(';').filter(|c| !c.trim().is_empty()) {
@@ -2765,14 +2772,6 @@ async fn main() {
         g.link.state = link::State::Idle;
         g.log.clear();
         g.connect = Some(ui);
-    }
-    // Départ imposé (essais) : DARKSTAR_START="EGLL 27L"
-    if let Ok(st) = std::env::var("DARKSTAR_START") {
-        let mut it = st.split_whitespace();
-        if let Some(i) = it.next().and_then(|c| AIRPORTS.iter().position(|a| a.icao == c)) {
-            let r = it.next().map(str::to_string).unwrap_or_else(|| connect::default_rwy(i));
-            g.place_at(0, i, &r);
-        }
     }
     let mut show_help = scenario.is_empty() && g.connect.is_none() && std::env::var("DARKSTAR_SHOT").is_err();
     let mut fullscreen = std::env::var("DARKSTAR_SHOT").is_err() && std::env::var("DARKSTAR_WINDOW").is_err();
@@ -3331,13 +3330,6 @@ fn draw_tab_page(g: &mut Game, tab: gcs::Tab, cr: Rect, alerts: &[(Level, String
         gcs::Tab::Commandes => draw_commandes(g, cr),
         // Composition de la page 1 (écran principal) : canevas et palette
         gcs::Tab::Config => g.layout.config(cr),
-        // Panneau droit : boutons moteurs et APU
-        gcs::Tab::Apu => {
-            if let Some(c) = dev::right_panel(&g.ac, cr) {
-                g.exec_command(&c);
-                g.cues.push(audio::Cue::Switch);
-            }
-        }
         gcs::Tab::Armement => {
             if let Some(a) = combat::draw_page(&g.combat, &g.recon.emitters, &g.ac, cr) {
                 let r = match a {
@@ -3437,21 +3429,16 @@ fn draw_dev_windows(g: &mut Game, d: &mut dev::DevUi, world: &world::World, tile
             dev::WinKind::Elec => {
                 let _ = draw_tab_page(g, gcs::Tab::Elec, cr, alerts, tiles, time);
             }
-            // Panneaux de la console : droit (démarrage moteurs / APU) et gauche (platines)
+            // Panneau droit : platines moteurs / commandes de vol / systèmes et APU
             dev::WinKind::PanneauDroit => {
-                if let Some(a) = menu::right_console(&g.ac, cr, time) {
+                let bit = menu::BitState { running: g.bit_timer > 0.0, fail: g.bit_fail };
+                let (ac, t) = (&g.ac, time);
+                if let Some(a) = ui::scaled(cr, 560.0, 640.0, |v| menu::draw_panel(ac, &bit, v, t)) {
                     g.apply_menu(a);
                     g.cues.push(audio::Cue::Switch);
                 }
             }
             dev::WinKind::Commandes => draw_commandes(g, cr),
-            dev::WinKind::PanneauGauche => {
-                let bit = menu::BitState { running: g.bit_timer > 0.0, fail: g.bit_fail };
-                if let Some(a) = menu::draw_platines(&g.ac, &bit, cr, time) {
-                    g.apply_menu(a);
-                    g.cues.push(audio::Cue::Switch);
-                }
-            }
             dev::WinKind::Pannes => {
                 let _ = draw_tab_page(g, gcs::Tab::Alarmes, cr, alerts, tiles, time);
             }
