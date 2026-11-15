@@ -911,3 +911,8 @@ Le SR-72 est un avion de reconnaissance : sa charge utile est simulée.
   basculer dans les 6 s), voyant ON / OFF et explication par interrupteur, bandeau « PROTECTIONS
   REDUITES » quand une protection est inhibée, bloc d'état en jauges (chambres, FADEC, manette,
   poussée effective, santé des chambres). Grille adaptée à la taille de l'écran.
+- v1.69.6 : page INCENDIE refaite — synoptique de l'avion vu de dessus (soute H2, chambres,
+  nacelles colorées selon l'état, clic = poignée), procédure guidée (étapes cochées au fur et à
+  mesure, attente de 10 s après BTL 1, compte à rebours avant destruction), poignées FIRE en T
+  réalistes (voyant dans la poignée, tige visible quand tirée), bouteilles d'agent dessinées avec
+  manomètre et bouton DISCH (armé seulement poignée tirée), boucles de détection A / B, FIRE TEST.
