@@ -628,7 +628,6 @@ impl Game {
         use menu::MenuAction::*;
         match a {
             EngSwitch(i, sw) => self.ac.cmd_eng_switch(i, sw),
-            Batt(on) => self.exec_command(if on { "BATT ON" } else { "BATT OFF" }),
             Ins(m) => self.exec_command(match m {
                 ins::InsMode::Off => "INS OFF",
                 ins::InsMode::Att => "INS ATT",
@@ -3513,7 +3512,7 @@ fn no_power(g: &Game, r: Rect) -> bool {
     }
     draw_rectangle(r.x, r.y, r.w, r.h, Color::new(0.01, 0.012, 0.015, 1.0));
     ui::txt_c("PAS D'ALIMENTATION", r.x + r.w / 2.0, r.y + r.h / 2.0 - 4.0, 13.0, Color::new(0.35, 0.37, 0.4, 1.0));
-    ui::txt_c("BATTERIE SUR ON (CONSOLE, PANNEAU DROIT)", r.x + r.w / 2.0, r.y + r.h / 2.0 + 14.0, 10.0, Color::new(0.28, 0.3, 0.33, 1.0));
+    ui::txt_c("BATTERIE SUR ON (BOUTON BATT / COMMANDES > MOTEURS)", r.x + r.w / 2.0, r.y + r.h / 2.0 + 14.0, 10.0, Color::new(0.28, 0.3, 0.33, 1.0));
     true
 }
 

@@ -28,7 +28,6 @@ pub enum MenuAction {
     GLim(bool),
     PitotHeat(bool),
     Nws(bool),
-    Batt(bool),
     Ins(crate::ins::InsMode),
     ApuMaster(bool),
     ApuStart,
@@ -204,7 +203,7 @@ fn ins_plate(ac: &Aircraft, p: Rect, time: f64) -> Option<MenuAction> {
     out
 }
 
-/// Platine APU compacte : BATT, MASTER, START (START / AVAIL), GEN, BLEED, régime, EGT, état.
+/// Platine APU compacte : MASTER, START (START / AVAIL), GEN, BLEED, régime, EGT, état.
 fn apu_plate(ac: &Aircraft, p: Rect, time: f64) -> Option<MenuAction> {
     use crate::apu::ApuState;
     let mut out = None;
@@ -217,33 +216,28 @@ fn apu_plate(ac: &Aircraft, p: Rect, time: f64) -> Option<MenuAction> {
     let yt = p.y + 58.0;
     let ys = (yt + 42.0).min(p.y + p.h - 6.0);
     let white = Color::new(0.95, 0.95, 0.9, 1.0);
-    txt_c("BATT", col(0.05), yl, 12.0, LEGEND);
-    if let Some(np) = toggle(col(0.05), yt, if ac.elec.batt_sw { 0 } else { 1 }, 2) {
-        out = Some(MenuAction::Batt(np == 0));
-    }
-    txt_c(&format!("{:.0} %", ac.elec.batt * 100.0), col(0.05), ys, 11.0, if !ac.elec.batt_sw { DIM } else if ac.elec.batt < 0.25 { AMBER } else { GREEN_S });
-    txt_c("MASTER", col(0.22), yl, 12.0, LEGEND);
-    if let Some(np) = toggle(col(0.22), yt, if a.master { 0 } else { 1 }, 2) {
+    txt_c("MASTER", col(0.08), yl, 12.0, LEGEND);
+    if let Some(np) = toggle(col(0.08), yt, if a.master { 0 } else { 1 }, 2) {
         out = Some(MenuAction::ApuMaster(np == 0));
     }
-    txt_c(if a.master { "ON" } else { "OFF" }, col(0.22), ys, 11.0, if a.master { GREEN_S } else { DIM });
-    txt_c("START", col(0.40), yl, 12.0, LEGEND);
+    txt_c(if a.master { "ON" } else { "OFF" }, col(0.08), ys, 11.0, if a.master { GREEN_S } else { DIM });
+    txt_c("START", col(0.30), yl, 12.0, LEGEND);
     let starting = a.state == ApuState::Starting;
     let avail = a.state == ApuState::Running && a.n > 0.95;
     let blink = (time * 2.0).fract() < 0.6;
-    if pushbutton(Rect::new(col(0.40) - 29.0, yt - 20.0, 58.0, 40.0), "START", (starting && blink).then_some(white), "AVAIL", avail.then_some(GREEN_S)) {
+    if pushbutton(Rect::new(col(0.30) - 29.0, yt - 20.0, 58.0, 40.0), "START", (starting && blink).then_some(white), "AVAIL", avail.then_some(GREEN_S)) {
         out = Some(if matches!(a.state, ApuState::Starting | ApuState::Running) { MenuAction::ApuStop } else { MenuAction::ApuStart });
     }
-    txt_c("GEN", col(0.58), yl, 12.0, LEGEND);
-    if let Some(np) = toggle(col(0.58), yt, if a.generator { 0 } else { 1 }, 2) {
+    txt_c("GEN", col(0.52), yl, 12.0, LEGEND);
+    if let Some(np) = toggle(col(0.52), yt, if a.generator { 0 } else { 1 }, 2) {
         out = Some(MenuAction::ApuGen(np == 0));
     }
-    txt_c(if a.gen_online() { "ON LINE" } else if a.generator { "ON" } else { "OFF" }, col(0.58), ys, 11.0, if a.gen_online() { GREEN_S } else { LEGEND });
-    txt_c("BLEED", col(0.74), yl, 12.0, LEGEND);
-    if let Some(np) = toggle(col(0.74), yt, if a.bleed { 0 } else { 1 }, 2) {
+    txt_c(if a.gen_online() { "ON LINE" } else if a.generator { "ON" } else { "OFF" }, col(0.52), ys, 11.0, if a.gen_online() { GREEN_S } else { LEGEND });
+    txt_c("BLEED", col(0.72), yl, 12.0, LEGEND);
+    if let Some(np) = toggle(col(0.72), yt, if a.bleed { 0 } else { 1 }, 2) {
         out = Some(MenuAction::ApuBleed(np == 0));
     }
-    txt_c(if a.bleed_air() { "AIR" } else if a.bleed { "ON" } else { "OFF" }, col(0.74), ys, 11.0, if a.bleed_air() { GREEN_S } else { LEGEND });
+    txt_c(if a.bleed_air() { "AIR" } else if a.bleed { "ON" } else { "OFF" }, col(0.72), ys, 11.0, if a.bleed_air() { GREEN_S } else { LEGEND });
     // Régime, EGT et état
     let (st, sc) = match a.state {
         ApuState::Running if avail => ("AVAIL", GREEN_S),

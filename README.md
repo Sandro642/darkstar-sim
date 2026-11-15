@@ -921,3 +921,5 @@ Le SR-72 est un avion de reconnaissance : sa charge utile est simulée.
   sections encadrées et titrées (servitudes, structure / thermique, propulsion, carburant, radar
   météo / centrage), disposition adaptée (large en colonnes, étroite en grille), jauges CG / AoA
   horizontales avec plage normale ; en-têtes du tableau propulsion lisibles.
+- v1.69.8 : interrupteur BATT retiré de la platine APU du PANNEAU DROIT (batterie : bouton rond
+  BATT du poste en dev, COMMANDES > MOTEURS, PROCHAINE ACTION ou instruction BATT ON / OFF).
