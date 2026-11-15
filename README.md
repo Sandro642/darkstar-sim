@@ -904,3 +904,5 @@ Le SR-72 est un avion de reconnaissance : sa charge utile est simulée.
   de l'écran principal, à la place des voyants plats de la barre du haut.
 - v1.69.3 : plus aucun feu spontané — un feu n'a plus que des causes réelles (panne injectée par
   l'opérateur, EGT excessive, surchauffe de peau / parois, fuite H2) ; risque de fond supprimé.
+- v1.69.4 : page 9 OVERRIDE (interrupteurs gardés ENGINE / FBW OVERRIDE) de retour dans l'écran
+  principal (versions normale et dev) et élément OVERRIDE dans la palette CONFIG.

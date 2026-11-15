@@ -3136,7 +3136,6 @@ async fn main() {
                 warp_capped,
                 link: &ln,
                 muted: g.muted,
-                time,
             },
         ) };
         if top.ack {
@@ -3536,6 +3535,7 @@ fn draw_screen(g: &mut Game, d: &mut dev::DevUi, cr: Rect, world: &world::World,
         dev::Page::Mcdu => Some(gcs::Tab::Mcdu),
         dev::Page::Armement => Some(gcs::Tab::Armement),
         dev::Page::DonneesMoteur => Some(gcs::Tab::Moteurs),
+        dev::Page::Override => Some(gcs::Tab::Override),
         _ => None,
     };
     let mut horizon = None;
@@ -3714,6 +3714,7 @@ fn draw_elem(g: &mut Game, e: dev::Elem, r: Rect, world: &world::World, tiles: &
         dev::Elem::Mcdu => tab(gcs::Tab::Mcdu),
         dev::Elem::Incendie => tab(gcs::Tab::Incendie),
         dev::Elem::Limites => tab(gcs::Tab::Limites),
+        dev::Elem::Override => tab(gcs::Tab::Override),
         dev::Elem::Commandes => {
             draw_commandes(g, r);
             None

@@ -13,7 +13,6 @@ pub struct TopBar<'a> {
     pub warp_capped: bool,
     pub link: &'a str,
     pub muted: bool,
-    pub time: f64,
 }
 
 #[derive(Default)]
