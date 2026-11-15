@@ -427,6 +427,18 @@ impl MapView {
         let _ = time;
         draw_rectangle(r.x, r.y, r.w, r.h, BLACK);
         draw_rectangle_lines(r.x + 0.5, r.y + 0.5, r.w - 1.0, r.h - 1.0, 1.0, Color::new(0.25, 0.3, 0.36, 1.0));
+        // Sans cap ni position INS : ND vide, drapeaux seulement
+        if !ac.ins.hdg_ok() {
+            let (cx, cy) = (r.x + r.w / 2.0, r.y + r.h / 2.0);
+            let red = Color::new(0.95, 0.15, 0.12, 1.0);
+            for (k, l) in ["HDG", "MAP"].iter().enumerate() {
+                let b = Rect::new(cx - 70.0 + k as f32 * 76.0, cy - 30.0, 64.0, 26.0);
+                draw_rectangle(b.x, b.y, b.w, b.h, red);
+                crate::ui::txt_c(l, b.x + b.w / 2.0, b.y + 19.0, 16.0, WHITE);
+            }
+            crate::ui::txt_c(&format!("INS {}", ac.ins.phase()), cx, cy + 24.0, 12.0, Color::new(1.0, 0.7, 0.1, 1.0));
+            return;
+        }
         let green = Color::new(0.2, 1.0, 0.35, 1.0);
         let yellow = Color::new(1.0, 0.85, 0.1, 1.0);
         let mag = Color::new(1.0, 0.35, 0.95, 1.0);

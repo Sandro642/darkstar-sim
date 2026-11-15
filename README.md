@@ -872,3 +872,5 @@ Le SR-72 est un avion de reconnaissance : sa charge utile est simulée.
   ATT : horizon seul en 15 s (secours). Sans INS : drapeaux rouges ATT (horizon masqué) et HDG sur
   le PFD, pilote automatique déconnecté. Perte d'alimentation : plate-forme arrêtée. Cold & dark :
   INS sur OFF. Cartes INS dans COMMANDES > NAVIGATION, instruction INS OFF/ATT/ALIGN/NAV.
+- v1.66.1 : INS non stabilisée -> horizon entièrement noir (plus de bandeaux vitesse / altitude /
+  cap), seulement le drapeau ATT et l'avancement ; ND vide avec drapeaux HDG / MAP jusqu'au cap INS.

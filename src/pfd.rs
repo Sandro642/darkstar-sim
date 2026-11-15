@@ -255,6 +255,13 @@ fn scissor_pop() {
 
 pub fn draw_pfd(ac: &Aircraft, v: &View, r: Rect, info: &PfdInfo) {
     let g = geo(r);
+    // INS non stabilisée : écran noir, seulement le drapeau ATT et l'avancement
+    if !ac.ins.att_ok() && ac.crashed.is_none() {
+        draw_rectangle(r.x, r.y, r.w, r.h, Color::new(0.01, 0.012, 0.015, 1.0));
+        ins_flags(ac, &Geo { inner: r, ..g }, info.time);
+        rrect_lines(r, 6.0, 1.5, Color::new(0.78, 0.80, 0.82, 0.85));
+        return;
+    }
     crate::pfd_plus::set_inner(g.inner);
     draw_svs_overlay(ac, v, g.inner, info);
     draw_fma_bar(ac, r, &g, info);
@@ -329,7 +336,7 @@ fn ins_flags(ac: &Aircraft, g: &Geo, time: f64) {
         };
         txt_c(&l, cx, cy + 30.0, 13.0, c);
     }
-    if !i.hdg_ok() {
+    if !i.hdg_ok() && i.att_ok() {
         let h = g.hdg;
         let b = Rect::new(h.x + h.w / 2.0 - 30.0, h.y + h.h / 2.0 - 13.0, 60.0, 24.0);
         draw_rectangle(b.x, b.y, b.w, b.h, if i.att_ok() { AMBER } else { red });
