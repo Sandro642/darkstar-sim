@@ -874,3 +874,10 @@ Le SR-72 est un avion de reconnaissance : sa charge utile est simulée.
   INS sur OFF. Cartes INS dans COMMANDES > NAVIGATION, instruction INS OFF/ATT/ALIGN/NAV.
 - v1.66.1 : INS non stabilisée -> horizon entièrement noir (plus de bandeaux vitesse / altitude /
   cap), seulement le drapeau ATT et l'avancement ; ND vide avec drapeaux HDG / MAP jusqu'au cap INS.
+- v1.67.0 : nouvelle page COMMANDES — assistant de vol : bandeau de PHASE (cold & dark, mise en
+  route, roulage, décollage, montée, croisière, descente, approche) et carte PROCHAINE ACTION qui
+  propose l'étape logique suivante (batterie, INS, APU, turbines, décollage, train, stato, scram,
+  atterrissage…) avec un bouton EXECUTER. Rail d'icônes des sous-menus, cartes à interrupteur,
+  grille adaptée à la taille (mode compact pour les petites cases, défilement à la molette).
+  CONFIG : éléments CMD PILOTE AUTO / MOTEURS / CONFIGURATION / NAVIGATION / URGENCE / SIMULATION
+  pour afficher un seul sous-menu sur l'écran.

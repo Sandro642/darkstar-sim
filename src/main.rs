@@ -3574,6 +3574,11 @@ fn apply_cockpit(g: &mut Game, a: cockpit::Act) {
 
 /// Page COMMANDES : toutes les fonctions en boutons ; touches virtuelles ou instructions.
 fn draw_commandes(g: &mut Game, cr: Rect) {
+    draw_commandes_only(g, cr, None);
+}
+
+/// COMMANDES complète, ou un seul sous-menu (`only`).
+fn draw_commandes_only(g: &mut Game, cr: Rect, only: Option<usize>) {
     let dest = g.fms.fpln.as_ref().map(|p| p.dest.clone()).unwrap_or_else(|| AIRPORTS[g.dest].icao.to_string());
     // Terrain le plus proche de l'avion (origine du DISPATCH)
     let origin = airports::near(g.ac.lat, g.ac.lon)
@@ -3592,7 +3597,7 @@ fn draw_commandes(g: &mut Game, cr: Rect) {
         origin: &origin,
         link_ok: g.link.full(),
     };
-    match fcu::draw(&g.ac, &cx, cr) {
+    match fcu::draw(&g.ac, &cx, cr, only) {
         Some(fcu::Act::Key(k)) => {
             g.vkeys.push(k);
             g.fms.focus = false;
@@ -3661,6 +3666,11 @@ fn draw_elem(g: &mut Game, e: dev::Elem, r: Rect, world: &world::World, tiles: &
         dev::Elem::Limites => tab(gcs::Tab::Limites),
         dev::Elem::Commandes => {
             draw_commandes(g, r);
+            None
+        }
+        dev::Elem::CmdPilote | dev::Elem::CmdMoteurs | dev::Elem::CmdConfig | dev::Elem::CmdNav | dev::Elem::CmdUrgence | dev::Elem::CmdSimu => {
+            let k = [dev::Elem::CmdPilote, dev::Elem::CmdMoteurs, dev::Elem::CmdConfig, dev::Elem::CmdNav, dev::Elem::CmdUrgence, dev::Elem::CmdSimu].iter().position(|x| *x == e).unwrap_or(0);
+            draw_commandes_only(g, r, Some(k));
             None
         }
     };

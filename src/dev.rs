@@ -66,9 +66,15 @@ pub enum Elem {
     Camera,
     Hsi,
     Commandes,
+    CmdPilote,
+    CmdMoteurs,
+    CmdConfig,
+    CmdNav,
+    CmdUrgence,
+    CmdSimu,
 }
 
-pub const ELEMS: [(Elem, &str); 17] = [
+pub const ELEMS: [(Elem, &str); 23] = [
     (Elem::Horizon, "HORIZON"),
     (Elem::DonneesMoteur, "DONNEES MOTEUR"),
     (Elem::Systemes, "SYSTEMES"),
@@ -86,6 +92,12 @@ pub const ELEMS: [(Elem, &str); 17] = [
     (Elem::Camera, "CAMERA"),
     (Elem::Hsi, "HSI"),
     (Elem::Commandes, "COMMANDES"),
+    (Elem::CmdPilote, "CMD PILOTE AUTO"),
+    (Elem::CmdMoteurs, "CMD MOTEURS"),
+    (Elem::CmdConfig, "CMD CONFIGURATION"),
+    (Elem::CmdNav, "CMD NAVIGATION"),
+    (Elem::CmdUrgence, "CMD URGENCE"),
+    (Elem::CmdSimu, "CMD SIMULATION"),
 ];
 
 pub fn elem_name(e: Elem) -> &'static str {
