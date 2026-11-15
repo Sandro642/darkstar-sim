@@ -923,3 +923,10 @@ Le SR-72 est un avion de reconnaissance : sa charge utile est simulée.
   horizontales avec plage normale ; en-têtes du tableau propulsion lisibles.
 - v1.69.8 : interrupteur BATT retiré de la platine APU du PANNEAU DROIT (batterie : bouton rond
   BATT du poste en dev, COMMANDES > MOTEURS, PROCHAINE ACTION ou instruction BATT ON / OFF).
+- v1.70.0 : enveloppe structurale calculée — g de rupture selon la masse (5,5 g à la masse maximale
+  82 t, jusqu'à 7 g à vide) et la température de structure (pleine résistance jusqu'à 500 °C, 60 % à
+  1400 °C) ; rupture négative à 45 %. Auto-GCAS et auto recovery survitesse tirent à 90 % de cette
+  limite calculée (au lieu de 4,8 g fixes), limiteur de g corrigé par le g mesuré (pas de
+  dépassement) ; la loi normale ne dépasse jamais cette marge. Graphe ENVELOPPE STRUCTURALE sur la
+  page FCS (rupture et cible recovery en fonction de la température, masse actuelle / maximale,
+  point actuel). Message de rupture avec la limite calculée.

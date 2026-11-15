@@ -7,6 +7,19 @@ use crate::systems::{self, Fail};
 
 pub const S_WING: f64 = 200.0;
 pub const M_EMPTY: f64 = 28_000.0;
+/// Masse maximale (structure dimensionnée à 5,5 g à cette masse).
+pub const M_MAX: f64 = M_EMPTY + FUEL_MAX + H2_MAX;
+/// Part de la rupture visée par les récupérations automatiques.
+pub const RECOVERY_MARGIN: f64 = 0.90;
+
+/// Facteur de charge de rupture (positif, négatif) pour une masse (kg) et une température de
+/// structure (°C) : courbes de l'enveloppe structurale (voir `Aircraft::n_break`).
+pub fn n_break_at(mass: f64, skin_c: f64) -> (f64, f64) {
+    let k_mass = (M_MAX / mass.max(1.0)).min(7.0 / 5.5);
+    let k_temp = 1.0 - 0.4 * ((skin_c - 500.0) / 900.0).clamp(0.0, 1.0);
+    let pos = 5.5 * k_mass * k_temp;
+    (pos, -0.45 * pos)
+}
 pub const FUEL_MAX: f64 = 38_000.0; // JP-7 (turbines, statoréacteur)
 pub const H2_MAX: f64 = 16_000.0; // hydrogène liquide (scramjet)
 pub const EYE_H: f64 = 4.0;
@@ -298,6 +311,8 @@ pub struct Aircraft {
     pub apu: crate::apu::Apu,
     /// Palonnier pilote (-1..+1), séparé du roulis
     pub rudder_in: f64,
+    /// Correction du limiteur de facteur de charge (g mesuré / g visé)
+    nz_trim: f64,
     /// Centrale inertielle (attitude, cap, position)
     pub ins: crate::ins::Ins,
     /// Démarrage réaliste (cold & dark) : turbines au sol avec l'air de l'APU, APU coupé ensuite
@@ -496,6 +511,7 @@ impl Aircraft {
             apu: crate::apu::Apu::new(),
             ins: crate::ins::Ins::ready(),
             rudder_in: 0.0,
+            nz_trim: 1.0,
             cold_start: false,
             apu_off_t: 0.0,
             win_temp: 20.0,
@@ -849,6 +865,21 @@ impl Aircraft {
     /// Sondes givrées (réchauffage coupé plus de 45 s par air froid).
     pub fn pitot_iced(&self) -> bool {
         self.pitot_ice > 45.0
+    }
+
+    /// Facteur de charge de rupture (positif, négatif) calculé d'après l'enveloppe structurale :
+    /// - masse : la structure est dimensionnée pour 5,5 g à la masse maximale (82 t) ; plus légère,
+    ///   la charge admissible croît comme M_MAX / m (plafond 7 g, limite des attaches) ;
+    /// - température de structure : résistance du titane / composites pleine jusqu'à 500 °C, puis
+    ///   réduite linéairement jusqu'à 60 % à 1400 °C ;
+    /// - négatif : 45 % du positif.
+    pub fn n_break(&self) -> (f64, f64) {
+        n_break_at(self.mass(), self.skin_temp - 273.15)
+    }
+
+    /// Facteur de charge visé par les récupérations automatiques : 90 % de la rupture calculée.
+    pub fn n_recovery(&self) -> f64 {
+        (self.n_break().0 * RECOVERY_MARGIN).max(2.0)
     }
 
     /// Facteur de charge maximal de la loi normale selon le limiteur et le Mach.
@@ -1268,13 +1299,15 @@ impl Aircraft {
                 self.gcas_clear_t = 0.0;
                 self.gcas_g_max = self.d.nz;
                 self.ap.on = false;
-                self.msg(Level::Warning, "AUTO-GCAS : FLY UP — RECUPERATION AUTOMATIQUE (AILES A PLAT, RESSOURCE)");
+                let n = self.n_recovery();
+                self.msg(Level::Warning, format!("AUTO-GCAS : FLY UP — AILES A PLAT, RESSOURCE {n:.1} G (LIMITE CALCULEE)"));
             }
             if self.gcas_active {
                 // En retard sur la loi normale : on dépasse les protections (jusqu'à 5 g) pour sauver l'avion
                 if !self.gcas_ovr && m < -(90.0 + 0.35 * v) && self.gamma < 0.0 {
                     self.gcas_ovr = true;
-                    self.msg(Level::Warning, "AUTO-GCAS : PROTECTIONS FCS DEPASSEES — RESSOURCE 5 G");
+                    let n = self.n_recovery();
+                    self.msg(Level::Warning, format!("AUTO-GCAS : PROTECTIONS FCS DEPASSEES — RESSOURCE {n:.1} G (90 % RUPTURE CALCULEE)"));
                 }
                 let pmax_r = (35.0f64).to_radians() / (1.0 + mach / 6.0) * hyd;
                 let qmax_r = (12.0f64).to_radians() / (1.0 + mach / 3.0) * hyd;
@@ -1317,7 +1350,8 @@ impl Aircraft {
                 self.osr_active = true;
                 self.osr_clear_t = 0.0;
                 self.ap.on = false;
-                self.msg(Level::Warning, "AUTO RECOVERY SURVITESSE : RESSOURCE MAX SANS RUPTURE DES GOUVERNES");
+                let n = self.n_recovery();
+                self.msg(Level::Warning, format!("AUTO RECOVERY SURVITESSE : RESSOURCE {n:.1} G MAX SANS RUPTURE (STRUCTURE / GOUVERNES)"));
             }
             if self.osr_active {
                 if !enabled {
@@ -1521,10 +1555,23 @@ impl Aircraft {
             self.psi += roll_in * steer * dt;
         } else {
             self.theta += pitch_rate * dt;
-            // Récupérations automatiques : 4,8 g au plus (marge sous la rupture à 5,5 g), même FBW OVRD
-            let recov = self.gcas_ovr || self.osr_active;
-            let nmax = if recov { 4.8 } else { self.nz_law_max() };
+            // Récupérations automatiques : 90 % de la rupture calculée (masse, température), même FBW OVRD ;
+            // loi normale : jamais au-delà de cette même marge
+            let recov = self.gcas_active || self.gcas_ovr || self.osr_active;
+            let n_rec = self.n_recovery();
+            let nmax = if recov { n_rec } else { self.nz_law_max().min(n_rec) };
+            // Incidence donnant nmax (portance linéaire), corrigée par le g mesuré : le modèle linéaire
+            // sous-estime la portance réelle (effet de sol, rafales, composante de poussée) ; la
+            // correction intégrale garantit que la récupération ne dépasse pas sa cible
             let alpha_g = nmax * mass * g / (q.max(1.0) * S_WING * cla);
+            if self.d.nz > nmax {
+                // Dépassement : on réduit l'incidence autorisée (correction rapide)
+                self.nz_trim = (self.nz_trim - (self.d.nz - nmax) / nmax * 6.0 * dt).max(0.4);
+            } else {
+                // Sinon retour lent vers le modèle (jamais au-delà : pas d'emballement)
+                self.nz_trim += (1.0 - self.nz_trim) * (0.5 * dt).min(1.0);
+            }
+            let alpha_g = alpha_g * self.nz_trim;
             let mut amax = alpha_g.min(20f64.to_radians());
             if recov {
                 // incidence bornée par le facteur de charge de la récupération
@@ -1541,7 +1588,7 @@ impl Aircraft {
             fcs.alpha_limit_active = (unclamped - self.theta).abs() > 1e-6 && !prot_off;
             fcs.alpha_max = amax.to_degrees();
             fcs.alpha_min = amin.to_degrees();
-            fcs.nz_max = if prot_off { 5.5 } else { nmax };
+            fcs.nz_max = if prot_off { self.n_break().0 } else { nmax };
             fcs.inlet_protect = self.eng.scram == ScramState::Lit && !prot_off;
             // Roulis libre sur 360° (tonneau) : angle ramené dans ]-180°, 180°]
             self.phi = wrap_pi(self.phi + roll_rate * dt);
@@ -1749,8 +1796,10 @@ impl Aircraft {
         if q > Q_RUPTURE {
             self.crash("RUPTURE STRUCTURELLE — PRESSION DYNAMIQUE EXCESSIVE");
         }
-        if self.d.nz > 5.5 || self.d.nz < -2.5 {
-            self.crash("RUPTURE STRUCTURELLE — FACTEUR DE CHARGE");
+        let (nb_pos, nb_neg) = self.n_break();
+        if self.d.nz > nb_pos || self.d.nz < nb_neg {
+            let n = self.d.nz;
+            self.crash(&format!("RUPTURE STRUCTURELLE — FACTEUR DE CHARGE {n:+.1} G (LIMITE CALCULEE {nb_pos:+.1} / {nb_neg:+.1} G)"));
         }
         if self.skin_temp - 273.15 > 1400.0 {
             self.crash("DÉFAILLANCE THERMIQUE DE LA STRUCTURE");
@@ -2547,6 +2596,57 @@ mod tests {
 
     /// Auto-GCAS : piqué à 30°, 120° d'inclinaison, sans action pilote → récupération sans impact ;
     /// GCAS coupé → impact. Départ tardif → protections dépassées mais avion sauvé.
+    /// Enveloppe structurale : la récupération automatique tire jusqu'à 90 % de la rupture
+    /// calculée (plus de g quand l'avion est léger), sans jamais l'atteindre.
+    #[test]
+    fn recovery_uses_computed_limit() {
+        // Courbes : lourd < léger ; chaud < froid
+        let (heavy, _) = n_break_at(M_MAX, 20.0);
+        let (light, _) = n_break_at(M_EMPTY + 2_000.0, 20.0);
+        let (hot, _) = n_break_at(M_MAX, 1_100.0);
+        println!("rupture : lourd {heavy:.2} g, leger {light:.2} g, lourd chaud {hot:.2} g");
+        assert!((heavy - 5.5).abs() < 0.01 && light > heavy && hot < heavy);
+        for fuel in [FUEL_MAX, 2_000.0] {
+            let mut ac = Aircraft::new_on_runway(0);
+            let elev = ground_elev(ac.lat, ac.lon);
+            ac.fuel = fuel;
+            ac.h2 = if fuel < FUEL_MAX { 0.0 } else { H2_MAX };
+            ac.on_ground = false;
+            ac.gear_down = false;
+            ac.gear_pos = 0.0;
+            ac.brakes = false;
+            ac.alt = elev + 4_000.0 * FT;
+            ac.tas = 520.0 * KT / (isa(ac.alt).rho / RHO0).sqrt();
+            ac.gamma = (-25f64).to_radians();
+            ac.theta = ac.gamma + 2f64.to_radians();
+            ac.phi = 20f64.to_radians();
+            ac.set_turbines(TurbState::Running, 0.5);
+            ac.throttle = 0.5;
+            ac.gcas_on = true;
+            let target = ac.n_recovery();
+            let limit = ac.n_break().0;
+            let mut gmax: f64 = 0.0;
+            let mut law_max: f64 = 0.0;
+            for _ in 0..(20 * 120) {
+                ac.step(1.0 / 120.0, 0.0, 0.0);
+                gmax = gmax.max(ac.d.nz);
+                if ac.gcas_active {
+                    law_max = law_max.max(ac.fcs.nz_max);
+                }
+                if ac.crashed.is_some() {
+                    break;
+                }
+            }
+            println!("masse {:.0} t : cible {target:.2} g, limite loi {law_max:.2} g, rupture {limit:.2} g, atteint {gmax:.2} g, crash {:?}", ac.mass() / 1000.0, ac.crashed);
+            assert!(ac.crashed.is_none());
+            assert!((law_max - target).abs() < 0.15, "limite de la loi {law_max:.2} au lieu de {target:.2}");
+            assert!(gmax < limit, "rupture depassee : {gmax:.2} / {limit:.2}");
+            if fuel == FUEL_MAX {
+                assert!(gmax > 0.9 * target, "ressource lourde trop molle : {gmax:.2} / {target:.2}");
+            }
+        }
+    }
+
     #[test]
     fn auto_gcas_recovers() {
         let run = |gcas: bool, agl_ft: f64, gam: f64, phi: f64, keas: f64| {
