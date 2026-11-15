@@ -145,92 +145,177 @@ pub enum Switch {
     FuelDump,
 }
 
-/// Interrupteur à capot rouge (comme SCRAM ENABLE / EMER H2 DUMP sur le Darkstar) ; vrai si cliqué.
-fn guarded_switch(r: Rect, label: &str, on: bool, warn: bool) -> bool {
-    rrect(r, 8.0, Color::new(0.07, 0.075, 0.08, 1.0));
-    rrect_lines(r, 8.0, 1.0, Color::new(0.25, 0.26, 0.28, 1.0));
-    // Vis de fixation
-    for (x, y) in [(r.x + 9.0, r.y + 9.0), (r.x + r.w - 9.0, r.y + 9.0), (r.x + 9.0, r.y + r.h - 9.0), (r.x + r.w - 9.0, r.y + r.h - 9.0)] {
-        draw_circle(x, y, 3.0, Color::new(0.2, 0.21, 0.22, 1.0));
+thread_local! {
+    /// Capots relevés : instant d'ouverture de chaque interrupteur gardé (refermé après 6 s)
+    static GUARD: std::cell::RefCell<[f64; 5]> = const { std::cell::RefCell::new([-100.0; 5]) };
+}
+
+/// Bandes de danger jaune / noir dans `r` (bord du capot).
+fn hazard_stripes(r: Rect) {
+    draw_rectangle(r.x, r.y, r.w, r.h, Color::new(0.95, 0.78, 0.1, 1.0));
+    let n = (r.w / 7.0).ceil() as i32;
+    for k in 0..n {
+        let x = r.x + k as f32 * 7.0;
+        if x + 3.5 <= r.x + r.w {
+            draw_triangle(vec2(x, r.y + r.h), vec2(x + 3.5, r.y), vec2((x + 7.0).min(r.x + r.w), r.y), Color::new(0.05, 0.05, 0.05, 1.0));
+        }
     }
-    let lines: Vec<&str> = label.split(' ').collect();
-    for (i, l) in lines.iter().enumerate() {
-        txt(l, r.x + 14.0, r.y + 24.0 + i as f32 * 17.0, 15.0, Color::new(0.85, 0.9, 0.7, 1.0));
+}
+
+/// Interrupteur gardé réaliste : platine vissée, nom, explication, voyant d'état, levier métallique
+/// sous capot rouge à bord rayé. Manœuvre en deux temps : clic sur le capot pour le relever, puis
+/// clic sur le levier pour basculer. Renvoie vrai quand le levier bascule.
+fn guarded_switch(r: Rect, idx: usize, label: &str, help: &str, on: bool, warn: bool, time: f64) -> bool {
+    let open = on || time - GUARD.with(|g| g.borrow()[idx]) < 6.0;
+    let mut fired = false;
+    // Platine
+    rrect(r, 8.0, Color::new(0.075, 0.08, 0.085, 1.0));
+    rrect_lines(r, 8.0, 1.0, if on { if warn { AMBER } else { GREEN_S } } else { Color::new(0.24, 0.25, 0.27, 1.0) });
+    for (x, y) in [(r.x + 8.0, r.y + 8.0), (r.x + r.w - 8.0, r.y + 8.0), (r.x + 8.0, r.y + r.h - 8.0), (r.x + r.w - 8.0, r.y + r.h - 8.0)] {
+        draw_circle(x, y, 3.2, Color::new(0.03, 0.03, 0.035, 1.0));
+        draw_circle(x, y, 2.4, Color::new(0.2, 0.21, 0.22, 1.0));
+        draw_line(x - 1.6, y, x + 1.6, y, 1.0, Color::new(0.05, 0.05, 0.05, 1.0));
     }
-    // Levier et capot
-    let sx = r.x + r.w - 46.0;
-    let cy = r.y + r.h / 2.0;
-    draw_rectangle(sx - 4.0, cy - 22.0, 36.0, 44.0, Color::new(0.12, 0.12, 0.13, 1.0));
-    let lever_y = if on { cy - 18.0 } else { cy + 4.0 };
-    draw_rectangle(sx + 10.0, lever_y, 8.0, 14.0, Color::new(0.75, 0.77, 0.8, 1.0));
-    let red = Color::new(0.80, 0.08, 0.08, 1.0);
-    if on {
-        // capot relevé
-        draw_rectangle(sx - 6.0, cy - 40.0, 40.0, 12.0, red);
-        draw_rectangle(sx - 6.0, cy - 30.0, 40.0, 3.0, Color::new(0.5, 0.03, 0.03, 1.0));
+    // Zone du levier à droite
+    let sw_w = 60.0f32.min(r.w * 0.32);
+    let bx = r.x + r.w - sw_w - 10.0;
+    let base = Rect::new(bx, r.y + 18.0, sw_w, r.h - 36.0);
+    let text_w = bx - r.x - 22.0;
+    // Nom, explication, voyant
+    let mut y = r.y + 24.0;
+    for l in wrap_text(label, 14.0, text_w) {
+        txt(&l, r.x + 14.0, y, 14.0, Color::new(0.88, 0.92, 0.78, 1.0));
+        y += 16.0;
+    }
+    y += 2.0;
+    for l in wrap_text(help, 10.0, text_w).into_iter().take(if r.h < 100.0 { 1 } else { 3 }) {
+        txt(&l, r.x + 14.0, y, 10.0, Color::new(0.58, 0.62, 0.66, 1.0));
+        y += 12.0;
+    }
+    let lamp = Rect::new(r.x + 14.0, r.y + r.h - 28.0, 66.0f32.min(text_w), 18.0);
+    let lc = if warn { AMBER } else { GREEN_S };
+    rrect(lamp, 3.0, if on { Color::new(lc.r * 0.3, lc.g * 0.3, lc.b * 0.3, 1.0) } else { Color::new(0.04, 0.04, 0.045, 1.0) });
+    rrect_lines(lamp, 3.0, 1.0, Color::new(0.2, 0.2, 0.22, 1.0));
+    txt_c(if on { "ON" } else { "OFF" }, lamp.x + lamp.w / 2.0, lamp.y + 13.0, 11.0, if on { lc } else { DIM });
+    if !on && open {
+        txt(&format!("CAPOT LEVE {:.0}s", (6.0 - (time - GUARD.with(|g| g.borrow()[idx]))).max(0.0)), lamp.x + lamp.w + 8.0, lamp.y + 13.0, 9.0, AMBER);
+    }
+    // Socle du levier, repères ON / OFF
+    rrect(base, 4.0, Color::new(0.04, 0.04, 0.045, 1.0));
+    let (cx, cy) = (base.x + base.w / 2.0, base.y + base.h / 2.0);
+    txt_c("ON", cx, base.y + 11.0, 9.0, DIM);
+    txt_c("OFF", cx, base.y + base.h - 4.0, 9.0, DIM);
+    draw_circle(cx, cy, 9.0, Color::new(0.22, 0.23, 0.24, 1.0));
+    draw_circle(cx, cy, 6.0, Color::new(0.12, 0.12, 0.13, 1.0));
+    // Levier (batte métallique) vers le haut (ON) ou le bas (OFF)
+    let tip = if on { cy - base.h * 0.32 } else { cy + base.h * 0.32 };
+    draw_line(cx, cy, cx, tip, 5.0, Color::new(0.55, 0.57, 0.6, 1.0));
+    draw_circle(cx, tip, 4.5, Color::new(0.85, 0.87, 0.9, 1.0));
+    // Capot rouge : rabattu sur le levier, ou relevé (vu par la tranche au-dessus)
+    let red = Color::new(0.78, 0.07, 0.06, 1.0);
+    if open {
+        let lid = Rect::new(base.x - 3.0, base.y - 14.0, base.w + 6.0, 10.0);
+        draw_rectangle(lid.x, lid.y, lid.w, lid.h, red);
+        hazard_stripes(Rect::new(lid.x, lid.y + lid.h - 3.0, lid.w, 3.0));
+        if clicked(base) {
+            fired = true;
+            GUARD.with(|g| g.borrow_mut()[idx] = -100.0);
+        }
     } else {
-        draw_rectangle(sx - 6.0, cy - 24.0, 40.0, 48.0, red);
-        draw_rectangle(sx - 6.0, cy - 24.0, 40.0, 8.0, Color::new(0.95, 0.25, 0.25, 1.0));
+        let lid = Rect::new(base.x - 3.0, base.y - 3.0, base.w + 6.0, base.h + 6.0);
+        rrect(lid, 4.0, Color::new(red.r, red.g, red.b, 0.86));
+        rrect(Rect::new(lid.x + 3.0, lid.y + 3.0, lid.w - 6.0, lid.h * 0.18), 3.0, Color::new(1.0, 0.4, 0.35, 0.35));
+        hazard_stripes(Rect::new(lid.x, lid.y + lid.h - 6.0, lid.w, 6.0));
+        txt_c("LEVER", lid.x + lid.w / 2.0, lid.y + lid.h / 2.0 + 4.0, 9.0, Color::new(1.0, 0.85, 0.8, 1.0));
+        if clicked(lid) {
+            GUARD.with(|g| g.borrow_mut()[idx] = time);
+        }
     }
-    let st_c = if on { if warn { AMBER } else { GREEN_S } } else { DIM };
-    txt(if on { "ON" } else { "OFF" }, r.x + 14.0, r.y + r.h - 12.0, 14.0, st_c);
-    clicked(r)
+    fired
+}
+
+/// Jauge horizontale avec repère de limite.
+fn bar(x: f32, y: f32, w: f32, label: &str, val: &str, frac: f32, mark: Option<f32>, col: Color) {
+    txt(label, x, y, 11.0, DIM);
+    txt_r(val, x + w, y, 11.0, col);
+    let b = Rect::new(x, y + 5.0, w, 7.0);
+    rrect(b, 3.0, Color::new(0.06, 0.065, 0.07, 1.0));
+    rrect(Rect::new(b.x, b.y, (b.w * frac.clamp(0.0, 1.0)).max(2.0), b.h), 3.0, col);
+    if let Some(m) = mark {
+        let mx = b.x + b.w * m.clamp(0.0, 1.0);
+        draw_line(mx, b.y - 3.0, mx, b.y + b.h + 3.0, 1.5, WHITE);
+    }
 }
 
 pub fn draw_overrides(ac: &Aircraft, mon: &crate::health::ChamberMon, r: Rect) -> Option<Switch> {
     panel(r, "OVERRIDE / URGENCES");
+    let time = get_time();
     let mut out = None;
-    let gap = 8.0;
-    let cols = 3.0;
-    let w = (r.w - 20.0 - gap * (cols - 1.0)) / cols;
-    let h = ((r.h - 120.0) / 2.0).clamp(70.0, 96.0);
     let scram_on = matches!(ac.eng.scram, ScramState::Armed | ScramState::Lit | ScramState::Unstart);
+    // Bandeau : protections inhibées
+    let inhib: Vec<&str> = [(ac.ovr_engine, "FADEC"), (ac.ovr_fbw, "FBW"), (ac.h2_dump, "H2 DUMP"), (ac.fuel_dump, "FUEL DUMP")].iter().filter(|x| x.0).map(|x| x.1).collect();
+    let mut y0 = r.y + 30.0;
+    if !inhib.is_empty() {
+        let b = Rect::new(r.x + 10.0, y0, r.w - 20.0, 24.0);
+        let blink = (time * 2.0).fract() < 0.6;
+        rrect(b, 5.0, Color::new(0.3, 0.2, 0.02, 1.0));
+        rrect_lines(b, 5.0, 1.5, if blink { AMBER } else { Color::new(0.5, 0.35, 0.05, 1.0) });
+        txt_c(&format!("ACTIF : {}  -  PROTECTIONS REDUITES", inhib.join(" / ")), b.x + b.w / 2.0, b.y + 16.0, 12.0, AMBER);
+        y0 += 32.0;
+    }
     let items = [
-        (Switch::ScramEnable, "SCRAM ENABLE", scram_on, false),
-        (Switch::EngineOverride, "ENGINE OVERRIDE", ac.ovr_engine, true),
-        (Switch::FbwOverride, "FBW OVERRIDE", ac.ovr_fbw, true),
-        (Switch::H2Dump, "EMER H2 DUMP", ac.h2_dump, true),
-        (Switch::FuelDump, "EMER FUEL DUMP", ac.fuel_dump, true),
+        (Switch::ScramEnable, "SCRAM ENABLE", "Autorise le scramjet (Mach 4,8+) ; OFF le coupe", scram_on, false),
+        (Switch::EngineOverride, "ENGINE OVERRIDE", "FADEC inhibe : manette sans butee, surchauffe et usure des chambres", ac.ovr_engine, true),
+        (Switch::FbwOverride, "FBW OVERRIDE", "Protections d'incidence et de facteur de charge inhibees", ac.ovr_fbw, true),
+        (Switch::H2Dump, "EMER H2 DUMP", "Vidange d'urgence de l'hydrogene", ac.h2_dump, true),
+        (Switch::FuelDump, "EMER FUEL DUMP", "Vidange d'urgence du JP-7", ac.fuel_dump, true),
     ];
-    for (i, (sw, label, on, warn)) in items.iter().enumerate() {
-        let (cx, cy) = (i % 3, i / 3);
-        let sr = Rect::new(r.x + 10.0 + cx as f32 * (w + gap), r.y + 30.0 + cy as f32 * (h + gap), w, h);
-        if guarded_switch(sr, label, *on, *warn) {
+    // Grille adaptée à la largeur ; bloc d'état à la place de la 6e case
+    let gap = 8.0;
+    let cols = (((r.w - 20.0) + gap) / 240.0).floor().clamp(1.0, 3.0) as usize;
+    let w = (r.w - 20.0 - gap * (cols as f32 - 1.0)) / cols as f32;
+    let rows = (items.len() + 1).div_ceil(cols);
+    let h = ((r.y + r.h - y0 - 22.0 - gap * (rows as f32 - 1.0)) / rows as f32).clamp(78.0, 132.0);
+    for (i, (sw, label, help, on, warn)) in items.iter().enumerate() {
+        let sr = Rect::new(r.x + 10.0 + (i % cols) as f32 * (w + gap), y0 + (i / cols) as f32 * (h + gap), w, h);
+        if guarded_switch(sr, i, label, help, *on, *warn, time) {
             out = Some(*sw);
         }
     }
-    // État moteur
-    let x = r.x + 10.0 + 2.0 * (w + gap);
-    let y = r.y + 30.0 + h + gap;
-    let e = &ac.eng;
-    txt("CHAMBRES", x + 4.0, y + 16.0, 13.0, DIM);
-    // État calculé à partir des courbes de surveillance (page MOTEURS)
-    let _ = e;
-    txt(mon.state.label(), x + 4.0, y + 34.0, 15.0, mon.state.color());
-    let cause: String = mon.cause.chars().take(30).collect();
-    txt(&cause, x + 4.0, y + 50.0, 10.0, mon.state.color());
-    let lim = if ac.ovr_engine { "FADEC : INHIBE".to_string() } else if ac.fadec_limit < 0.995 { format!("FADEC : LIMITE {:.0}%", ac.fadec_limit * 100.0) } else { "FADEC : NOMINAL".to_string() };
-    txt(&lim, x + 4.0, y + 68.0, 13.0, if ac.ovr_engine || ac.fadec_limit < 0.995 { AMBER } else { GREEN_S });
+    // ----- Bloc d'état -----
+    let i = items.len();
+    let st = Rect::new(r.x + 10.0 + (i % cols) as f32 * (w + gap), y0 + (i / cols) as f32 * (h + gap), w, h);
+    let step = ((st.h - 44.0) / 4.0).clamp(17.0, 26.0);
+    rrect(st, 8.0, Color::new(0.06, 0.065, 0.07, 1.0));
+    rrect_lines(st, 8.0, 1.0, Color::new(0.2, 0.21, 0.23, 1.0));
+    let (x, bw) = (st.x + 12.0, st.w - 24.0);
+    let mut y = st.y + 20.0;
+    txt("CHAMBRES", x, y, 11.0, DIM);
+    txt_r(mon.state.label(), x + bw, y, 12.0, mon.state.color());
+    y += 13.0;
+    let cause: String = mon.cause.chars().take(40).collect();
+    if !cause.is_empty() {
+        txt(&cause, x, y, 9.0, mon.state.color());
+    }
+    y += 12.0;
+    let fl = ac.fadec_limit as f32;
+    let fc = if ac.ovr_engine || fl < 0.995 { AMBER } else { GREEN_S };
+    bar(x, y, bw, "FADEC", &if ac.ovr_engine { "INHIBE".into() } else if fl < 0.995 { format!("LIMITE {:.0} %", fl * 100.0) } else { "NOMINAL".to_string() }, if ac.ovr_engine { 1.0 } else { fl }, None, fc);
+    y += step;
+    let thr = ac.throttle as f32;
+    bar(x, y, bw, "MANETTE", &format!("{:.0} % (MAX {})", thr * 100.0, if ac.ovr_engine { "MOTEUR" } else { "100 %" }), thr / 1.4, Some(1.0 / 1.4), if thr > 1.0 { AMBER } else { CYAN_S });
+    y += step;
+    let eff = ac.eng.th_eff as f32;
     let sat = ac.throttle > 1.6;
-    let max_s = if ac.ovr_engine { "LIMITE MOTEUR" } else { "100%" };
-    txt(&format!("MANETTE {:.0}% (MAX {max_s})", ac.throttle * 100.0), x + 4.0, y + 86.0, 13.0, if ac.throttle > 1.0 { AMBER } else { WHITE });
-    txt(&format!("POUSSEE EFFECTIVE {:.0}%{}", ac.eng.th_eff * 100.0, if sat { " - SATUREE" } else { "" }), x + 4.0, y + 104.0, 13.0, if sat { RED } else { DIM });
-
-    let ty = r.y + 30.0 + 2.0 * (h + gap) + 6.0;
-    let notes = [
-        "ENGINE OVERRIDE : FADEC inhibe, manette sans butee. La poussee sature a la limite physique du moteur (~137 %) ; au-dela le carburant en exces ne fait que chauffer et user les chambres (rupture a 0 %).",
-        "FBW OVERRIDE : protections d'incidence (entree d'air scram) et de facteur de charge inhibees. Unstart et rupture possibles.",
-    ];
-    let mut yy = ty;
-    for n in notes {
-        for l in wrap_text(n, 12.0, r.w - 24.0) {
-            if yy > r.y + r.h - 6.0 {
-                break;
-            }
-            txt(&l, r.x + 12.0, yy, 12.0, DIM);
-            yy += 15.0;
-        }
-        yy += 3.0;
+    bar(x, y, bw, "POUSSEE EFFECTIVE", &format!("{:.0} %{}", eff * 100.0, if sat { " SATUREE" } else { "" }), eff / 1.4, Some(1.0 / 1.4), if sat { RED } else if eff > 1.0 { AMBER } else { GREEN_S });
+    y += step;
+    let hp = ac.eng.health as f32;
+    bar(x, y, bw, "SANTE CHAMBRES", &format!("{:.0} %", hp * 100.0), hp, Some(0.3), if hp < 0.3 { RED } else if hp < 0.6 { AMBER } else { GREEN_S });
+    // Mode d'emploi
+    let hint = "Lever le capot (clic), puis basculer le levier (clic) dans les 6 s.";
+    let hy = r.y + r.h - 8.0;
+    if hy > st.y + st.h + 14.0 {
+        txt(hint, r.x + 12.0, hy, 10.0, DIM);
     }
     out
 }

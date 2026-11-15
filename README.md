@@ -906,3 +906,8 @@ Le SR-72 est un avion de reconnaissance : sa charge utile est simulée.
   l'opérateur, EGT excessive, surchauffe de peau / parois, fuite H2) ; risque de fond supprimé.
 - v1.69.4 : page 9 OVERRIDE (interrupteurs gardés ENGINE / FBW OVERRIDE) de retour dans l'écran
   principal (versions normale et dev) et élément OVERRIDE dans la palette CONFIG.
+- v1.69.5 : page OVERRIDE refaite — interrupteurs gardés réalistes (platine vissée, levier
+  métallique, capot rouge à bord rayé jaune / noir), manœuvre en deux temps (lever le capot puis
+  basculer dans les 6 s), voyant ON / OFF et explication par interrupteur, bandeau « PROTECTIONS
+  REDUITES » quand une protection est inhibée, bloc d'état en jauges (chambres, FADEC, manette,
+  poussée effective, santé des chambres). Grille adaptée à la taille de l'écran.
