@@ -199,7 +199,7 @@ pub fn draw(ac: &Aircraft, cx: &Ctx, r: Rect) -> Option<Act> {
         }
         // ----- MOTEURS -----
         1 => {
-            section(body.x, body.y, "DEMARRAGE : 1 BATTERIE -> 2 APU -> 3 TURBINES (L'APU S'ARRETE SEUL ENSUITE)");
+            section(body.x, body.y, "DEMARRAGE : 1 BATTERIE -> 2 APU -> 3 TURBINES (INS : SOUS-MENU NAVIGATION)");
             let turb = matches!(e.turb, TurbState::Running | TurbState::Starting);
             let a = &ac.apu;
             let apu_run = matches!(a.state, crate::apu::ApuState::Starting | crate::apu::ApuState::Running);
@@ -273,6 +273,18 @@ pub fn draw(ac: &Aircraft, cx: &Ctx, r: Rect) -> Option<Act> {
         }
         // ----- NAVIGATION -----
         3 => {
+            let i = &ac.ins;
+            use crate::ins::InsMode;
+            section(body.x, body.y, "CENTRALE INERTIELLE (INS) : HORIZON, CAP ET POSITION");
+            let items = [
+                ("ALIGNER L'INS", if i.mode == InsMode::Align { format!("{} {:.0} %", i.phase(), i.progress() * 100.0) } else { "".into() }, "Au sol, avion immobile : stabilisation puis cap (2 min)", if i.fault { amber(true) } else if i.mode == InsMode::Align { Some(CYAN_S) } else { None }),
+                ("INS EN NAV", if i.mode == InsMode::Nav { "NAV".into() } else if i.aligned { "NAV RDY".into() } else { "".into() }, "Apres NAV RDY : attitude, cap et position", on(i.mode == InsMode::Nav)),
+                ("INS ATT (SECOURS)", if i.mode == InsMode::Att { i.phase().into() } else { "".into() }, "Horizon seul en 15 s, cap non fiable", amber(i.mode == InsMode::Att)),
+            ];
+            if let Some(k) = grid(Rect::new(body.x, body.y + 22.0, body.w, ch), 3, ch, &items) {
+                out = Some(Act::Cmd(["INS ALIGN", "INS NAV", "INS ATT"][k].into()));
+            }
+            let body = Rect::new(body.x, body.y + ch + 36.0, body.w, body.h - ch - 36.0);
             section(body.x, body.y, "ROUTE ET PLAN DE VOL");
             let items = [
                 ("DIRECT DESTINATION", cx.dest.to_string(), "Cap direct vers la destination", None),

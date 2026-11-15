@@ -271,6 +271,7 @@ pub fn draw_pfd(ac: &Aircraft, v: &View, r: Rect, info: &PfdInfo) {
         draw_vsi(ac.d.vs, g.vsi);
     }
     draw_heading(ac, &g, info);
+    ins_flags(ac, &g, info.time);
     rrect_lines(r, 6.0, 1.5, Color::new(0.78, 0.80, 0.82, 0.85));
 
     if let Some((k, since)) = info.mishap {
@@ -306,6 +307,36 @@ pub fn draw_pfd(ac: &Aircraft, v: &View, r: Rect, info: &PfdInfo) {
         txt_c("LIAISON PERDUE - NO SIGNAL", cx, cy - 20.0, 30.0, RED);
         txt_c(ac.crashed.as_deref().unwrap_or(""), cx, cy + 14.0, 18.0, AMBER);
         txt_c("ENTREE : nouvel essai", cx, cy + 46.0, 18.0, WHITE);
+    }
+}
+
+/// Centrale inertielle non disponible : horizon masqué (drapeau ATT) et cap masqué (drapeau HDG),
+/// avec l'avancement de l'alignement.
+fn ins_flags(ac: &Aircraft, g: &Geo, time: f64) {
+    let i = &ac.ins;
+    let red = Color::new(0.95, 0.15, 0.12, 1.0);
+    if !i.att_ok() {
+        let s = g.inner;
+        draw_rectangle(s.x, s.y, s.w, s.h, Color::new(0.02, 0.02, 0.025, 1.0));
+        let (cx, cy) = (s.x + s.w / 2.0, s.y + s.h / 2.0);
+        let b = Rect::new(cx - 36.0, cy - 30.0, 72.0, 34.0);
+        draw_rectangle(b.x, b.y, b.w, b.h, red);
+        txt_c("ATT", cx, b.y + 25.0, 22.0, WHITE);
+        let (l, c) = match i.mode {
+            crate::ins::InsMode::Off => ("INS OFF - SELECTEUR SUR ALIGN (PANNEAU DROIT)".to_string(), AMBER),
+            _ if i.fault => ("INS ALIGN FAULT - AVION EN MOUVEMENT".to_string(), AMBER),
+            _ => (format!("INS STABILISATION {:.0} %", (i.t / crate::ins::STAB_S * 100.0).min(99.0)), if (time * 2.0).fract() < 0.6 { WHITE } else { DIM }),
+        };
+        txt_c(&l, cx, cy + 30.0, 13.0, c);
+    }
+    if !i.hdg_ok() {
+        let h = g.hdg;
+        let b = Rect::new(h.x + h.w / 2.0 - 30.0, h.y + h.h / 2.0 - 13.0, 60.0, 24.0);
+        draw_rectangle(b.x, b.y, b.w, b.h, if i.att_ok() { AMBER } else { red });
+        txt_c("HDG", b.x + b.w / 2.0, b.y + 18.0, 16.0, BLACK);
+        if i.att_ok() && i.mode == crate::ins::InsMode::Align {
+            txt_c(&format!("GYROCOMPAS {:.0} %", i.progress() * 100.0), h.x + h.w / 2.0, b.y - 6.0, 11.0, AMBER);
+        }
     }
 }
 

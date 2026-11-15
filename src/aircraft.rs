@@ -293,6 +293,8 @@ pub struct Aircraft {
     pub elec: systems::Elec,
     /// Groupe auxiliaire de puissance
     pub apu: crate::apu::Apu,
+    /// Centrale inertielle (attitude, cap, position)
+    pub ins: crate::ins::Ins,
     /// Démarrage réaliste (cold & dark) : turbines au sol avec l'air de l'APU, APU coupé ensuite
     pub cold_start: bool,
     apu_off_t: f64,
@@ -487,6 +489,7 @@ impl Aircraft {
             skin_temp: 293.0,
             last_landing: None,
             apu: crate::apu::Apu::new(),
+            ins: crate::ins::Ins::ready(),
             cold_start: false,
             apu_off_t: 0.0,
             win_temp: 20.0,
@@ -775,6 +778,7 @@ impl Aircraft {
         self.elec.bus_ok = false;
         self.set_turbines(TurbState::Off, 0.0);
         self.apu = crate::apu::Apu::new();
+        self.ins = crate::ins::Ins::off();
         self.throttle = 0.0;
         self.brakes = true;
     }
@@ -1761,6 +1765,18 @@ impl Aircraft {
             self.jolt = 2.5;
             self.msg(Level::Warning, "RUPTURE DE LA CHAMBRE DE COMBUSTION — MOTEURS G ET D DETRUITS");
             self.msg(Level::Warning, "PLUS AUCUNE POUSSEE : VOL PLANE — EMERGENCY OVERRIDE (autoland plane) OU EJECTION");
+        }
+        // Centrale inertielle : sans attitude, pas de pilote automatique
+        {
+            let moving = !self.on_ground || self.tas > 1.0;
+            let ev = self.ins.update(dt, self.elec.bus_ok, moving);
+            for (l, m) in ev {
+                self.msg(l, m);
+            }
+            if self.ap.on && !self.ins.att_ok() {
+                self.ap.on = false;
+                self.msg(Level::Warning, "AP DISCONNECT — PAS D'ATTITUDE INS");
+            }
         }
         // APU : régime, protections ; sa génératrice compte parmi les génératrices en ligne
         {

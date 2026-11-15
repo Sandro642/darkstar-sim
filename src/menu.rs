@@ -29,6 +29,7 @@ pub enum MenuAction {
     PitotHeat(bool),
     Nws(bool),
     Batt(bool),
+    Ins(crate::ins::InsMode),
     ApuMaster(bool),
     ApuStart,
     ApuStop,
@@ -116,12 +117,90 @@ pub fn draw_menu(ac: &Aircraft, bit: &BitState, r: Rect, time: f64) -> Option<Me
 /// PANNEAU DROIT : platines ENGINE, FLT CNTRL et SYS en haut, platine APU (avec la batterie) en bas.
 pub fn draw_panel(ac: &Aircraft, bit: &BitState, r: Rect, time: f64) -> Option<MenuAction> {
     let apu_h = 128.0;
-    let top = Rect::new(r.x, r.y, r.w, r.h - apu_h - 4.0);
+    let ins_h = 118.0;
+    let top = Rect::new(r.x, r.y, r.w, r.h - apu_h - ins_h - 4.0);
     let mut out = draw_platines(ac, bit, top, time);
+    let pi = Rect::new(r.x + 10.0, r.y + r.h - apu_h - ins_h, r.w - 20.0, ins_h - 6.0);
+    if let Some(a) = ins_plate(ac, pi, time) {
+        out = Some(a);
+    }
     let p = Rect::new(r.x + 10.0, r.y + r.h - apu_h, r.w - 20.0, apu_h - 6.0);
     if let Some(a) = apu_plate(ac, p, time) {
         out = Some(a);
     }
+    out
+}
+
+/// Platine INS : sélecteur rotatif OFF / ATT / ALIGN / NAV, voyants (STAB, ATT, HDG, NAV RDY,
+/// FAULT) et barre d'alignement (stabilisation puis gyrocompas).
+fn ins_plate(ac: &Aircraft, p: Rect, time: f64) -> Option<MenuAction> {
+    use crate::ins::{InsMode, ALIGN_S, STAB_S};
+    let mut out = None;
+    plate(p, "INS");
+    let i = &ac.ins;
+    // Sélecteur rotatif
+    let (kx, ky) = (p.x + 100.0, p.y + p.h / 2.0 + 4.0);
+    let modes = [(InsMode::Off, "OFF"), (InsMode::Att, "ATT"), (InsMode::Align, "ALIGN"), (InsMode::Nav, "NAV")];
+    let ang = |k: usize| (-150.0f32 + 100.0 * k as f32).to_radians();
+    for (k, (m, l)) in modes.iter().enumerate() {
+        let a = ang(k);
+        let (lx, ly) = (kx + 44.0 * a.cos(), ky + 40.0 * a.sin());
+        let sel = i.mode == *m;
+        let w = txt_w(l, 11.0) + 8.0;
+        let hit = Rect::new(lx - w / 2.0, ly - 10.0, w, 16.0);
+        txt_c(l, lx, ly + 3.0, 11.0, if sel { WHITE } else { LEGEND });
+        if clicked(hit) {
+            out = Some(MenuAction::Ins(*m));
+        }
+    }
+    let k = modes.iter().position(|(m, _)| *m == i.mode).unwrap_or(0);
+    let kc = Rect::new(kx - 22.0, ky - 22.0, 44.0, 44.0);
+    draw_circle(kx, ky, 22.0, Color::new(0.16, 0.17, 0.18, 1.0));
+    draw_circle(kx, ky, 17.0, Color::new(0.30, 0.31, 0.32, 1.0));
+    let a = ang(k);
+    draw_line(kx, ky, kx + 20.0 * a.cos(), ky + 20.0 * a.sin(), 4.0, WHITE);
+    // Clic sur le bouton : position suivante (OFF -> ATT -> ALIGN -> NAV)
+    if clicked(kc) {
+        out = Some(MenuAction::Ins(modes[(k + 1) % 4].0));
+    }
+    // Voyants
+    let blink = (time * 2.0).fract() < 0.6;
+    let lamps = [
+        ("PWR", i.mode != InsMode::Off, GREEN_S),
+        ("STAB", i.stab, GREEN_S),
+        ("ATT", i.att_ok(), GREEN_S),
+        ("HDG", i.hdg_ok(), GREEN_S),
+        ("NAV RDY", i.aligned && i.mode == InsMode::Align && blink, GREEN_S),
+        ("FAULT", i.fault, AMBER),
+    ];
+    let lx0 = p.x + 180.0;
+    let lw = ((p.x + p.w - 12.0 - lx0) / 6.0).min(70.0);
+    for (n, (l, on, c)) in lamps.iter().enumerate() {
+        let b = Rect::new(lx0 + n as f32 * lw, p.y + 14.0, lw - 6.0, 26.0);
+        rrect(b, 3.0, if *on { Color::new(c.r * 0.25, c.g * 0.25, c.b * 0.25, 1.0) } else { Color::new(0.06, 0.06, 0.07, 1.0) });
+        rrect_lines(b, 3.0, 1.0, Color::new(0.25, 0.27, 0.3, 1.0));
+        txt_c(l, b.x + b.w / 2.0, b.y + 17.0, 10.0, if *on { *c } else { DIM });
+    }
+    // Alignement : barre en deux segments (stabilisation, gyrocompas)
+    let bx = lx0;
+    let bw = lw * 6.0 - 6.0;
+    let by = p.y + 56.0;
+    draw_rectangle(bx, by, bw, 10.0, Color::new(0.06, 0.06, 0.07, 1.0));
+    let fs = (STAB_S / ALIGN_S) as f32;
+    let pr = if i.mode == InsMode::Nav { 1.0 } else { i.progress() as f32 };
+    draw_rectangle(bx, by, bw * pr, 10.0, if i.aligned { GREEN_S } else if i.stab { CYAN_S } else { AMBER });
+    draw_line(bx + bw * fs, by - 2.0, bx + bw * fs, by + 12.0, 1.0, WHITE);
+    txt("STAB", bx, by + 24.0, 9.0, DIM);
+    txt("GYROCOMPAS", bx + bw * fs + 4.0, by + 24.0, 9.0, DIM);
+    txt_r("NAV RDY", bx + bw, by + 24.0, 9.0, DIM);
+    let ttg = (ALIGN_S - i.t).max(0.0);
+    let info = match i.mode {
+        InsMode::Align if !i.aligned && !i.fault => format!("{}  -  {:.0} %  -  RESTE {}:{:02}  -  NE PAS BOUGER", i.phase(), pr * 100.0, ttg as u32 / 60, ttg as u32 % 60),
+        InsMode::Align if i.aligned => "ALIGNEMENT TERMINE : TOURNER SUR NAV".into(),
+        InsMode::Off => "HORIZON INDISPONIBLE : TOURNER SUR ALIGN (AVION IMMOBILE)".into(),
+        _ => i.phase().to_string(),
+    };
+    txt(&info, bx, p.y + p.h - 10.0, 11.0, if i.fault { AMBER } else if i.mode == InsMode::Nav { GREEN_S } else { LEGEND });
     out
 }
 

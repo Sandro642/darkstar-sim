@@ -865,3 +865,10 @@ Le SR-72 est un avion de reconnaissance : sa charge utile est simulée.
   (BATT, MASTER, START / AVAIL, GEN, BLEED, N, EGT). Version normale : onglet PANNEAU DROIT (ex-CONSOLE),
   onglet APU retiré. Version dev : fenêtre PANNEAU DROIT unique (PANNEAU GAUCHE retiré), réduite
   proprement à la taille de la fenêtre (dessin et clics mis à l'échelle).
+- v1.66.0 : centrale inertielle (INS) — platine INS dans le PANNEAU DROIT : sélecteur rotatif
+  OFF / ATT / ALIGN / NAV, voyants PWR, STAB, ATT, HDG, NAV RDY, FAULT et barre d'alignement.
+  ALIGN (au sol, avion immobile) : 1 STABILISATION (~25 s) -> horizon disponible, 2 GYROCOMPAS
+  (~2 min) -> cap, NAV RDY puis NAV. Mouvement pendant l'alignement : ALIGN FAULT, reprise à zéro.
+  ATT : horizon seul en 15 s (secours). Sans INS : drapeaux rouges ATT (horizon masqué) et HDG sur
+  le PFD, pilote automatique déconnecté. Perte d'alimentation : plate-forme arrêtée. Cold & dark :
+  INS sur OFF. Cartes INS dans COMMANDES > NAVIGATION, instruction INS OFF/ATT/ALIGN/NAV.

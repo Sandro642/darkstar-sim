@@ -9,6 +9,7 @@ mod navdb;
 mod cifp;
 mod escort;
 mod apu;
+mod ins;
 mod dev;
 mod fcu;
 mod cockpit;
@@ -625,6 +626,12 @@ impl Game {
         match a {
             EngSwitch(i, sw) => self.ac.cmd_eng_switch(i, sw),
             Batt(on) => self.exec_command(if on { "BATT ON" } else { "BATT OFF" }),
+            Ins(m) => self.exec_command(match m {
+                ins::InsMode::Off => "INS OFF",
+                ins::InsMode::Att => "INS ATT",
+                ins::InsMode::Align => "INS ALIGN",
+                ins::InsMode::Nav => "INS NAV",
+            }),
             ApuMaster(on) => {
                 if on {
                     self.ac.apu.master = true;
@@ -1944,6 +1951,21 @@ impl Game {
                     connect::save_mode(true);
                     reply = Ok("VERSION DEVELOPPEUR — FENETRES DEPLACABLES, CONSOLE DANS LA BARRE (MENU CONSOLE)".into());
                 }
+            }
+            // Centrale inertielle : INS OFF / ATT / ALIGN / NAV
+            "INS" | "IRS" => {
+                use ins::InsMode;
+                let m = match arg(1) {
+                    "OFF" => Some(InsMode::Off),
+                    "ATT" => Some(InsMode::Att),
+                    "ALIGN" | "ALIGNER" | "" => Some(InsMode::Align),
+                    "NAV" => Some(InsMode::Nav),
+                    _ => None,
+                };
+                reply = match m {
+                    Some(m) => ac.ins.set_mode(m, ac.elec.bus_ok),
+                    None => Err("INS OFF / ATT / ALIGN / NAV".into()),
+                };
             }
             // Batterie principale
             "BATT" | "BATTERIE" | "BATTERY" => {
@@ -3362,7 +3384,8 @@ fn draw_tab_page(g: &mut Game, tab: gcs::Tab, cr: Rect, alerts: &[(Level, String
         }
         gcs::Tab::Console => {
             let bit = menu::BitState { running: g.bit_timer > 0.0, fail: g.bit_fail };
-            if let Some(a) = menu::draw_menu(&g.ac, &bit, cr, time) {
+            let (ac, t) = (&g.ac, time);
+            if let Some(a) = ui::scaled(cr, 560.0, 760.0, |v| menu::draw_menu(ac, &bit, v, t)) {
                 g.apply_menu(a);
             }
         }
@@ -3433,7 +3456,7 @@ fn draw_dev_windows(g: &mut Game, d: &mut dev::DevUi, world: &world::World, tile
             dev::WinKind::PanneauDroit => {
                 let bit = menu::BitState { running: g.bit_timer > 0.0, fail: g.bit_fail };
                 let (ac, t) = (&g.ac, time);
-                if let Some(a) = ui::scaled(cr, 560.0, 640.0, |v| menu::draw_panel(ac, &bit, v, t)) {
+                if let Some(a) = ui::scaled(cr, 560.0, 760.0, |v| menu::draw_panel(ac, &bit, v, t)) {
                     g.apply_menu(a);
                     g.cues.push(audio::Cue::Switch);
                 }
