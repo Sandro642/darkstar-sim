@@ -916,3 +916,8 @@ Le SR-72 est un avion de reconnaissance : sa charge utile est simulée.
   mesure, attente de 10 s après BTL 1, compte à rebours avant destruction), poignées FIRE en T
   réalistes (voyant dans la poignée, tige visible quand tirée), bouteilles d'agent dessinées avec
   manomètre et bouton DISCH (armé seulement poignée tirée), boucles de détection A / B, FIRE TEST.
+- v1.69.7 : page SYSTEMES réorganisée — bandeau de synthèse (SYSTEMES NOMINAUX ou liste des
+  anomalies : HYD, BUS ESS, GEN, E BAY, turbines, scram, entrées d'air, thermique, CG, vidange),
+  sections encadrées et titrées (servitudes, structure / thermique, propulsion, carburant, radar
+  météo / centrage), disposition adaptée (large en colonnes, étroite en grille), jauges CG / AoA
+  horizontales avec plage normale ; en-têtes du tableau propulsion lisibles.

@@ -123,44 +123,65 @@ fn turb_state(s: TurbState) -> (&'static str, u8) {
     }
 }
 
-pub fn draw(ac: &Aircraft, th: &crate::thermal::ThermalSys, wxr: &crate::wxr::Wxr, r: Rect, time: f64) -> Option<Tab> {
-    panel(r, "SYSTEMES — SYNOPTIQUE");
-    let inner = Rect::new(r.x + 8.0, r.y + 26.0, r.w - 16.0, r.h - 34.0);
-    draw_rectangle(inner.x, inner.y, inner.w, inner.h, Color::new(0.0, 0.0, 0.0, 0.92));
-    draw_rectangle_lines(inner.x, inner.y, inner.w, inner.h, 1.0, FAINT);
-    let icons_h = 58.0;
-    let body = Rect::new(inner.x + 8.0, inner.y + 8.0, inner.w - 16.0, inner.h - icons_h - 16.0);
+/// Cadre de section titré ; renvoie la zone intérieure.
+fn card(r: Rect, title: &str, c: Color) -> Rect {
+    draw_rectangle(r.x, r.y, r.w, r.h, Color::new(0.02, 0.025, 0.03, 1.0));
+    draw_rectangle_lines(r.x, r.y, r.w, r.h, 1.0, Color::new(0.22, 0.24, 0.27, 1.0));
+    draw_rectangle(r.x, r.y, 3.0, 16.0, c);
+    txt(title, r.x + 9.0, r.y + 13.0, 10.0, c);
+    Rect::new(r.x + 8.0, r.y + 20.0, r.w - 16.0, r.h - 26.0)
+}
+
+/// Anomalies en cours (synthèse en tête de page).
+fn anomalies(ac: &Aircraft, th: &crate::thermal::ThermalSys) -> Vec<(&'static str, u8)> {
     let e = &ac.eng;
-
-    // ---- Colonne gauche : servitudes ----
-    let lw = (body.w * 0.15).max(96.0);
-    let mut y = body.y + 14.0;
-    let hyd_ok = !ac.fails.has(Fail::Hyd);
     let el = &ac.elec;
-    let items: [(&str, String, f32, Color); 7] = [
-        ("HYD 1", if hyd_ok { "3000".into() } else { "0".into() }, if hyd_ok { 1.0 } else { 0.0 }, if hyd_ok { OKC } else { RED }),
-        ("HYD 2", if hyd_ok { "2980".into() } else { "0".into() }, if hyd_ok { 0.99 } else { 0.0 }, if hyd_ok { OKC } else { RED }),
-        ("GEN kW", format!("{:.0}", el.gen_kw), (el.gen_kw / 60.0) as f32, if el.gen_kw > 5.0 { OKC } else { AMBER }),
-        ("BATT", format!("{:.0}%", el.batt * 100.0), el.batt as f32, if el.batt > 0.3 { OKC } else { AMBER }),
-        ("PILE H2", format!("{:.0}C", el.fc_temp), if el.fc_on { (el.fc_temp / 120.0) as f32 } else { 0.0 }, if el.fc_on { CYAN_S } else { FAINT }),
-        ("O2 PILE", format!("{:.0}%", el.o2 * 100.0), el.o2 as f32, if el.o2 > 0.2 { OKC } else { AMBER }),
-        ("E BAY", format!("{:.0}C", el.ebay_temp), (el.ebay_temp / 80.0) as f32, if el.ebay_temp < 60.0 { OKC } else { AMBER }),
-    ];
-    for (l, v, f, c) in items.iter() {
-        bar(body.x, y, lw - 10.0, l, v, *f, *c);
-        y += 30.0;
+    let mut v = Vec::new();
+    if ac.fails.has(Fail::Hyd) {
+        v.push(("HYD", 2));
     }
-    let bus = if el.bus_ok { ("BUS ESS  OK", OKC) } else { ("BUS ESS  OFF", RED) };
-    txt(bus.0, body.x, y + 4.0, 11.0, bus.1);
+    if !el.bus_ok {
+        v.push(("BUS ESS", 2));
+    } else if el.batt < 0.3 && el.gen_kw < 5.0 {
+        v.push(("BATT", 1));
+    }
+    if !ac.on_ground && el.gen_kw < 5.0 {
+        v.push(("GEN", 1));
+    }
+    if el.ebay_temp > 60.0 {
+        v.push(("E BAY", 1));
+    }
+    for i in 0..2 {
+        if e.side[i] == TurbState::Failed {
+            v.push((["TURB G", "TURB D"][i], 2));
+        }
+    }
+    if e.scram == ScramState::Unstart {
+        v.push(("SCRAM", 2));
+    }
+    if ac.fails.has(Fail::InletJam) {
+        v.push(("ENTREES", 2));
+    }
+    if th.sensors.iter().any(|s| !s.failed && !s.inhibited && s.value > s.caution) {
+        v.push(("THERMIQUE", 1));
+    }
+    if !(21.0..=29.0).contains(&ac.cg()) {
+        v.push(("CG", 1));
+    }
+    if ac.fuel_dump || ac.h2_dump {
+        v.push(("VIDANGE", 1));
+    }
+    v
+}
 
-    // ---- Vue structure / thermique (contour orange) ----
-    let colw = (body.w - lw) * 0.30;
-    let left = Rect::new(body.x + lw, body.y, colw, body.h - 16.0);
+/// Vue en plan structure / thermique : organes colorés, train, capteurs.
+fn structure(ac: &Aircraft, th: &crate::thermal::ThermalSys, area: Rect) -> Color {
+    let e = &ac.eng;
+    let el = &ac.elec;
     let hot = th.sensors.iter().filter(|s| !s.failed && !s.inhibited).map(|s| ((s.value - s.caution) / (s.limit - s.caution)).max(-1.0)).fold(-1.0f64, f64::max);
     let edge = if hot > 0.0 { RED } else if hot > -0.2 { AMBER } else { ORANGE };
-    silhouette(left, edge, Color::new(0.0, 0.0, 0.0, 0.0));
-    let to = plan(left);
-    // Organes : avionique, entrées d'air, turbines, combustion stato / scram, train
+    silhouette(area, edge, Color::new(0.0, 0.0, 0.0, 0.0));
+    let to = plan(area);
     let st_turb = |i: usize| turb_state(e.side[i]).1;
     let ram_s = if e.ram_wall > crate::systems::RAM_WALL_CAUTION { 1 } else if e.ram == RamState::Lit { 0 } else { 3 };
     let scr_s = match e.scram {
@@ -170,7 +191,7 @@ pub fn draw(ac: &Aircraft, th: &crate::thermal::ThermalSys, wxr: &crate::wxr::Wx
         _ => 3,
     };
     let parts: [(f32, f32, f32, f32, u8, &str); 7] = [
-        (-0.05, 0.13, 0.05, 0.24, if el.bus_ok { 0 } else { 2 }, "AVIO"),
+        (-0.05, 0.13, 0.05, 0.24, if el.bus_ok { 0 } else { 2 }, "AV"),
         (-0.14, 0.38, -0.08, 0.62, if ac.fails.has(Fail::InletJam) { 2 } else { 0 }, ""),
         (0.08, 0.38, 0.14, 0.62, if ac.fails.has(Fail::InletJam) { 2 } else { 0 }, ""),
         (-0.20, 0.74, -0.08, 0.94, st_turb(0), "G"),
@@ -184,11 +205,10 @@ pub fn draw(ac: &Aircraft, th: &crate::thermal::ThermalSys, wxr: &crate::wxr::Wx
         let c = state_color(s);
         rrect(rr, 2.0, Color::new(c.r, c.g, c.b, 0.18));
         rrect_lines(rr, 2.0, 1.2, c);
-        if !l.is_empty() {
-            txt_c(l, rr.x + rr.w / 2.0, rr.y + rr.h / 2.0 + 4.0, 10.0, c);
+        if !l.is_empty() && rr.h > 12.0 {
+            txt_c(l, rr.x + rr.w / 2.0, rr.y + rr.h / 2.0 + 4.0, 9.0, c);
         }
     }
-    // Train (trois points)
     for (x, yy) in [(0.0, 0.30), (-0.14, 0.66), (0.14, 0.66)] {
         let p = to(x, yy);
         let g = if ac.gear_pos > 0.99 { OKC } else if ac.gear_pos > 0.01 { RED } else { FAINT };
@@ -200,20 +220,21 @@ pub fn draw(ac: &Aircraft, th: &crate::thermal::ThermalSys, wxr: &crate::wxr::Wx
         let c = if k > 0.0 { RED } else if k > -0.15 { AMBER } else { Color::new(1.0, 0.75, 0.4, 0.8) };
         draw_circle(p.x, p.y, 2.0, c);
     }
-    txt_c("STRUCTURE / THERMIQUE", left.x + left.w / 2.0, left.y + left.h + 12.0, 11.0, edge);
-    let skin = ac.skin_temp - 273.15;
-    txt(&format!("PEAU {skin:.0}C"), left.x, left.y + 12.0, 11.0, edge);
+    edge
+}
 
-    // ---- Centre : tableau moteurs, éventail radar, échelles ----
-    let cw = (body.w - lw) * 0.40;
-    let mid = Rect::new(left.x + left.w, body.y, cw, body.h);
+/// Tableau propulsion : turbines G / D, stato, scram.
+fn propulsion(ac: &Aircraft, r: Rect) {
+    let e = &ac.eng;
     let cols = ["TURB G", "TURB D", "STATO", "SCRAM"];
-    let col_w = (mid.w - 50.0) / 4.0;
-    let tx = mid.x + 50.0;
+    let lab_w = 52.0;
+    let col_w = (r.w - lab_w) / 4.0;
+    let tx = r.x + lab_w;
+    let hs = if col_w < 52.0 { 9.0 } else { 10.0 };
     for (i, c) in cols.iter().enumerate() {
-        txt_c(c, tx + col_w * (i as f32 + 0.5), mid.y + 12.0, 10.0, LINE);
+        txt_c(c, tx + col_w * (i as f32 + 0.5), r.y + 10.0, hs, LINE);
     }
-    draw_line(mid.x + 4.0, mid.y + 17.0, mid.x + mid.w - 4.0, mid.y + 17.0, 1.0, FAINT);
+    draw_line(r.x, r.y + 15.0, r.x + r.w, r.y + 15.0, 1.0, FAINT);
     let (s0, c0) = turb_state(e.side[0]);
     let (s1, c1) = turb_state(e.side[1]);
     let ram_t = match e.ram {
@@ -225,7 +246,7 @@ pub fn draw(ac: &Aircraft, th: &crate::thermal::ThermalSys, wxr: &crate::wxr::Wx
         ScramState::Off => ("OFF", 3),
         ScramState::Armed => ("ARME", 1),
         ScramState::Lit => ("ALLUME", 0),
-        ScramState::Unstart => ("DESAMORC", 2),
+        ScramState::Unstart => ("DESAM.", 2),
     };
     let rows: [(&str, [(String, u8); 4]); 4] = [
         ("ETAT", [(s0.into(), c0), (s1.into(), c1), (ram_t.0.into(), ram_t.1), (scr_t.0.into(), scr_t.1)]),
@@ -241,21 +262,142 @@ pub fn draw(ac: &Aircraft, th: &crate::thermal::ThermalSys, wxr: &crate::wxr::Wx
             ],
         ),
     ];
+    let rh = ((r.h - 18.0) / 4.0).min(17.0);
     for (k, (lbl, vals)) in rows.iter().enumerate() {
-        let yy = mid.y + 32.0 + k as f32 * 15.0;
-        txt(lbl, mid.x + 4.0, yy, 10.0, FAINT);
+        let yy = r.y + 18.0 + (k as f32 + 0.75) * rh;
+        txt(lbl, r.x, yy, 10.0, FAINT);
         for (i, (v, s)) in vals.iter().enumerate() {
             let c = if *s == 3 { FAINT } else if *s == 0 { LINE } else { state_color(*s) };
             txt_c(v, tx + col_w * (i as f32 + 0.5), yy, 11.0, c);
         }
     }
-    // Éventail radar météo (± 60°, vu de l'avion en bas)
-    let fan_top = mid.y + 100.0;
-    let fan_r = (mid.w * 0.42).min(body.y + body.h * 0.70 - fan_top);
-    let fc = vec2(mid.x + mid.w / 2.0, fan_top + fan_r);
+}
+
+/// Jauge horizontale avec plage normale (vert) et repère de valeur.
+fn hgauge(x: f32, y: f32, w: f32, lbl: &str, v: f32, lo: f32, hi: f32, okl: f32, okh: f32) {
+    let ok = (okl..=okh).contains(&v);
+    let c = if ok { OKC } else { AMBER };
+    txt(lbl, x, y, 10.0, LINE);
+    txt_r(&format!("{v:.1}"), x + w, y, 11.0, c);
+    let by = y + 6.0;
+    let fx = |val: f32| x + (val - lo) / (hi - lo) * w;
+    draw_line(x, by + 4.0, x + w, by + 4.0, 1.0, FAINT);
+    draw_rectangle(fx(okl), by, fx(okh) - fx(okl), 8.0, Color::new(0.35, 0.95, 0.45, 0.3));
+    let vx = fx(v.clamp(lo, hi));
+    draw_triangle(vec2(vx, by + 9.0), vec2(vx - 5.0, by + 16.0), vec2(vx + 5.0, by + 16.0), c);
+    draw_line(vx, by - 1.0, vx, by + 9.0, 2.0, c);
+}
+
+pub fn draw(ac: &Aircraft, th: &crate::thermal::ThermalSys, wxr: &crate::wxr::Wxr, r: Rect, time: f64) -> Option<Tab> {
+    panel(r, "SYSTEMES — SYNOPTIQUE");
+    let inner = Rect::new(r.x + 8.0, r.y + 26.0, r.w - 16.0, r.h - 34.0);
+    draw_rectangle(inner.x, inner.y, inner.w, inner.h, Color::new(0.0, 0.0, 0.0, 0.92));
+    let e = &ac.eng;
+    let el = &ac.elec;
+    let gap = 6.0;
+    // ---- Synthèse ----
+    let an = anomalies(ac, th);
+    let sb = Rect::new(inner.x + 4.0, inner.y + 4.0, inner.w - 8.0, 22.0);
+    let worst = an.iter().map(|a| a.1).max().unwrap_or(0);
+    let sc = state_color(worst);
+    draw_rectangle(sb.x, sb.y, sb.w, sb.h, Color::new(sc.r * 0.15, sc.g * 0.15, sc.b * 0.15, 1.0));
+    draw_rectangle_lines(sb.x, sb.y, sb.w, sb.h, 1.0, sc);
+    let msg = if an.is_empty() { "SYSTEMES NOMINAUX".to_string() } else { format!("{} ANOMALIE{} : {}", an.len(), if an.len() > 1 { "S" } else { "" }, an.iter().map(|a| a.0).collect::<Vec<_>>().join("  ")) };
+    txt_c(&msg, sb.x + sb.w / 2.0, sb.y + 15.0, 11.0, sc);
+    let icons_h = (inner.h * 0.08).clamp(38.0, 56.0);
+    let body = Rect::new(inner.x + 4.0, sb.y + sb.h + gap, inner.w - 8.0, inner.y + inner.h - icons_h - 8.0 - (sb.y + sb.h + gap));
+    let wide = body.w > body.h * 1.25;
+    // Disposition des sections
+    let (r_serv, r_str, r_prop, r_fuel, r_wx) = if wide {
+        let c1 = body.w * 0.18;
+        let c2 = body.w * 0.26;
+        let c4 = body.w * 0.26;
+        let c3 = body.w - c1 - c2 - c4 - 3.0 * gap;
+        let x2 = body.x + c1 + gap;
+        let x3 = x2 + c2 + gap;
+        let x4 = x3 + c3 + gap;
+        let ph = 100.0f32.min(body.h * 0.3);
+        (
+            Rect::new(body.x, body.y, c1, body.h),
+            Rect::new(x2, body.y, c2, body.h),
+            Rect::new(x3, body.y, c3, ph),
+            Rect::new(x4, body.y, c4, body.h),
+            Rect::new(x3, body.y + ph + gap, c3, body.h - ph - gap),
+        )
+    } else {
+        let h1 = body.h * 0.38;
+        let ph = 96.0;
+        let h3 = body.h - h1 - ph - 2.0 * gap;
+        let half = (body.w - gap) / 2.0;
+        let y2 = body.y + h1 + gap;
+        let y3 = y2 + ph + gap;
+        (
+            Rect::new(body.x, body.y, half, h1),
+            Rect::new(body.x + half + gap, body.y, half, h1),
+            Rect::new(body.x, y2, body.w, ph),
+            Rect::new(body.x, y3, half, h3),
+            Rect::new(body.x + half + gap, y3, half, h3),
+        )
+    };
+    // ---- Servitudes ----
+    let a = card(r_serv, "SERVITUDES", LINE);
+    let hyd_ok = !ac.fails.has(Fail::Hyd);
+    let items: [(&str, String, f32, Color); 7] = [
+        ("HYD 1", if hyd_ok { "3000".into() } else { "0".into() }, if hyd_ok { 1.0 } else { 0.0 }, if hyd_ok { OKC } else { RED }),
+        ("HYD 2", if hyd_ok { "2980".into() } else { "0".into() }, if hyd_ok { 0.99 } else { 0.0 }, if hyd_ok { OKC } else { RED }),
+        ("GEN kW", format!("{:.0}", el.gen_kw), (el.gen_kw / 60.0) as f32, if el.gen_kw > 5.0 { OKC } else { AMBER }),
+        ("BATT", format!("{:.0}%", el.batt * 100.0), el.batt as f32, if el.batt > 0.3 { OKC } else { AMBER }),
+        ("PILE H2", format!("{:.0}C", el.fc_temp), if el.fc_on { (el.fc_temp / 120.0) as f32 } else { 0.0 }, if el.fc_on { CYAN_S } else { FAINT }),
+        ("O2 PILE", format!("{:.0}%", el.o2 * 100.0), el.o2 as f32, if el.o2 > 0.2 { OKC } else { AMBER }),
+        ("E BAY", format!("{:.0}C", el.ebay_temp), (el.ebay_temp / 80.0) as f32, if el.ebay_temp < 60.0 { OKC } else { AMBER }),
+    ];
+    let cols = if a.w > 260.0 { 2 } else { 1 };
+    let bw = (a.w - (cols as f32 - 1.0) * 12.0) / cols as f32;
+    let rows = items.len().div_ceil(cols);
+    let step = ((a.h - 6.0) / rows as f32).clamp(16.0, 30.0);
+    for (k, (l, v, f, c)) in items.iter().enumerate() {
+        bar(a.x + (k % cols) as f32 * (bw + 12.0), a.y + 10.0 + (k / cols) as f32 * step, bw, l, v, *f, *c);
+    }
+    let bus = if el.bus_ok { ("BUS ESS OK", OKC) } else { ("BUS ESS OFF", RED) };
+    txt_r(bus.0, a.x + a.w, a.y - 7.0, 10.0, bus.1);
+    // ---- Structure / thermique ----
+    let skin = ac.skin_temp - 273.15;
+    let a = card(r_str, "STRUCTURE / THERMIQUE", ORANGE);
+    let edge = structure(ac, th, Rect::new(a.x, a.y + 12.0, a.w, a.h - 12.0));
+    txt_r(&format!("PEAU {skin:.0} C"), a.x + a.w, a.y - 7.0, 10.0, edge);
+    // ---- Propulsion ----
+    let a = card(r_prop, "PROPULSION", LINE);
+    propulsion(ac, a);
+    // ---- Carburant ----
+    let a = card(r_fuel, "CARBURANT", OKC);
+    let qw = (a.w * 0.36).clamp(70.0, 110.0);
+    fuel_tanks(ac, Rect::new(a.x, a.y, a.w - qw - 4.0, a.h));
+    let qx = a.x + a.w - qw;
+    let qitems = [
+        ("JP-7", format!("{:.1} t", ac.fuel / 1000.0), OKC),
+        ("H2", format!("{:.1} t", ac.h2 / 1000.0), CYAN_S),
+        ("DEBIT", format!("{:.1} kg/s", e.fuel_flow), LINE),
+        ("H2 DEB", format!("{:.2}", e.h2_flow), CYAN_S),
+        ("PRESS", format!("{:.0} psi", ac.fuel_psi()), if ac.fuel_psi() > 40.0 { OKC } else { AMBER }),
+    ];
+    let qs = ((a.h - 10.0) / qitems.len() as f32).clamp(22.0, 32.0);
+    let mut qy = a.y + 8.0;
+    for (l, v, c) in qitems {
+        txt(l, qx, qy, 9.0, FAINT);
+        txt_r(&v, qx + qw, qy + 12.0, 11.0, c);
+        qy += qs;
+    }
+    if (ac.fuel_dump || ac.h2_dump) && (time * 2.0).fract() < 0.6 {
+        txt("VIDANGE", qx, qy + 4.0, 11.0, AMBER);
+    }
+    // ---- Radar météo + centrage / incidence ----
+    let a = card(r_wx, "RADAR METEO / CENTRAGE", LINE);
+    let gh = 64.0;
+    let fan_r = (a.w * 0.45).min(a.h - gh - 26.0).max(20.0);
+    let fc = vec2(a.x + a.w / 2.0, a.y + 4.0 + fan_r);
     let pt = |az: f32, f: f32| {
-        let a = (az - 90.0).to_radians();
-        vec2(fc.x + fan_r * f * a.cos(), fc.y + fan_r * f * a.sin())
+        let an = (az - 90.0).to_radians();
+        vec2(fc.x + fan_r * f * an.cos(), fc.y + fan_r * f * an.sin())
     };
     wxr.draw_nd(fc, fan_r, time);
     for k in 1..=4 {
@@ -263,62 +405,16 @@ pub fn draw(ac: &Aircraft, th: &crate::thermal::ThermalSys, wxr: &crate::wxr::Wx
         let pts: Vec<Vec2> = (0..=24).map(|i| pt(-60.0 + i as f32 * 5.0, f)).collect();
         stroke(&pts, false, 1.0, FAINT);
     }
-    for az in [-60.0f32, -40.0, -20.0, 0.0, 20.0, 40.0, 60.0] {
+    for az in [-60.0f32, -30.0, 0.0, 30.0, 60.0] {
         let p = pt(az, 1.0);
         draw_line(fc.x, fc.y, p.x, p.y, 1.0, FAINT);
     }
-    draw_triangle(fc + vec2(0.0, -8.0), fc + vec2(-6.0, 6.0), fc + vec2(6.0, 6.0), LINE);
-    txt_c(&format!("WXR  {}", wxr.tilt_label()), fc.x, fc.y + 18.0, 10.0, if wxr.on { OKC } else { AMBER });
-    // Échelles verticales : centrage et incidence
-    let sy0 = fc.y + 30.0;
-    let sy1 = (body.y + body.h - 20.0).min(sy0 + 200.0);
-    if sy1 - sy0 > 40.0 {
-        let cg = ac.cg() as f32;
-        let alpha = ac.d.alpha.to_degrees() as f32;
-        let amax = ac.fcs.alpha_max as f32;
-        for (i, (lbl, v, lo, hi, okl, okh)) in [("CG %", cg, 15.0f32, 35.0f32, 21.0f32, 29.0f32), ("AoA", alpha, -5.0, amax.max(5.0) + 2.0, -2.0, amax * 0.8)].iter().enumerate() {
-            let x = mid.x + mid.w * (0.32 + 0.36 * i as f32);
-            draw_line(x, sy0, x, sy1, 1.2, LINE);
-            let fy = |val: f32| sy1 - (val - lo) / (hi - lo) * (sy1 - sy0);
-            for k in 0..=4 {
-                let yy = sy0 + k as f32 * (sy1 - sy0) / 4.0;
-                draw_line(x - 5.0, yy, x, yy, 1.0, FAINT);
-            }
-            draw_rectangle(x + 2.0, fy(*okh), 4.0, fy(*okl) - fy(*okh), Color::new(0.35, 0.95, 0.45, 0.35));
-            let c = if (*okl..=*okh).contains(v) { OKC } else { AMBER };
-            let yv = fy(v.clamp(*lo, *hi));
-            draw_triangle(vec2(x - 2.0, yv), vec2(x - 10.0, yv - 5.0), vec2(x - 10.0, yv + 5.0), c);
-            txt_c(lbl, x, sy1 + 12.0, 10.0, LINE);
-            txt(&format!("{v:.1}"), x + 9.0, yv + 4.0, 10.0, c);
-        }
-    }
-
-    // ---- Vue carburant (silhouette remplie) ----
-    let right = Rect::new(mid.x + mid.w, body.y, body.x + body.w - (mid.x + mid.w), body.h - 16.0);
-    let pr = Rect::new(right.x, right.y, right.w * 0.68, right.h);
-    fuel_tanks(ac, pr);
-    txt_c("CARBURANT", pr.x + pr.w / 2.0, pr.y + pr.h + 12.0, 11.0, OKC);
-    // Colonne de quantités
-    let qx = pr.x + pr.w + 4.0;
-    let qw = right.x + right.w - qx;
-    let mut qy = right.y + 16.0;
-    for (l, v, c) in [
-        ("JP-7", format!("{:.1} t", ac.fuel / 1000.0), OKC),
-        ("H2", format!("{:.1} t", ac.h2 / 1000.0), CYAN_S),
-        ("DEBIT", format!("{:.1} kg/s", e.fuel_flow), LINE),
-        ("H2 DEB", format!("{:.2}", e.h2_flow), CYAN_S),
-        ("CG", format!("{:.1}%", ac.cg()), if (21.0..=29.0).contains(&ac.cg()) { OKC } else { AMBER }),
-        ("PRESS", format!("{:.0} psi", ac.fuel_psi()), if ac.fuel_psi() > 40.0 { OKC } else { AMBER }),
-    ] {
-        txt(l, qx, qy, 10.0, FAINT);
-        txt_r(&v, qx + qw, qy + 13.0, 11.0, c);
-        qy += 32.0;
-    }
-    if ac.fuel_dump || ac.h2_dump {
-        if (time * 2.0).fract() < 0.6 {
-            txt("VIDANGE", qx, qy + 6.0, 12.0, AMBER);
-        }
-    }
+    draw_triangle(fc + vec2(0.0, -7.0), fc + vec2(-5.0, 5.0), fc + vec2(5.0, 5.0), LINE);
+    txt_c(&format!("WXR  {}", wxr.tilt_label()), fc.x, fc.y + 16.0, 10.0, if wxr.on { OKC } else { AMBER });
+    let gy = a.y + a.h - gh + 8.0;
+    let amax = ac.fcs.alpha_max as f32;
+    hgauge(a.x, gy, a.w, "CENTRAGE CG %", ac.cg() as f32, 15.0, 35.0, 21.0, 29.0);
+    hgauge(a.x, gy + 32.0, a.w, "INCIDENCE AoA deg", ac.d.alpha.to_degrees() as f32, -5.0, amax.max(5.0) + 2.0, -2.0, amax * 0.8);
 
     // ---- Rangée d'icônes de pages ----
     let icons: [(Tab, &str); 8] = [
@@ -332,15 +428,15 @@ pub fn draw(ac: &Aircraft, th: &crate::thermal::ThermalSys, wxr: &crate::wxr::Wx
         (Tab::Armement, "ARM"),
     ];
     let iy = inner.y + inner.h - icons_h - 4.0;
-    let iw = (inner.w - 16.0) / icons.len() as f32;
+    let iw = (inner.w - 8.0) / icons.len() as f32;
     let mut out = None;
     for (i, (tab, lbl)) in icons.iter().enumerate() {
-        let b = Rect::new(inner.x + 8.0 + i as f32 * iw + 2.0, iy, iw - 4.0, icons_h);
+        let b = Rect::new(inner.x + 4.0 + i as f32 * iw + 2.0, iy, iw - 4.0, icons_h);
         let hov = hovered(b);
-        draw_rectangle(b.x, b.y, b.w, b.h, if hov { Color::new(0.08, 0.1, 0.12, 1.0) } else { BLACK });
-        draw_rectangle_lines(b.x, b.y, b.w, b.h, 1.2, if hov { ACCENT } else { LINE });
-        icon(*tab, vec2(b.x + b.w / 2.0, b.y + b.h * 0.42), b.h * 0.26);
-        txt_c(lbl, b.x + b.w / 2.0, b.y + b.h - 6.0, 9.0, FAINT);
+        draw_rectangle(b.x, b.y, b.w, b.h, if hov { Color::new(0.08, 0.1, 0.12, 1.0) } else { Color::new(0.02, 0.025, 0.03, 1.0) });
+        draw_rectangle_lines(b.x, b.y, b.w, b.h, 1.0, if hov { ACCENT } else { Color::new(0.3, 0.32, 0.35, 1.0) });
+        icon(*tab, vec2(b.x + b.w / 2.0, b.y + b.h * 0.42), b.h * 0.24);
+        txt_c(lbl, b.x + b.w / 2.0, b.y + b.h - 5.0, 9.0, FAINT);
         if clicked(b) {
             out = Some(*tab);
         }
