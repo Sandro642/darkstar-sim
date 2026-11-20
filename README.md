@@ -945,3 +945,8 @@ Le SR-72 est un avion de reconnaissance : sa charge utile est simulée.
   (ailes à plat, ressource en cours, trajectoire qui passe). Toute récupération tire à la limite
   calculée. Tests : ressource pilote respectée, split-S du 15/11, paraboles d'essai (limite de casse
   structure / FCS par vitesse, avec et sans roulis ; loi normale jamais en casse).
+- v1.72.0 : le MCDU (style Airbus) devient le DMC — DARKSTAR MISSION COMPUTER : écran tactile en
+  verre noir au cadre chanfreiné, onglets de pages tactiles (MSN, FPLN, DIR, PROG, PERF, FUEL, NAV,
+  DATA), touches de ligne intégrées au bord de l'écran (chevrons), bandeau titre avec cap / niveau,
+  clavier plat anguleux (pavé numérique, défilement, DEST, CLR, SP, alphabétique) ; touches Airbus
+  sans objet retirées (SEC F-PLN, ATC COMM, OVFY, MCDU MENU). Pages et fonctions inchangées.

@@ -2133,15 +2133,13 @@ pub enum McduKey {
     Char(char),
     /// +/- : inverse le signe de la saisie
     PlusMinus,
-    /// Touches sans fonction sur le Darkstar (SEC F-PLN, ATC COMM…)
-    Inop(&'static str),
     /// Luminosité de l'écran (+1 / -1)
     Bright(i32),
     /// AIRPORT : défile jusqu'à la destination
     Airport,
 }
 
-/// Luminosité de l'écran du MCDU (BRT / DIM).
+/// Luminosité de l'écran du calculateur de mission (BRT - / +).
 pub fn bright(d: i32) {
     BRT.with(|c| c.set((c.get() + d as f32 * 0.15).clamp(0.3, 1.0)));
 }
@@ -2150,164 +2148,188 @@ thread_local! {
     static BRT: std::cell::Cell<f32> = const { std::cell::Cell::new(1.0) };
 }
 
-/// Touche du MCDU : fond gris foncé, légende blanche ; renvoie vrai si cliquée.
-fn mkey(r: Rect, label: &str, round: bool, framed: bool) -> bool {
+/// Polygone chanfreiné (angles coupés à 45°) : plein.
+fn chamfer(r: Rect, k: f32, c: Color) {
+    let k = k.min(r.w / 2.0).min(r.h / 2.0);
+    let pts = [
+        vec2(r.x + k, r.y), vec2(r.x + r.w - k, r.y), vec2(r.x + r.w, r.y + k), vec2(r.x + r.w, r.y + r.h - k),
+        vec2(r.x + r.w - k, r.y + r.h), vec2(r.x + k, r.y + r.h), vec2(r.x, r.y + r.h - k), vec2(r.x, r.y + k),
+    ];
+    let ctr = vec2(r.x + r.w / 2.0, r.y + r.h / 2.0);
+    for i in 0..8 {
+        draw_triangle(ctr, pts[i], pts[(i + 1) % 8], c);
+    }
+}
+
+/// Contour chanfreiné.
+fn chamfer_lines(r: Rect, k: f32, w: f32, c: Color) {
+    let k = k.min(r.w / 2.0).min(r.h / 2.0);
+    let pts = [
+        vec2(r.x + k, r.y), vec2(r.x + r.w - k, r.y), vec2(r.x + r.w, r.y + k), vec2(r.x + r.w, r.y + r.h - k),
+        vec2(r.x + r.w - k, r.y + r.h), vec2(r.x + k, r.y + r.h), vec2(r.x, r.y + r.h - k), vec2(r.x, r.y + k),
+    ];
+    for i in 0..8 {
+        let (a, b) = (pts[i], pts[(i + 1) % 8]);
+        draw_line(a.x, a.y, b.x, b.y, w, c);
+    }
+}
+
+const DMC_EDGE: Color = Color::new(0.22, 0.42, 0.52, 1.0);
+const DMC_GLASS: Color = Color::new(0.012, 0.02, 0.03, 1.0);
+
+/// Touche plate du calculateur de mission : verre sombre chanfreiné, liseré cyan ; vrai si cliquée.
+fn mkey(r: Rect, label: &str, accent: bool) -> bool {
     let hov = hovered(r);
-    let face = if hov { Color::new(0.30, 0.31, 0.33, 1.0) } else { Color::new(0.20, 0.21, 0.22, 1.0) };
-    if round {
-        let c = vec2(r.x + r.w / 2.0, r.y + r.h / 2.0);
-        draw_circle(c.x + 1.0, c.y + 2.0, r.w / 2.0, Color::new(0.05, 0.05, 0.06, 1.0));
-        draw_circle(c.x, c.y, r.w / 2.0, face);
-        draw_circle_lines(c.x, c.y, r.w / 2.0, 1.0, Color::new(0.45, 0.46, 0.48, 1.0));
-    } else {
-        draw_rectangle(r.x + 1.0, r.y + 2.0, r.w, r.h, Color::new(0.05, 0.05, 0.06, 1.0));
-        draw_rectangle(r.x, r.y, r.w, r.h, face);
-        draw_rectangle_lines(r.x, r.y, r.w, r.h, 1.0, Color::new(0.45, 0.46, 0.48, 1.0));
-    }
-    let sz = if label.len() > 4 { 9.5 } else { 12.0 };
-    if label.contains(' ') && !round {
-        let (a, b) = label.split_once(' ').unwrap();
-        txt_c(a, r.x + r.w / 2.0, r.y + r.h / 2.0 - 2.0, sz, WHITE_M);
-        txt_c(b, r.x + r.w / 2.0, r.y + r.h / 2.0 + 10.0, sz, WHITE_M);
-    } else {
-        txt_c(label, r.x + r.w / 2.0, r.y + r.h / 2.0 + sz * 0.36, if round { 14.0 } else { sz }, WHITE_M);
-    }
-    if framed {
-        draw_rectangle_lines(r.x + 5.0, r.y + 5.0, r.w - 10.0, r.h - 10.0, 1.0, WHITE_M);
-    }
+    let down = hov && is_mouse_button_down(MouseButton::Left);
+    chamfer(r, 5.0, if down { Color::new(0.16, 0.26, 0.32, 1.0) } else if hov { Color::new(0.1, 0.15, 0.19, 1.0) } else { Color::new(0.055, 0.065, 0.08, 1.0) });
+    chamfer_lines(r, 5.0, 1.0, if hov { CYAN_M } else if accent { Color::new(0.45, 0.6, 0.3, 1.0) } else { DMC_EDGE });
+    let sz = if label.len() > 4 { 9.5 } else if label.len() > 2 { 11.0 } else { 13.0 };
+    txt_c(label, r.x + r.w / 2.0, r.y + r.h / 2.0 + sz * 0.36, sz, if accent { GREEN_M } else { WHITE_M });
     clicked(r)
 }
 
-/// MCDU façon A320 : écran 24 colonnes x 14 lignes, 6 touches de ligne de chaque côté, touches
-/// de page, flèches, BRT/DIM, pavé numérique rond, clavier alphabétique, SP, OVFY, CLR.
+/// Calculateur de mission du Darkstar (DMC) : écran tactile en verre noir au cadre chanfreiné,
+/// onglets de pages tactiles, touches de ligne intégrées au bord de l'écran (chevrons), clavier
+/// plat (pavé numérique, alphabétique, fonctions). Mêmes pages et mêmes actions que le FMS.
 pub fn draw_mcdu(f: &Fms, ac: &Aircraft, r: Rect, time: f64) -> Option<McduKey> {
     let mut out = None;
-    // Boîtier gris
     let bw = (r.w - 16.0).min(560.0);
     let b = Rect::new(r.x + (r.w - bw) / 2.0, r.y + 6.0, bw, r.h - 12.0);
-    draw_rectangle(b.x, b.y, b.w, b.h, Color::new(0.33, 0.35, 0.37, 1.0));
-    draw_rectangle_lines(b.x, b.y, b.w, b.h, 2.0, Color::new(0.18, 0.19, 0.2, 1.0));
-    for k in 0..5 {
-        draw_rectangle(b.x + b.w * 0.36 + k as f32 * b.w * 0.07, b.y + 7.0, b.w * 0.05, 5.0, Color::new(0.1, 0.1, 0.11, 1.0));
-    }
+    // Boîtier : façade noire mate, cadre chanfreiné, liseré
+    chamfer(b, 14.0, Color::new(0.045, 0.05, 0.055, 1.0));
+    chamfer_lines(b, 14.0, 1.5, Color::new(0.2, 0.22, 0.25, 1.0));
+    txt("DMC", b.x + 16.0, b.y + 16.0, 11.0, CYAN_M);
+    txt("DARKSTAR MISSION COMPUTER", b.x + 46.0, b.y + 16.0, 9.0, LBL_M);
+    // Luminosité : - / +
     let brt = BRT.with(|c| c.get());
-    let lsk_w = 30.0;
-    let scr = Rect::new(b.x + lsk_w + 22.0, b.y + 20.0, b.w - 2.0 * (lsk_w + 22.0), (b.h * 0.45).min(300.0));
-    draw_rectangle(scr.x - 4.0, scr.y - 4.0, scr.w + 8.0, scr.h + 8.0, Color::new(0.1, 0.1, 0.11, 1.0));
-    draw_rectangle(scr.x, scr.y, scr.w, scr.h, BLACK);
+    for (k, (l, d)) in [("-", -1), ("+", 1)].into_iter().enumerate() {
+        let kr = Rect::new(b.x + b.w - 66.0 + k as f32 * 26.0, b.y + 5.0, 22.0, 16.0);
+        if mkey(kr, l, false) {
+            out = Some(McduKey::Bright(d));
+        }
+    }
+    txt_r("BRT", b.x + b.w - 70.0, b.y + 16.0, 9.0, LBL_M);
+    // Onglets de pages (tactiles)
+    let tabs: [(&str, Page); 8] = [("MSN", Page::Init), ("FPLN", Page::Fpln), ("DIR", Page::Dir), ("PROG", Page::Prog), ("PERF", Page::Perf), ("FUEL", Page::Fuel), ("NAV", Page::RadNav), ("DATA", Page::Data)];
+    let ty = b.y + 26.0;
+    let tw = (b.w - 28.0 - 7.0 * 4.0) / tabs.len() as f32;
+    for (k, (l, pg)) in tabs.iter().enumerate() {
+        let tr = Rect::new(b.x + 14.0 + k as f32 * (tw + 4.0), ty, tw, 22.0);
+        let on = f.page == *pg || (*pg == Page::Fpln && matches!(f.page, Page::Dep | Page::Arr));
+        let hov = hovered(tr);
+        chamfer(tr, 4.0, if on { Color::new(0.06, 0.22, 0.28, 1.0) } else if hov { Color::new(0.08, 0.11, 0.14, 1.0) } else { Color::new(0.04, 0.045, 0.055, 1.0) });
+        chamfer_lines(tr, 4.0, 1.0, if on { CYAN_M } else { DMC_EDGE });
+        txt_c(l, tr.x + tr.w / 2.0, tr.y + 15.0, 11.0, if on { WHITE_M } else { LBL_M });
+        if on {
+            draw_rectangle(tr.x + 6.0, tr.y + tr.h - 3.0, tr.w - 12.0, 2.0, CYAN_M);
+        }
+        if clicked(tr) {
+            out = Some(McduKey::Page(*pg));
+        }
+    }
+    // Écran (verre) avec bande de touches de ligne intégrée de chaque côté
+    let sk = 24.0;
+    let scr_out = Rect::new(b.x + 12.0, ty + 30.0, b.w - 24.0, (b.h * 0.46).min(310.0));
+    chamfer(scr_out, 10.0, DMC_GLASS);
+    chamfer_lines(scr_out, 10.0, 1.5, DMC_EDGE);
+    let scr = Rect::new(scr_out.x + sk, scr_out.y + 4.0, scr_out.w - 2.0 * sk, scr_out.h - 8.0);
     if clicked(scr) {
         out = Some(McduKey::Focus);
     }
-    // Aperçu de la procédure (DEPARTURES / ARRIVAL), en fond d'écran sous le texte
     proc_preview(f, scr, brt);
     let dim = |c: Color| Color::new(c.r * brt, c.g * brt, c.b * brt, c.a);
     let rowh = scr.h / 14.0;
     let fs = (rowh * 1.0).min(19.0);
     let small = fs * 0.72;
     let (title, tc, rows) = page_lines(f, ac);
-    txt_c(&title, scr.x + scr.w / 2.0, scr.y + rowh * 0.9, fs * 0.9, dim(tc));
-    if f.page == Page::Fpln {
-        // Flèches de défilement latéral / vertical (dessinées)
-        let (ax, ay) = (scr.x + scr.w - 22.0, scr.y + rowh * 0.6);
-        draw_line(ax - 8.0, ay, ax + 8.0, ay, 1.5, dim(WHITE_M));
-        draw_triangle(vec2(ax - 11.0, ay), vec2(ax - 6.0, ay - 3.0), vec2(ax - 6.0, ay + 3.0), dim(WHITE_M));
-        draw_triangle(vec2(ax + 11.0, ay), vec2(ax + 6.0, ay - 3.0), vec2(ax + 6.0, ay + 3.0), dim(WHITE_M));
-    }
+    // Bandeau titre
+    draw_rectangle(scr.x, scr.y, scr.w, rowh * 1.25, Color::new(0.05, 0.13, 0.17, 0.9));
+    txt(&title, scr.x + 6.0, scr.y + rowh * 0.95, fs * 0.85, dim(tc));
+    txt_r(&format!("{} / {}", ac.hdg_deg().round() as i32, (ac.alt / FT / 100.0).round() as i32), scr.x + scr.w - 6.0, scr.y + rowh * 0.95, small, dim(LBL_M));
     let cx_col = scr.x + scr.w * 0.47;
     for (k, (lab, dat)) in rows.iter().enumerate().take(6) {
-        let yl = scr.y + rowh * (2.0 * k as f32 + 1.85);
-        let yd = yl + rowh;
+        let yl = scr.y + rowh * (2.0 * k as f32 + 1.95);
+        let yd = yl + rowh * 0.95;
         txt(&lab.l, scr.x + 4.0, yl, small, dim(lab.lc));
         txt_c(&lab.c, cx_col, yl, small, dim(lab.cc));
         txt_r(&lab.r, scr.x + scr.w - 4.0, yl, small, dim(lab.rc));
         txt(&dat.l, scr.x + 4.0, yd, fs, dim(dat.lc));
         txt_c(&dat.c, cx_col, yd, fs * 0.8, dim(dat.cc));
         txt_r(&dat.r, scr.x + scr.w - 4.0, yd, fs, dim(dat.rc));
-        // Touches de ligne (LSK) avec leur trait vers l'écran
-        for (left, x) in [(true, b.x + 10.0), (false, b.x + b.w - 10.0 - lsk_w)] {
-            let kr = Rect::new(x, yd - rowh * 0.75, lsk_w, rowh * 0.95);
-            let m1 = if left { kr.x + kr.w + 3.0 } else { kr.x - 12.0 };
-            draw_line(m1, kr.y + kr.h / 2.0, m1 + 9.0, kr.y + kr.h / 2.0, 2.0, Color::new(0.85, 0.86, 0.87, 1.0));
-            if mkey(kr, "", false, false) {
+        // Touches de ligne intégrées au bord de l'écran : chevron, surbrillance au survol
+        for left in [true, false] {
+            let kx = if left { scr_out.x + 2.0 } else { scr_out.x + scr_out.w - sk - 2.0 };
+            let kr = Rect::new(kx, yd - rowh * 0.8, sk, rowh * 1.1);
+            let hov = hovered(kr);
+            let has = if left { !dat.l.trim().is_empty() } else { !dat.r.trim().is_empty() };
+            if hov {
+                chamfer(kr, 3.0, Color::new(0.1, 0.25, 0.32, 1.0));
+            }
+            let c = if hov { CYAN_M } else if has { Color::new(0.55, 0.75, 0.85, 0.9) } else { Color::new(0.3, 0.4, 0.45, 0.5) };
+            let (mx, my) = (kr.x + kr.w / 2.0, kr.y + kr.h / 2.0);
+            let dx = if left { -1.0 } else { 1.0 } * 4.0;
+            draw_line(mx - dx, my - 5.0, mx + dx, my, 2.0, c);
+            draw_line(mx + dx, my, mx - dx, my + 5.0, 2.0, c);
+            if clicked(kr) {
                 out = Some(McduKey::Lsk(left, k));
             }
         }
     }
-    // Ligne de saisie
-    let ys = scr.y + rowh * 13.7;
+    // Ligne de saisie (bloc-notes)
+    let ys = scr.y + rowh * 13.8;
+    draw_line(scr.x, ys - fs + 5.0, scr.x + scr.w, ys - fs + 5.0, 1.0, Color::new(0.2, 0.5, 0.6, 0.35));
     let cursor = if f.focus && (time * 2.0).fract() < 0.5 { "_" } else { "" };
     if !f.msg.is_empty() && f.scratch.is_empty() {
         txt(&f.msg, scr.x + 4.0, ys, fs, dim(AMB_M));
     } else {
-        txt(&format!("{}{cursor}", f.scratch), scr.x + 4.0, ys, fs, dim(WHITE_M));
+        txt(&format!("> {}{cursor}", f.scratch), scr.x + 4.0, ys, fs, dim(CYAN_M));
     }
-    // Touches de page (3 rangées de 6) + BRT / DIM
-    let ky = scr.y + scr.h + 14.0;
-    let kw = (b.w - 2.0 * lsk_w - 70.0) / 6.0;
-    // 9 rangées sous l'écran (touches de page, AIRPORT, flèches, pavé / clavier) : hauteur adaptée
-    let kh = (((b.y + b.h - 8.0) - ky) / 9.0 - 6.0).clamp(16.0, 30.0);
-    let x0 = b.x + lsk_w + 8.0;
-    let page_keys: [[(&str, Option<McduKey>); 6]; 2] = [
-        [("DIR", Some(McduKey::Page(Page::Dir))), ("PROG", Some(McduKey::Page(Page::Prog))), ("PERF", Some(McduKey::Page(Page::Perf))), ("INIT", Some(McduKey::Page(Page::Init))), ("DATA", Some(McduKey::Page(Page::Data))), ("", None)],
-        [("F-PLN", Some(McduKey::Page(Page::Fpln))), ("RAD NAV", Some(McduKey::Page(Page::RadNav))), ("FUEL PRED", Some(McduKey::Page(Page::Fuel))), ("SEC F-PLN", Some(McduKey::Inop("SEC F-PLN"))), ("ATC COMM", Some(McduKey::Inop("ATC COMM"))), ("MCDU MENU", Some(McduKey::Page(Page::Init)))],
-    ];
-    for (row, keys) in page_keys.into_iter().enumerate() {
-        for (c, (lbl, act)) in keys.into_iter().enumerate() {
-            let kr = Rect::new(x0 + c as f32 * (kw + 4.0), ky + row as f32 * (kh + 6.0), kw, kh);
-            if mkey(kr, lbl, false, false) {
-                if let Some(a) = act {
-                    out = Some(a);
-                }
-            }
-        }
-    }
-    for (k, (lbl, d)) in [("BRT", 1), ("DIM", -1)].into_iter().enumerate() {
-        let kr = Rect::new(b.x + b.w - lsk_w - 10.0, ky + k as f32 * (kh + 6.0), lsk_w + 4.0, kh);
-        if mkey(kr, lbl, false, false) {
-            out = Some(McduKey::Bright(d));
-        }
-    }
-    // AIRPORT, flèches
-    let ly = ky + 2.0 * (kh + 6.0);
-    if mkey(Rect::new(x0, ly, ((3.0 * (kh + 10.0) - 4.0) / 2.0).min(kw), kh), "AIR PORT", false, false) {
-        out = Some(McduKey::Airport);
-    }
-    let arrows = [("<", McduKey::Slew(false)), ("^", McduKey::Slew(false)), (">", McduKey::Slew(true)), ("v", McduKey::Slew(true))];
-    // Largeur limitée à la colonne du pavé numérique (le clavier alphabétique est à droite)
-    let aw = ((3.0 * (kh + 10.0) - 4.0) / 2.0).min(kw);
-    for (k, (lbl, a)) in arrows.into_iter().enumerate() {
-        let kr = Rect::new(x0 + (k % 2) as f32 * (aw + 4.0), ly + (1 + k / 2) as f32 * (kh + 6.0), aw, kh);
-        if mkey(kr, lbl, false, false) {
-            out = Some(a);
-        }
-    }
-    // Pavé numérique (ronds) et clavier alphabétique (carrés)
-    let ny = ly + 3.0 * (kh + 6.0);
-    let nd = kh;
+    // ----- Clavier -----
+    let ky = scr_out.y + scr_out.h + 12.0;
+    let kh = (((b.y + b.h - 12.0) - ky) / 5.0 - 6.0).clamp(16.0, 32.0);
+    let x0 = b.x + 14.0;
+    // Pavé numérique 3 x 4
+    let nw = ((b.w - 28.0) * 0.28 - 8.0) / 3.0;
     let nums = ["1", "2", "3", "4", "5", "6", "7", "8", "9", ".", "0", "+/-"];
     for (k, n) in nums.iter().enumerate() {
-        let kr = Rect::new(x0 + (k % 3) as f32 * (nd + 10.0), ny + (k / 3) as f32 * (nd + 6.0), nd, nd);
-        if mkey(kr, n, true, false) {
+        let kr = Rect::new(x0 + (k % 3) as f32 * (nw + 4.0), ky + (k / 3) as f32 * (kh + 6.0), nw, kh);
+        if mkey(kr, n, false) {
             out = Some(if *n == "+/-" { McduKey::PlusMinus } else { McduKey::Char(n.chars().next().unwrap()) });
         }
     }
-    let ax0 = x0 + 3.0 * (nd + 10.0) + 14.0;
-    let akw = ((b.x + b.w - lsk_w - 10.0) - ax0 - 4.0 * 5.0) / 5.0;
-    let alpha_y = ly;
-    let letters = ["A", "B", "C", "D", "E", "F", "G", "H", "I", "J", "K", "L", "M", "N", "O", "P", "Q", "R", "S", "T", "U", "V", "W", "X", "Y", "Z", "/", "SP", "OVFY", "CLR"];
-    for (k, l) in letters.iter().enumerate() {
-        let kr = Rect::new(ax0 + (k % 5) as f32 * (akw + 5.0), alpha_y + (k / 5) as f32 * (kh + 6.0), akw, kh);
-        let framed = matches!(*l, "E" | "N" | "S" | "W");
-        if mkey(kr, l, false, framed) {
-            out = Some(match *l {
-                "CLR" => McduKey::Clr,
-                "SP" => McduKey::Char(' '),
-                "OVFY" => McduKey::Inop("OVFY"),
-                _ => McduKey::Char(l.chars().next().unwrap()),
-            });
+    // Colonne de fonctions : défilement, DEST, CLR
+    let fx = x0 + 3.0 * (nw + 4.0) + 8.0;
+    let fw = ((b.w - 28.0) * 0.16 - 8.0) / 2.0;
+    let funcs: [(&str, McduKey, bool); 6] = [
+        ("^", McduKey::Slew(false), false),
+        ("v", McduKey::Slew(true), false),
+        ("<", McduKey::Slew(false), false),
+        (">", McduKey::Slew(true), false),
+        ("DEST", McduKey::Airport, true),
+        ("CLR", McduKey::Clr, true),
+    ];
+    for (k, (l, a, acc)) in funcs.into_iter().enumerate() {
+        let kr = Rect::new(fx + (k % 2) as f32 * (fw + 4.0), ky + (k / 2) as f32 * (kh + 6.0), fw, kh);
+        if mkey(kr, l, acc) {
+            out = Some(a);
         }
     }
-    let _ = (COLS, CYAN_M, MAG_M);
+    let sp = Rect::new(fx, ky + 3.0 * (kh + 6.0), 2.0 * fw + 4.0, kh);
+    if mkey(sp, "SP", false) {
+        out = Some(McduKey::Char(' '));
+    }
+    // Clavier alphabétique 7 colonnes
+    let ax0 = fx + 2.0 * (fw + 4.0) + 8.0;
+    let cols = 7;
+    let akw = ((b.x + b.w - 14.0) - ax0 - (cols as f32 - 1.0) * 4.0) / cols as f32;
+    let letters = ["A", "B", "C", "D", "E", "F", "G", "H", "I", "J", "K", "L", "M", "N", "O", "P", "Q", "R", "S", "T", "U", "V", "W", "X", "Y", "Z", "/"];
+    for (k, l) in letters.iter().enumerate() {
+        let kr = Rect::new(ax0 + (k % cols) as f32 * (akw + 4.0), ky + (k / cols) as f32 * (kh + 6.0), akw, kh);
+        if mkey(kr, l, false) {
+            out = Some(McduKey::Char(l.chars().next().unwrap()));
+        }
+    }
+    let _ = (COLS, MAG_M);
     out
 }
 

@@ -586,7 +586,6 @@ impl Game {
                     self.fms.scratch.push('-');
                 }
             }
-            fms::McduKey::Inop(k) => self.fms.msg = format!("{k} NON DISPONIBLE"),
             fms::McduKey::Bright(d) => fms::bright(d),
             fms::McduKey::Airport => {
                 self.fms.page = fms::Page::Fpln;
