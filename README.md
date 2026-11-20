@@ -950,3 +950,6 @@ Le SR-72 est un avion de reconnaissance : sa charge utile est simulée.
   DATA), touches de ligne intégrées au bord de l'écran (chevrons), bandeau titre avec cap / niveau,
   clavier plat anguleux (pavé numérique, défilement, DEST, CLR, SP, alphabétique) ; touches Airbus
   sans objet retirées (SEC F-PLN, ATC COMM, OVFY, MCDU MENU). Pages et fonctions inchangées.
+- v1.72.1 : DMC au style moderne et sobre (avionique actuelle) : gris neutres, coins légèrement
+  arrondis, touches grises à légende blanche, accent bleu discret pour la page active, DEST / CLR en
+  ambre ; fin des liserés cyan lumineux.

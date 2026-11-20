@@ -2148,43 +2148,30 @@ thread_local! {
     static BRT: std::cell::Cell<f32> = const { std::cell::Cell::new(1.0) };
 }
 
-/// Polygone chanfreiné (angles coupés à 45°) : plein.
+/// Panneau à coins légèrement arrondis (style avionique moderne) : plein.
 fn chamfer(r: Rect, k: f32, c: Color) {
-    let k = k.min(r.w / 2.0).min(r.h / 2.0);
-    let pts = [
-        vec2(r.x + k, r.y), vec2(r.x + r.w - k, r.y), vec2(r.x + r.w, r.y + k), vec2(r.x + r.w, r.y + r.h - k),
-        vec2(r.x + r.w - k, r.y + r.h), vec2(r.x + k, r.y + r.h), vec2(r.x, r.y + r.h - k), vec2(r.x, r.y + k),
-    ];
-    let ctr = vec2(r.x + r.w / 2.0, r.y + r.h / 2.0);
-    for i in 0..8 {
-        draw_triangle(ctr, pts[i], pts[(i + 1) % 8], c);
-    }
+    rrect(r, (k * 0.6).min(6.0), c);
 }
 
-/// Contour chanfreiné.
+/// Contour à coins légèrement arrondis.
 fn chamfer_lines(r: Rect, k: f32, w: f32, c: Color) {
-    let k = k.min(r.w / 2.0).min(r.h / 2.0);
-    let pts = [
-        vec2(r.x + k, r.y), vec2(r.x + r.w - k, r.y), vec2(r.x + r.w, r.y + k), vec2(r.x + r.w, r.y + r.h - k),
-        vec2(r.x + r.w - k, r.y + r.h), vec2(r.x + k, r.y + r.h), vec2(r.x, r.y + r.h - k), vec2(r.x, r.y + k),
-    ];
-    for i in 0..8 {
-        let (a, b) = (pts[i], pts[(i + 1) % 8]);
-        draw_line(a.x, a.y, b.x, b.y, w, c);
-    }
+    rrect_lines(r, (k * 0.6).min(6.0), w, c);
 }
 
-const DMC_EDGE: Color = Color::new(0.22, 0.42, 0.52, 1.0);
-const DMC_GLASS: Color = Color::new(0.012, 0.02, 0.03, 1.0);
+const DMC_GLASS: Color = Color::new(0.035, 0.038, 0.042, 1.0);
+/// Accent unique (sélection) : bleu sobre
+const DMC_ACC: Color = Color::new(0.35, 0.62, 0.95, 1.0);
 
 /// Touche plate du calculateur de mission : verre sombre chanfreiné, liseré cyan ; vrai si cliquée.
 fn mkey(r: Rect, label: &str, accent: bool) -> bool {
     let hov = hovered(r);
     let down = hov && is_mouse_button_down(MouseButton::Left);
-    chamfer(r, 5.0, if down { Color::new(0.16, 0.26, 0.32, 1.0) } else if hov { Color::new(0.1, 0.15, 0.19, 1.0) } else { Color::new(0.055, 0.065, 0.08, 1.0) });
-    chamfer_lines(r, 5.0, 1.0, if hov { CYAN_M } else if accent { Color::new(0.45, 0.6, 0.3, 1.0) } else { DMC_EDGE });
+    chamfer(r, 5.0, if down { Color::new(0.30, 0.32, 0.35, 1.0) } else if hov { Color::new(0.24, 0.255, 0.28, 1.0) } else { Color::new(0.18, 0.19, 0.21, 1.0) });
+    // Liseré supérieur clair (relief discret)
+    draw_line(r.x + 4.0, r.y + 1.0, r.x + r.w - 4.0, r.y + 1.0, 1.0, Color::new(1.0, 1.0, 1.0, 0.08));
+    chamfer_lines(r, 5.0, 1.0, if hov { Color::new(0.45, 0.47, 0.5, 1.0) } else { Color::new(0.1, 0.105, 0.115, 1.0) });
     let sz = if label.len() > 4 { 9.5 } else if label.len() > 2 { 11.0 } else { 13.0 };
-    txt_c(label, r.x + r.w / 2.0, r.y + r.h / 2.0 + sz * 0.36, sz, if accent { GREEN_M } else { WHITE_M });
+    txt_c(label, r.x + r.w / 2.0, r.y + r.h / 2.0 + sz * 0.36, sz, if accent { Color::new(0.95, 0.75, 0.35, 1.0) } else { WHITE_M });
     clicked(r)
 }
 
@@ -2196,9 +2183,9 @@ pub fn draw_mcdu(f: &Fms, ac: &Aircraft, r: Rect, time: f64) -> Option<McduKey> 
     let bw = (r.w - 16.0).min(560.0);
     let b = Rect::new(r.x + (r.w - bw) / 2.0, r.y + 6.0, bw, r.h - 12.0);
     // Boîtier : façade noire mate, cadre chanfreiné, liseré
-    chamfer(b, 14.0, Color::new(0.045, 0.05, 0.055, 1.0));
-    chamfer_lines(b, 14.0, 1.5, Color::new(0.2, 0.22, 0.25, 1.0));
-    txt("DMC", b.x + 16.0, b.y + 16.0, 11.0, CYAN_M);
+    chamfer(b, 14.0, Color::new(0.11, 0.115, 0.125, 1.0));
+    chamfer_lines(b, 14.0, 1.0, Color::new(0.2, 0.21, 0.23, 1.0));
+    txt("DMC", b.x + 16.0, b.y + 16.0, 11.0, WHITE_M);
     txt("DARKSTAR MISSION COMPUTER", b.x + 46.0, b.y + 16.0, 9.0, LBL_M);
     // Luminosité : - / +
     let brt = BRT.with(|c| c.get());
@@ -2217,11 +2204,10 @@ pub fn draw_mcdu(f: &Fms, ac: &Aircraft, r: Rect, time: f64) -> Option<McduKey> 
         let tr = Rect::new(b.x + 14.0 + k as f32 * (tw + 4.0), ty, tw, 22.0);
         let on = f.page == *pg || (*pg == Page::Fpln && matches!(f.page, Page::Dep | Page::Arr));
         let hov = hovered(tr);
-        chamfer(tr, 4.0, if on { Color::new(0.06, 0.22, 0.28, 1.0) } else if hov { Color::new(0.08, 0.11, 0.14, 1.0) } else { Color::new(0.04, 0.045, 0.055, 1.0) });
-        chamfer_lines(tr, 4.0, 1.0, if on { CYAN_M } else { DMC_EDGE });
+        chamfer(tr, 4.0, if on { Color::new(0.22, 0.235, 0.26, 1.0) } else if hov { Color::new(0.17, 0.18, 0.2, 1.0) } else { Color::new(0.14, 0.145, 0.16, 1.0) });
         txt_c(l, tr.x + tr.w / 2.0, tr.y + 15.0, 11.0, if on { WHITE_M } else { LBL_M });
         if on {
-            draw_rectangle(tr.x + 6.0, tr.y + tr.h - 3.0, tr.w - 12.0, 2.0, CYAN_M);
+            draw_rectangle(tr.x + 6.0, tr.y + tr.h - 3.0, tr.w - 12.0, 2.0, DMC_ACC);
         }
         if clicked(tr) {
             out = Some(McduKey::Page(*pg));
@@ -2231,7 +2217,7 @@ pub fn draw_mcdu(f: &Fms, ac: &Aircraft, r: Rect, time: f64) -> Option<McduKey> 
     let sk = 24.0;
     let scr_out = Rect::new(b.x + 12.0, ty + 30.0, b.w - 24.0, (b.h * 0.46).min(310.0));
     chamfer(scr_out, 10.0, DMC_GLASS);
-    chamfer_lines(scr_out, 10.0, 1.5, DMC_EDGE);
+    chamfer_lines(scr_out, 10.0, 2.0, Color::new(0.06, 0.065, 0.07, 1.0));
     let scr = Rect::new(scr_out.x + sk, scr_out.y + 4.0, scr_out.w - 2.0 * sk, scr_out.h - 8.0);
     if clicked(scr) {
         out = Some(McduKey::Focus);
@@ -2243,7 +2229,7 @@ pub fn draw_mcdu(f: &Fms, ac: &Aircraft, r: Rect, time: f64) -> Option<McduKey> 
     let small = fs * 0.72;
     let (title, tc, rows) = page_lines(f, ac);
     // Bandeau titre
-    draw_rectangle(scr.x, scr.y, scr.w, rowh * 1.25, Color::new(0.05, 0.13, 0.17, 0.9));
+    draw_rectangle(scr.x, scr.y, scr.w, rowh * 1.25, Color::new(0.12, 0.125, 0.135, 1.0));
     txt(&title, scr.x + 6.0, scr.y + rowh * 0.95, fs * 0.85, dim(tc));
     txt_r(&format!("{} / {}", ac.hdg_deg().round() as i32, (ac.alt / FT / 100.0).round() as i32), scr.x + scr.w - 6.0, scr.y + rowh * 0.95, small, dim(LBL_M));
     let cx_col = scr.x + scr.w * 0.47;
@@ -2263,9 +2249,9 @@ pub fn draw_mcdu(f: &Fms, ac: &Aircraft, r: Rect, time: f64) -> Option<McduKey> 
             let hov = hovered(kr);
             let has = if left { !dat.l.trim().is_empty() } else { !dat.r.trim().is_empty() };
             if hov {
-                chamfer(kr, 3.0, Color::new(0.1, 0.25, 0.32, 1.0));
+                chamfer(kr, 3.0, Color::new(0.18, 0.19, 0.21, 1.0));
             }
-            let c = if hov { CYAN_M } else if has { Color::new(0.55, 0.75, 0.85, 0.9) } else { Color::new(0.3, 0.4, 0.45, 0.5) };
+            let c = if hov { WHITE_M } else if has { Color::new(0.7, 0.72, 0.75, 1.0) } else { Color::new(0.3, 0.31, 0.33, 1.0) };
             let (mx, my) = (kr.x + kr.w / 2.0, kr.y + kr.h / 2.0);
             let dx = if left { -1.0 } else { 1.0 } * 4.0;
             draw_line(mx - dx, my - 5.0, mx + dx, my, 2.0, c);
@@ -2277,12 +2263,12 @@ pub fn draw_mcdu(f: &Fms, ac: &Aircraft, r: Rect, time: f64) -> Option<McduKey> 
     }
     // Ligne de saisie (bloc-notes)
     let ys = scr.y + rowh * 13.8;
-    draw_line(scr.x, ys - fs + 5.0, scr.x + scr.w, ys - fs + 5.0, 1.0, Color::new(0.2, 0.5, 0.6, 0.35));
+    draw_line(scr.x, ys - fs + 5.0, scr.x + scr.w, ys - fs + 5.0, 1.0, Color::new(0.3, 0.31, 0.33, 1.0));
     let cursor = if f.focus && (time * 2.0).fract() < 0.5 { "_" } else { "" };
     if !f.msg.is_empty() && f.scratch.is_empty() {
         txt(&f.msg, scr.x + 4.0, ys, fs, dim(AMB_M));
     } else {
-        txt(&format!("> {}{cursor}", f.scratch), scr.x + 4.0, ys, fs, dim(CYAN_M));
+        txt(&format!("{}{cursor}", f.scratch), scr.x + 4.0, ys, fs, dim(WHITE_M));
     }
     // ----- Clavier -----
     let ky = scr_out.y + scr_out.h + 12.0;
