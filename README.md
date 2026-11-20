@@ -975,3 +975,10 @@ Le SR-72 est un avion de reconnaissance : sa charge utile est simulée.
   répartition d'entrée sur vérin qui bascule entre veine turbine et conduit stato / scram (suit la
   course réelle des portes, ambre pendant la transition, pourcentage), écoulement d'air dévié vers
   la turbine ou le conduit, gorge variable du conduit qui se resserre au passage en scram.
+- v1.76.0 : nouvelle page VUE EN COUPE TBCC dans le bloc moteur (l'écran moteurs du Darkstar de Top
+  Gun reste l'affichage principal) — coupe technique du moteur combiné : coque titane sombre,
+  entrée à rampes et volet de répartition sur vérin, compresseur et turbine en étages d'aubes qui
+  scintillent avec le régime, chambre, post-combustion, conduit stato / scram avec isolateur, train
+  de chocs, gorge variable et mâts d'injection, flamme subsonique ou nappes supersoniques, parois qui
+  rougeoient, tuyère éclairée, panache et losanges de choc, annotations ; valeurs des deux moteurs.
+  Pages du bloc moteur : NACELLES, VUE EN COUPE TBCC, DONNEES MOTEUR, MANETTE.

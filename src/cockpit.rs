@@ -159,8 +159,9 @@ pub fn engines(ac: &Aircraft, mon: &crate::health::ChamberMon, r: Rect, page: &m
     let scr = Rect::new(r.x + 6.0, r.y + 6.0, r.w - 12.0, r.h - bh - 18.0);
     draw_rectangle(scr.x, scr.y, scr.w, scr.h, BLACK);
     match *page {
-        1 => crate::panels::draw_engines(ac, mon, scr, time),
-        2 => throttle_page(ac, scr),
+        1 => crate::tbcc::draw_both(scr, ac, time),
+        2 => crate::panels::draw_engines(ac, mon, scr, time),
+        3 => throttle_page(ac, scr),
         _ => {
             txt("FWD", scr.x + 6.0, scr.y + 12.0, 9.0, LBL);
             txt_r("AFT", scr.x + scr.w - 6.0, scr.y + 12.0, 9.0, LBL);
@@ -168,15 +169,15 @@ pub fn engines(ac: &Aircraft, mon: &crate::health::ChamberMon, r: Rect, page: &m
         }
     }
     // Un seul bouton : page suivante (nom de la page, repères de position)
-    let names = ["NACELLES", "DONNEES MOTEUR", "MANETTE"];
+    let names = ["NACELLES", "VUE EN COUPE TBCC", "DONNEES MOTEUR", "MANETTE"];
     let b = Rect::new(r.x + 6.0, r.y + r.h - bh - 6.0, r.w - 12.0, bh);
     let hov = hovered(b);
     rrect(b, 4.0, if hov { Color::new(0.2, 0.21, 0.235, 1.0) } else { Color::new(0.14, 0.145, 0.16, 1.0) });
     rrect_lines(b, 4.0, 1.0, Color::new(0.24, 0.25, 0.28, 1.0));
-    let cur = (*page as usize).min(2);
+    let cur = (*page as usize).min(3);
     txt(names[cur], b.x + 10.0, b.y + b.h / 2.0 + 4.0, 11.0, WHITE);
-    for k in 0..3 {
-        let c = vec2(b.x + b.w - 44.0 + k as f32 * 10.0, b.y + b.h / 2.0);
+    for k in 0..4 {
+        let c = vec2(b.x + b.w - 54.0 + k as f32 * 10.0, b.y + b.h / 2.0);
         if k == cur {
             draw_circle(c.x, c.y, 3.0, ACCENT);
         } else {
@@ -187,7 +188,7 @@ pub fn engines(ac: &Aircraft, mon: &crate::health::ChamberMon, r: Rect, page: &m
     draw_line(ax - 4.0, ay - 4.0, ax, ay, 1.5, WHITE);
     draw_line(ax, ay, ax - 4.0, ay + 4.0, 1.5, WHITE);
     if clicked(b) {
-        *page = ((cur + 1) % 3) as u8;
+        *page = ((cur + 1) % 4) as u8;
     }
 }
 

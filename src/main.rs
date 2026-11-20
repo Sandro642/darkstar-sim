@@ -23,6 +23,7 @@ mod connect;
 mod appr;
 mod mishap;
 mod syspage;
+mod tbcc;
 mod feel;
 mod audio;
 mod combat;
