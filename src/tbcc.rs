@@ -114,13 +114,23 @@ const N_BOT: [(f32, f32); 2] = [(870.0, 238.0), (1000.0, 256.0)];
 const HUB_T: [(f32, f32); 4] = [(318.0, 127.0), (346.0, 117.0), (640.0, 119.0), (662.0, 126.0)];
 const HUB_B: [(f32, f32); 4] = [(318.0, 127.0), (346.0, 137.0), (640.0, 135.0), (662.0, 128.0)];
 
-/// Nacelle TBCC en coupe dans `r` ; `side` : libellé (ENG L / ENG R…), `i` : moteur.
-/// Grande vue en coupe : bandeau de valeurs des deux moteurs (L et R), dessin du moteur gauche.
-pub fn draw_both(r: Rect, ac: &Aircraft, time: f64) {
-    draw_ex(r, "ENG L", ac, 0, 8.0, time, true);
+/// Nacelle façon écran moteurs du Darkstar (Top Gun) : disposition et repères du film (FWD / AFT,
+/// GEN, RPM, EGT, DOORS, CIT, repères orange, pastille de mode) sur le rendu en coupe réaliste.
+pub fn draw_film(r: Rect, side: &str, ac: &Aircraft, i: usize, egt_off: f64, time: f64) {
+    draw_ex(r, side, ac, i, egt_off, time, false, true);
 }
 
-fn draw_ex(r: Rect, side: &str, ac: &Aircraft, i: usize, egt_off: f64, time: f64, both: bool) {
+/// Texte suivi d'un petit cercle « degré ».
+fn deg(s: &str, x: f32, y: f32, size: f32, c: Color, unit: &str) {
+    let w = txt_w(s, size);
+    txt(s, x + 1.0, y + 1.0, size, Color::new(0.0, 0.0, 0.0, 0.6));
+    txt(s, x, y, size, c);
+    draw_circle_lines(x + w + size * 0.16, y - size * 0.66, size * 0.075, 1.2, c);
+    txt(unit, x + w + size * 0.30, y, size, c);
+}
+
+#[allow(clippy::too_many_arguments)]
+fn draw_ex(r: Rect, side: &str, ac: &Aircraft, i: usize, egt_off: f64, time: f64, both: bool, film: bool) {
     let e = &ac.eng;
     let running = e.side[i] == TurbState::Running;
     let starting = e.side[i] == TurbState::Starting;
@@ -143,12 +153,16 @@ fn draw_ex(r: Rect, side: &str, ac: &Aircraft, i: usize, egt_off: f64, time: f64
     let (scr_v, ab_v, ram_v) = (vis[0], vis[1], vis[2]);
 
     // ---- Fond ----
-    rrect(r, 6.0, Color::new(0.05, 0.053, 0.058, 1.0));
+    if film {
+        draw_rectangle(r.x, r.y, r.w, r.h, Color::new(0.115, 0.12, 0.125, 1.0));
+    } else {
+        rrect(r, 6.0, Color::new(0.05, 0.053, 0.058, 1.0));
+    }
     // ---- Bandeau de valeurs ----
     let fs = (r.h * 0.05).clamp(9.0, 13.0);
-    let rows: Vec<(usize, String, f64)> = if both { vec![(0, "ENG L".into(), 8.0), (1, "ENG R".into(), -6.0)] } else { vec![(i, side.to_string(), egt_off)] };
+    let rows: Vec<(usize, String, f64)> = if film { vec![] } else if both { vec![(0, "ENG L".into(), 8.0), (1, "ENG R".into(), -6.0)] } else { vec![(i, side.to_string(), egt_off)] };
     let line_h = fs + 8.0;
-    let head = line_h * rows.len() as f32 + 4.0;
+    let head = if film { 0.0 } else { line_h * rows.len() as f32 + 4.0 };
     for (row, (k, name, off)) in rows.iter().enumerate() {
         let k = *k;
         let state = match e.side[k] {
@@ -185,14 +199,16 @@ fn draw_ex(r: Rect, side: &str, ac: &Aircraft, i: usize, egt_off: f64, time: f64
             x += w + 8.0;
         }
     }
-    draw_line(r.x + 8.0, r.y + head, r.x + r.w - 8.0, r.y + head, 1.0, Color::new(1.0, 1.0, 1.0, 0.06));
+    if !film {
+        draw_line(r.x + 8.0, r.y + head, r.x + r.w - 8.0, r.y + head, 1.0, Color::new(1.0, 1.0, 1.0, 0.06));
+    }
     // ---- Repère du dessin ----
     let egt = e.egt + egt_off;
-    let area = Rect::new(r.x + 6.0, r.y + head + 2.0, r.w - 12.0, r.h - head - 8.0);
+    let area = if film { Rect::new(r.x + 4.0, r.y + 2.0, r.w - 8.0, r.h - 4.0) } else { Rect::new(r.x + 6.0, r.y + head + 2.0, r.w - 12.0, r.h - head - 8.0) };
     let plume_len = 170.0;
     let s = (area.w / (1000.0 + plume_len)).min(area.h / 290.0);
     let m = M { ox: area.x + (area.w - (1000.0 + plume_len) * s) / 2.0, oy: area.y + (area.h - 290.0 * s) / 2.0 - 8.0 * s, s };
-    let show_labels = s * 1000.0 > 520.0;
+    let show_labels = !film && s * 1000.0 > 520.0;
 
     let pf = |p: &'static [(f32, f32)]| move |u: f32| prof(p, u);
     let shell_t = pf(&SHELL_TOP);
@@ -506,5 +522,87 @@ fn draw_ex(r: Rect, side: &str, ac: &Aircraft, i: usize, egt_off: f64, time: f64
         txt(&format!("{lbl}  {:.0} %", d * 100.0), area.x + 4.0, area.y + area.h - 4.0, fs * 0.85, AMBER);
     } else if scr_v > 0.02 && scr_v < 0.98 {
         txt(&format!("GORGE SCRAM {:.0} %", scr_v * 100.0), area.x + 4.0, area.y + area.h - 4.0, fs * 0.85, MAGENTA_S);
+    }
+    // ---- Repères de l'écran moteurs du film ----
+    if film {
+        let ffs = (s * 30.0).clamp(10.0, 22.0);
+        let label = Color::new(0.62, 0.64, 0.66, 1.0);
+        let orange = Color::new(0.93, 0.55, 0.16, 1.0);
+        let orange_dim = Color::new(0.42, 0.28, 0.15, 1.0);
+        let st = match e.side[i] {
+            TurbState::Off if e.fadec_fault[i] => "FADEC FAULT",
+            TurbState::Off if e.sw[i] == EngSw::Motor => "MOTOR",
+            TurbState::Off => "OFF",
+            TurbState::Starting => "START",
+            TurbState::Running => "RUN",
+            TurbState::Failed => "FAIL",
+        };
+        let top = m.p(0.0, 16.0).y;
+        txt("FWD", r.x + 8.0, top, ffs * 0.7, label);
+        txt_r("AFT", r.x + r.w - 8.0, top, ffs * 0.7, label);
+        txt_c(&format!("{side}  {st}"), r.x + r.w / 2.0, top, ffs * 0.6, label);
+        // Repères orange : lèvres d'entrée, pétales de tuyère, post-combustion
+        let inlet_on = running || ram_lit || scram_lit;
+        let oc = if inlet_on { orange } else { orange_dim };
+        round_line(m.p(4.0, 131.0), m.p(66.0, 136.0), (3.0 * s).max(1.8), oc);
+        round_line(m.p(112.0, 236.0), m.p(178.0, 232.0), (3.0 * s).max(1.8), oc);
+        let pc = if running { orange } else { orange_dim };
+        let ab_l = 1.0 + 0.7 * ab_v * (0.85 + 0.15 * (time * 23.0).sin() as f32);
+        round_line(m.p(820.0, 104.0), m.p(868.0, 112.0), (3.0 * s).max(1.8), pc);
+        round_line(m.p(820.0, 146.0), m.p(868.0, 140.0), (3.0 * s).max(1.8), pc);
+        round_line(m.p(1002.0, 120.0), m.p(1002.0 + 60.0 * ab_l, 128.0), (3.0 * s).max(1.8), pc);
+        round_line(m.p(1002.0, 254.0), m.p(1002.0 + 60.0 * ab_l, 246.0), (3.0 * s).max(1.8), pc);
+        // GEN (sur le carter du compresseur)
+        let gen_fail = ac.fails.has(if i == 0 { crate::systems::Fail::GenL } else { crate::systems::Fail::GenR });
+        let gen_on = running && n2 > 0.55 && !gen_fail;
+        let (g0, g1) = (m.p(398.0, 104.0), m.p(508.0, 146.0));
+        let gr = Rect::new(g0.x, g0.y, g1.x - g0.x, g1.y - g0.y);
+        let (gt, gc, gb) = if gen_fail {
+            ("GEN FAIL", RED, Color::new(0.35, 0.06, 0.05, 0.92))
+        } else if gen_on {
+            ("GEN ON", orange, Color::new(0.38, 0.22, 0.12, 0.92))
+        } else {
+            ("GEN OFF", Color::new(0.6, 0.61, 0.62, 1.0), Color::new(0.24, 0.25, 0.26, 0.92))
+        };
+        rrect(gr, 3.0, gb);
+        rrect_lines(gr, 3.0, 1.5, gc);
+        txt_c(gt, gr.x + gr.w / 2.0, gr.y + gr.h * 0.5 + ffs * 0.25, ffs * 0.62, gc);
+        // RPM (grand), sur la turbine
+        let rpm = n2 * 104.0;
+        let rc = if rpm > 106.0 { RED } else if rpm > 102.0 { AMBER } else { WHITE };
+        txt_c("RPM", m.p(590.0, 0.0).x, m.p(0.0, 106.0).y, ffs * 0.42, label);
+        let rs = format!("{rpm:.0}%");
+        txt_c(&rs, m.p(590.0, 0.0).x + 1.0, m.p(0.0, 142.0).y + 1.0, ffs * 1.05, Color::new(0.0, 0.0, 0.0, 0.7));
+        txt_c(&rs, m.p(590.0, 0.0).x, m.p(0.0, 142.0).y, ffs * 1.05, rc);
+        // EGT
+        let ec = if egt > 1000.0 { RED } else if egt > 900.0 { AMBER } else { WHITE };
+        deg(&format!("{:.0}", f_of(egt)), m.p(700.0, 0.0).x, m.p(0.0, 138.0).y, ffs * 0.95, ec, "F");
+        // CIT (conduit stato / scram : air d'arrêt isolé par les portes)
+        let cit_c = (ac.d.oat + 273.15) * (1.0 + 0.2 * ac.d.mach * ac.d.mach) - 273.15;
+        let cit_show = ac.d.oat + (cit_c - ac.d.oat) * (1.0 - e.doors * 0.94);
+        let cc = if cit_show > 430.0 { RED } else if cit_show > 400.0 { AMBER } else { WHITE };
+        deg(&format!("{:.0}", f_of(cit_show)), m.p(400.0, 0.0).x, m.p(0.0, 212.0).y, ffs * 0.85, cc, "F");
+        // DOORS
+        let dcol = if ac.fails.has(crate::systems::Fail::InletJam) { RED } else if moving { AMBER } else { WHITE };
+        txt("DOORS", m.p(6.0, 0.0).x, m.p(0.0, 182.0).y, ffs * 0.42, label);
+        deg(&format!("{:02.0}", d * 90.0), m.p(8.0, 0.0).x, m.p(0.0, 222.0).y, ffs * 1.0, dcol, "");
+        // Pastille de mode dans le conduit
+        let pill = if scram_lit {
+            Some((MAGENTA_S, format!("SCRAM  {:.0} kN", e.t_scram / 2000.0)))
+        } else if ram_lit {
+            Some((CYAN_S, format!("STATO  {:.0} kN", e.t_ram / 2000.0)))
+        } else if unstart {
+            Some((RED, "UNSTART".to_string()))
+        } else {
+            None
+        };
+        if let Some((c, l)) = pill {
+            let lw = txt_w(&l, ffs * 0.55) + 14.0;
+            let cx = m.p(760.0, 0.0).x;
+            let br = Rect::new(cx - lw / 2.0, m.p(0.0, 192.0).y, lw, (22.0 * s).max(12.0));
+            rrect(br, br.h * 0.5, Color::new(0.04, 0.05, 0.06, 0.8));
+            rrect_lines(br, br.h * 0.5, 1.2, c);
+            txt_c(&l, cx, br.y + br.h * 0.5 + ffs * 0.2, ffs * 0.55, WHITE);
+        }
     }
 }

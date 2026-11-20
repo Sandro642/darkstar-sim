@@ -337,22 +337,3 @@ pub fn round_corners(pts: &[Vec2], closed: bool, r: f32) -> Vec<Vec2> {
     out
 }
 
-/// Remplissage d'un contour avec une couleur par sommet (dégradés).
-pub fn fill_shape_colored(pts: &[Vec2], col: impl Fn(Vec2) -> Color) {
-    if pts.len() < 3 {
-        return;
-    }
-    let ctr = pts.iter().copied().fold(Vec2::ZERO, |a, b| a + b) / pts.len() as f32;
-    let cv = |p: Vec2| {
-        let c = col(p);
-        macroquad::models::Vertex::new(p.x, p.y, 0.0, 0.0, 0.0, c)
-    };
-    let mut vertices = vec![cv(ctr)];
-    vertices.extend(pts.iter().map(|&p| cv(p)));
-    let n = pts.len() as u16;
-    let mut indices = Vec::with_capacity(pts.len() * 3);
-    for i in 0..n {
-        indices.extend_from_slice(&[0, 1 + i, 1 + (i + 1) % n]);
-    }
-    draw_mesh(&Mesh { vertices, indices, texture: None });
-}

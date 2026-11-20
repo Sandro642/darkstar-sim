@@ -8,260 +8,6 @@ use crate::ui::*;
 use crate::ui::wrap_text;
 use macroquad::prelude::*;
 
-fn f_of(c: f64) -> f64 {
-    c * 9.0 / 5.0 + 32.0
-}
-
-/// Texte suivi d'un petit cercle « degré » (la police ne contient que l'ASCII).
-fn deg_txt(s: &str, x: f32, y: f32, size: f32, c: Color, unit: &str) {
-    let w = txt_w(s, size);
-    txt(s, x, y, size, c);
-    draw_circle_lines(x + w + size * 0.16, y - size * 0.66, size * 0.075, 1.2, c);
-    txt(unit, x + w + size * 0.30, y, size, c);
-}
-
-thread_local! {
-    /// Position affichée de la gorge variable du scram (0 stato .. 1 scram), par moteur
-    static SCR_VIS: std::cell::Cell<[f32; 2]> = const { std::cell::Cell::new([0.0; 2]) };
-}
-
-/// Nacelle TBCC reproduite d'après l'écran moteurs du Darkstar : silhouette grise, turbine claire
-/// (cône, GEN, RPM), conduit inférieur stato/scram (CIT), portes et repères orange entrée/tuyère.
-fn nacelle(r: Rect, side: &str, ac: &Aircraft, i: usize, egt_off: f64, time: f64) {
-    let e = &ac.eng;
-    let running = e.side[i] == TurbState::Running;
-    // Coordonnées de la photo (1200 x 250 par nacelle) -> écran
-    let sx = r.w / 1200.0;
-    let sy = r.h / 250.0;
-    let p = |x: f32, y: f32| vec2(r.x + x * sx, r.y + y * sy);
-    let fs = (r.h / 250.0 * 34.0).clamp(10.0, 22.0);
-    draw_rectangle(r.x, r.y, r.w, r.h, Color::new(0.135, 0.14, 0.145, 1.0));
-    let label = Color::new(0.62, 0.64, 0.66, 1.0);
-    txt("FWD", p(30.0, 0.0).x, p(0.0, 42.0).y, fs * 0.75, label);
-    txt_r("AFT", p(1170.0, 0.0).x, p(0.0, 42.0).y, fs * 0.75, label);
-    txt_c(side, r.x + r.w * 0.5, p(0.0, 42.0).y, fs * 0.6, label);
-
-    // Contours arrondis (lissage de Chaikin) : formes fermées remplies, tracés ouverts
-    let rad = (r.h * 0.07).max(3.0);
-    let shape = |pts: &[(f32, f32)]| -> Vec<Vec2> { round_corners(&pts.iter().map(|&(x, y)| p(x, y)).collect::<Vec<_>>(), true, rad) };
-    let poly = |pts: &[(f32, f32)], c: Color| fill_shape(&shape(pts), c);
-    let outline = |pts: &[(f32, f32)], th: f32, c: Color| stroke(&smooth(&pts.iter().map(|&(x, y)| p(x, y)).collect::<Vec<_>>(), false, 2), false, th, c);
-    let edge = Color::new(0.78, 0.80, 0.82, 1.0);
-    let body = Color::new(0.25, 0.26, 0.27, 1.0);
-
-    // Silhouette supérieure (veine turbine) : polygone convexe découpé en éventail
-    let top = [(175.0, 105.0), (300.0, 88.0), (480.0, 62.0), (700.0, 50.0), (900.0, 64.0), (1010.0, 84.0), (1080.0, 108.0)];
-    let mut sil: Vec<(f32, f32)> = top.to_vec();
-    sil.extend_from_slice(&[(1040.0, 182.0), (800.0, 160.0), (420.0, 160.0), (210.0, 120.0)]);
-    poly(&sil, body);
-    outline(&top, 1.6, edge);
-    // Rampe d'entrée vers le conduit inférieur
-    poly(&[(205.0, 118.0), (420.0, 160.0), (420.0, 230.0), (360.0, 218.0)], Color::new(0.21, 0.22, 0.23, 1.0));
-
-    // Conduit inférieur (stato / scram)
-    let duct = [(372.0, 226.0), (410.0, 172.0), (1000.0, 162.0), (1052.0, 180.0), (1030.0, 205.0)];
-    let lower = if e.scram == ScramState::Lit {
-        Some((MAGENTA_S, "SCRAM", e.t_scram))
-    } else if e.ram == RamState::Lit {
-        Some((CYAN_S, "STATO", e.t_ram))
-    } else {
-        None
-    };
-    let duct_shape = shape(&duct);
-    match lower {
-        None => fill_shape(&duct_shape, Color::new(0.20, 0.205, 0.21, 1.0)),
-        Some((c, name, thrust)) => {
-            // Dégradé le long de la veine : entrée froide -> chambre de combustion incandescente -> tuyère
-            let (xa, xb) = (p(410.0, 0.0).x, p(1050.0, 0.0).x);
-            let heat = |t: f32| -> Color {
-                let glow = (-((t - 0.68) / 0.18).powi(2)).exp();
-                let base = 0.16 + 0.42 * t;
-                Color::new(
-                    (c.r * base + glow * (0.35 + c.r * 0.5)).min(1.0),
-                    (c.g * base + glow * (0.30 + c.g * 0.45)).min(1.0),
-                    (c.b * base + glow * (0.30 + c.b * 0.5)).min(1.0),
-                    1.0,
-                )
-            };
-            fill_shape_colored(&duct_shape, |q| heat(((q.x - xa) / (xb - xa)).clamp(0.0, 1.0)));
-            // Halo de combustion
-            let gc = p(820.0, 192.0);
-            for k in 0..3 {
-                draw_circle(gc.x, gc.y, (8.0 + k as f32 * 5.0) * sy, Color::new(1.0, 1.0, 1.0, 0.07));
-            }
-            // Particules d'écoulement sur trois filets, vitesse liée à la poussée
-            let speed = 0.6 + (thrust / 200_000.0).clamp(0.0, 1.5);
-            for (lane, yl) in [184.0f32, 194.0, 204.0].iter().enumerate() {
-                for k in 0..9 {
-                    let t = ((k as f64 / 9.0 + time * speed * 0.45 + lane as f64 * 0.13).fract()) as f32;
-                    let x0 = 440.0 + t * 560.0;
-                    let alpha = (t * 3.0).min(1.0) * (1.0 - t).powf(0.5) * 0.9;
-                    round_line(p(x0, *yl), p(x0 + 34.0, *yl - 1.0), 1.6, Color::new(1.0, 1.0, 1.0, alpha * 0.7));
-                }
-            }
-            // Jet : panache dégradé qui s'efface, losanges de choc pour le scram
-            let fl = 0.9 + 0.1 * ((time * 21.0 + i as f64).sin() as f32);
-            let n0 = p(1046.0, 176.0);
-            let n1 = p(1046.0, 202.0);
-            let tip = p(1046.0 + 150.0 * fl, 190.0);
-            let vx = |q: Vec2, c: Color| macroquad::models::Vertex::new(q.x, q.y, 0.0, 0.0, 0.0, c);
-            draw_mesh(&Mesh { vertices: vec![vx(n0, Color::new(c.r, c.g, c.b, 0.85)), vx(n1, Color::new(c.r, c.g, c.b, 0.85)), vx(tip, Color::new(c.r, c.g, c.b, 0.0))], indices: vec![0, 1, 2], texture: None });
-            let core_tip = p(1046.0 + 80.0 * fl, 189.0);
-            let (m0, m1) = (n0 + (n1 - n0) * 0.3, n0 + (n1 - n0) * 0.7);
-            draw_mesh(&Mesh { vertices: vec![vx(m0, Color::new(1.0, 1.0, 1.0, 0.7)), vx(m1, Color::new(1.0, 1.0, 1.0, 0.7)), vx(core_tip, Color::new(1.0, 1.0, 1.0, 0.0))], indices: vec![0, 1, 2], texture: None });
-            if name == "SCRAM" {
-                for k in 0..3 {
-                    let dc = p(1075.0 + k as f32 * 34.0 * fl, 189.5);
-                    let (dw, dh) = (9.0 * sx * 2.0, 5.0 * sy * 2.0 * (1.0 - k as f32 * 0.2));
-                    let pts = [vec2(dc.x - dw, dc.y), vec2(dc.x, dc.y - dh), vec2(dc.x + dw, dc.y), vec2(dc.x, dc.y + dh)];
-                    stroke(&pts, true, 1.2, Color::new(1.0, 1.0, 1.0, 0.65 - k as f32 * 0.18));
-                }
-            }
-            // Pastille mode / poussée
-            let label = format!("{name}  {:.0} kN", thrust / 2000.0);
-            let lw = txt_w(&label, fs * 0.55) + 14.0;
-            let lc = p(905.0, 0.0).x;
-            let br = Rect::new(lc - lw / 2.0, p(0.0, 178.0).y, lw, (24.0 * sy).max(12.0));
-            rrect(br, br.h * 0.5, Color::new(0.04, 0.05, 0.06, 0.75));
-            rrect_lines(br, br.h * 0.5, 1.2, c);
-            txt_c(&label, lc, br.y + br.h * 0.5 + fs * 0.2, fs * 0.55, WHITE);
-        }
-    }
-    stroke(&duct_shape, true, 1.6, edge);
-    // CIT : température d'entrée compresseur (portes fermées = air de la turbine isolé)
-    let cit_c = (ac.d.oat + 273.15) * (1.0 + 0.2 * ac.d.mach * ac.d.mach) - 273.15;
-    let cit_show = ac.d.oat + (cit_c - ac.d.oat) * (1.0 - e.doors * 0.94);
-    let cc = if cit_show > 430.0 { RED } else if cit_show > 400.0 { AMBER } else { WHITE };
-    let cit_s = format!("{:.0}", f_of(cit_show));
-    deg_txt(&cit_s, p(620.0, 0.0).x - txt_w(&cit_s, fs) * 0.6, p(0.0, 214.0).y, fs, cc, "F");
-
-    // ---- Vannes d'entrée animées (transition turbines <-> stato / scram) ----
-    // Volet de répartition à l'entrée : turbines (volet abaissé, conduit inférieur fermé) ->
-    // stato / scram (volet relevé, veine turbine fermée) ; suit la position réelle des portes
-    // (6 s de course). Gorge variable du conduit : se resserre en scram.
-    let dt_f = get_frame_time().min(0.1);
-    let scr_tgt = if matches!(e.scram, ScramState::Lit | ScramState::Unstart) { 1.0 } else { 0.0 };
-    let scr_vis = SCR_VIS.with(|c| {
-        let mut v = c.get();
-        v[i] += (scr_tgt - v[i]).clamp(-dt_f / 2.5, dt_f / 2.5);
-        c.set(v);
-        v[i]
-    });
-    let d = e.doors as f32;
-    let moving = d > 0.01 && d < 0.99;
-    let hinge = p(318.0, 142.0);
-    let tip_turb = p(408.0, 172.0);
-    let tip_ram = p(408.0, 104.0);
-    let a0 = (tip_turb.y - hinge.y).atan2(tip_turb.x - hinge.x);
-    let a1 = (tip_ram.y - hinge.y).atan2(tip_ram.x - hinge.x);
-    let ang = a0 + (a1 - a0) * d;
-    let len = (tip_turb - hinge).length();
-    let tip = hinge + vec2(ang.cos(), ang.sin()) * len;
-    let vc = if moving { AMBER } else { Color::new(0.82, 0.84, 0.86, 1.0) };
-    round_line(hinge, tip, (10.0 * sy).max(4.5), Color::new(0.08, 0.08, 0.09, 1.0));
-    round_line(hinge, tip, (7.0 * sy).max(3.0), vc);
-    draw_circle(hinge.x, hinge.y, (6.0 * sy).max(2.5), Color::new(0.15, 0.15, 0.16, 1.0));
-    draw_circle_lines(hinge.x, hinge.y, (6.0 * sy).max(2.5), 1.2, vc);
-    // Vérin du volet
-    let jack = p(282.0, 196.0);
-    let mid = hinge + (tip - hinge) * 0.45;
-    round_line(jack, mid, (2.5 * sy).max(1.2), Color::new(0.55, 0.57, 0.6, 1.0));
-    // Gorge variable du conduit (rampe supérieure / inférieure) : se referme pour le scram
-    let th = 8.0 + 18.0 * scr_vis;
-    let wc = Color::new(0.8, 0.82, 0.85, 1.0);
-    let w1 = [(460.0, 166.0), (540.0, 166.0 + th), (620.0, 166.0)];
-    let w2 = [(460.0, 216.0), (540.0, 216.0 - th * 0.7), (620.0, 214.0)];
-    poly(&w1, Color::new(0.42, 0.44, 0.47, 1.0));
-    poly(&w2, Color::new(0.42, 0.44, 0.47, 1.0));
-    outline(&w1, 1.4, wc);
-    outline(&w2, 1.4, wc);
-    // Écoulement à l'entrée : vers la turbine (volet bas) ou vers le conduit (volet haut)
-    let to_turb = (1.0 - d) * if running { 1.0 } else { 0.25 };
-    let to_duct = d * if lower.is_some() { 1.0 } else { 0.3 };
-    for k in 0..7 {
-        let t = ((k as f64 / 7.0 + time * 0.9) % 1.0) as f32;
-        let x = 190.0 + t * 230.0;
-        if to_turb > 0.02 {
-            let y = 150.0 - t * 45.0;
-            round_line(p(x, y), p(x + 26.0, y - 5.0), 1.5, Color::new(0.85, 0.9, 1.0, 0.55 * to_turb * (1.0 - t * 0.6)));
-        }
-        if to_duct > 0.02 {
-            let y = 160.0 + t * 28.0;
-            round_line(p(x, y), p(x + 26.0, y + 3.0), 1.5, Color::new(0.85, 0.9, 1.0, 0.55 * to_duct * (1.0 - t * 0.6)));
-        }
-    }
-    if moving {
-        let lbl = if e.inlet_open { "VOLET -> TURBINES" } else { "VOLET -> STATO / SCRAM" };
-        txt_c(&format!("{lbl}  {:.0} %", d * 100.0), p(300.0, 0.0).x, p(0.0, 240.0).y, fs * 0.5, AMBER);
-    } else if scr_vis > 0.02 && scr_vis < 0.98 {
-        txt_c(&format!("GORGE SCRAM {:.0} %", scr_vis * 100.0), p(540.0, 0.0).x, p(0.0, 240.0).y, fs * 0.5, MAGENTA_S);
-    }
-
-    // Turbine : cône, carter clair avec bagues, bride, tuyère
-    let core_c = if running { Color::new(0.66, 0.67, 0.68, 1.0) } else { Color::new(0.42, 0.43, 0.44, 1.0) };
-    let ring_c = Color::new(core_c.r * 0.78, core_c.g * 0.78, core_c.b * 0.78, 1.0);
-    poly(&[(392.0, 105.0), (430.0, 92.0), (470.0, 84.0), (470.0, 126.0), (430.0, 118.0)], core_c);
-    let c0 = p(462.0, 80.0);
-    let c1 = p(812.0, 130.0);
-    rrect(Rect::new(c0.x, c0.y, c1.x - c0.x, c1.y - c0.y), (c1.y - c0.y) * 0.22, core_c);
-    for xr in [478.0, 525.0, 640.0, 700.0, 790.0] {
-        round_line(p(xr, 83.0), p(xr, 127.0), 1.6, ring_c);
-    }
-    let f0 = p(812.0, 64.0);
-    let f1 = p(826.0, 148.0);
-    rrect(Rect::new(f0.x, f0.y, f1.x - f0.x, f1.y - f0.y), (f1.x - f0.x) * 0.45, core_c);
-    poly(&[(826.0, 82.0), (905.0, 92.0), (905.0, 118.0), (826.0, 128.0)], ring_c);
-    // Repères orange : tuyère turbine, entrée, sortie
-    let orange = Color::new(0.93, 0.55, 0.16, 1.0);
-    let orange_dim = Color::new(0.45, 0.30, 0.15, 1.0);
-    let ab = e.ab_frac > 0.0 && running;
-    for (a, b) in [((850.0, 92.0), (915.0, 92.0)), ((850.0, 118.0), (915.0, 118.0))] {
-        round_line(p(a.0, a.1), p(b.0, b.1), 2.2, if running { orange } else { orange_dim });
-    }
-    let inlet_on = running || lower.is_some();
-    for (a, b) in [((180.0, 158.0), (270.0, 142.0)), ((185.0, 182.0), (275.0, 166.0))] {
-        round_line(p(a.0, a.1), p(b.0, b.1), 2.4, if inlet_on { orange } else { orange_dim });
-    }
-    let fl = if ab { 1.0 + 0.6 * e.ab_frac as f32 * (0.85 + 0.15 * (time * 23.0).sin() as f32) } else { 1.0 };
-    for (a, b) in [((1062.0, 118.0), (1145.0, 130.0)), ((1058.0, 146.0), (1140.0, 160.0))] {
-        let pa = p(a.0, a.1);
-        let pb = p(a.0 + (b.0 - a.0) * fl, a.1 + (b.1 - a.1) * fl);
-        round_line(pa, pb, 2.4, if running { orange } else { orange_dim });
-    }
-    // GEN
-    let gen_fail = ac.fails.has(if i == 0 { crate::systems::Fail::GenL } else { crate::systems::Fail::GenR });
-    let gen_on = running && e.n2s[i] > 0.55 && !gen_fail;
-    let g0 = p(548.0, 88.0);
-    let g1 = p(682.0, 122.0);
-    let gr = Rect::new(g0.x, g0.y, g1.x - g0.x, g1.y - g0.y);
-    let (gtxt, gcol, gbg) = if gen_fail {
-        ("GEN FAIL", RED, Color::new(0.35, 0.06, 0.05, 1.0))
-    } else if gen_on {
-        ("GEN ON", orange, Color::new(0.38, 0.22, 0.12, 1.0))
-    } else {
-        ("GEN OFF", Color::new(0.55, 0.56, 0.57, 1.0), Color::new(0.30, 0.31, 0.32, 1.0))
-    };
-    rrect(gr, 3.0, gbg);
-    rrect_lines(gr, 3.0, 1.5, gcol);
-    txt_c(gtxt, gr.x + gr.w / 2.0, gr.y + gr.h * 0.5 + fs * 0.27, fs * 0.72, gcol);
-    // RPM
-    let rpm = e.n2s[i] * 104.0;
-    let rc = if rpm > 106.0 { RED } else if rpm > 102.0 { AMBER } else { WHITE };
-    txt_c("RPM", p(745.0, 0.0).x, p(0.0, 92.0).y, fs * 0.45, Color::new(0.25, 0.26, 0.27, 1.0));
-    let rs = format!("{rpm:.0}%");
-    txt_c(&rs, p(745.0, 0.0).x + 1.0, p(0.0, 125.0).y + 1.0, fs * 1.05, Color::new(0.2, 0.2, 0.2, 0.8));
-    txt_c(&rs, p(745.0, 0.0).x, p(0.0, 125.0).y, fs * 1.05, rc);
-    // EGT
-    let egt_f = f_of(e.egt + egt_off);
-    let ec = if e.egt > 1000.0 { RED } else if e.egt > 900.0 { AMBER } else { WHITE };
-    deg_txt(&format!("{egt_f:.0}"), p(940.0, 0.0).x, p(0.0, 120.0).y, fs, ec, "F");
-    // Portes
-    let door_deg = e.doors * 90.0;
-    let dc = if ac.fails.has(crate::systems::Fail::InletJam) { RED } else if e.doors > 0.01 && e.doors < 0.99 { AMBER } else { WHITE };
-    txt("DOORS", p(78.0, 0.0).x, p(0.0, 152.0).y, fs * 0.42, label);
-    deg_txt(&format!("{door_deg:02.0}"), p(82.0, 0.0).x, p(0.0, 196.0).y, fs * 1.05, dc, "");
-}
-
 /// Paramètres détaillés : turbines G/D (N1, N2, EGT, débit, huile, vibrations, tuyère), statoréacteur,
 /// scramjet et entrée d'air (température d'arrêt, rendement de prise d'air, rampe), performances.
 /// Renvoie la hauteur utilisée.
@@ -353,7 +99,7 @@ fn engine_table(ac: &Aircraft, r: Rect) -> f32 {
 pub fn draw_nacelles(ac: &Aircraft, r: Rect, time: f64) {
     let e = &ac.eng;
     let gap = 8.0;
-    let nh = ((r.h - gap) / 2.0).min(r.w / 3.2);
+    let nh = ((r.h - gap) / 2.0).min(r.w / 3.9);
     let y0 = r.y + (r.h - (2.0 * nh + gap)) / 2.0;
     for (i, (side, off)) in [("ENG L", 8.0), ("ENG R", -6.0)].iter().enumerate() {
         let tstate = match e.side[i] {
@@ -364,7 +110,8 @@ pub fn draw_nacelles(ac: &Aircraft, r: Rect, time: f64) {
             TurbState::Running => "RUN",
             TurbState::Failed => "FAIL",
         };
-        nacelle(Rect::new(r.x, y0 + i as f32 * (nh + gap), r.w, nh), &format!("{side}  {tstate}"), ac, i, *off, time + i as f64 * 0.37);
+        let _ = tstate;
+        crate::tbcc::draw_film(Rect::new(r.x, y0 + i as f32 * (nh + gap), r.w, nh), side, ac, i, *off, time + i as f64 * 0.37);
     }
 }
 
@@ -385,7 +132,7 @@ pub fn draw_engines(ac: &Aircraft, mon: &crate::health::ChamberMon, r: Rect, tim
     // Nacelles gauche / droite
     let top = r.y + 30.0;
     // Proportions de l'écran moteurs du cockpit (nacelle ~4.8 fois plus large que haute)
-    let nh = (w * 0.66 / 4.6).min((r.h - 120.0) / 2.0).max(60.0);
+    let nh = (w * 0.66 / 4.0).min((r.h - 120.0) / 2.0).max(60.0);
     for (i, (side, off)) in [("ENG L", 8.0), ("ENG R", -6.0)].iter().enumerate() {
         let tstate = match e.side[i] {
             TurbState::Off if e.fadec_fault[i] => "FADEC FAULT",
@@ -396,7 +143,8 @@ pub fn draw_engines(ac: &Aircraft, mon: &crate::health::ChamberMon, r: Rect, tim
             TurbState::Failed => "FAIL",
         };
         let nr = Rect::new(x, top + i as f32 * (nh + 6.0), w * 0.66, nh);
-        nacelle(nr, &format!("{side}  {tstate}"), ac, i, *off, time + i as f64 * 0.37);
+        let _ = tstate;
+        crate::tbcc::draw_film(nr, side, ac, i, *off, time + i as f64 * 0.37);
     }
 
     // Colonne droite : poussée, stato, scram

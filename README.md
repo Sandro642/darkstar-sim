@@ -982,3 +982,8 @@ Le SR-72 est un avion de reconnaissance : sa charge utile est simulée.
   de chocs, gorge variable et mâts d'injection, flamme subsonique ou nappes supersoniques, parois qui
   rougeoient, tuyère éclairée, panache et losanges de choc, annotations ; valeurs des deux moteurs.
   Pages du bloc moteur : NACELLES, VUE EN COUPE TBCC, DONNEES MOTEUR, MANETTE.
+- v1.76.1 : écran moteurs fusionné — disposition et repères de l'écran du Darkstar de Top Gun (deux
+  nacelles L / R, FWD / AFT, GEN ON/OFF, RPM, EGT et CIT en °F, DOORS, repères orange des lèvres
+  d'entrée, tuyère et post-combustion, pastille STATO / SCRAM) sur le rendu en coupe réaliste
+  (titane sombre, étages d'aubes, chambre, conduit stato / scram, volet animé, train de chocs, gorge
+  variable, flammes, panache). La page séparée VUE EN COUPE est retirée (intégrée).
