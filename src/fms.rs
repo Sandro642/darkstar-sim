@@ -1483,8 +1483,15 @@ impl Fms {
                     self.msg = "FORMAT : 950/6.0 OU MAX/11".into();
                 }
             }
-            (Page::Init, false, 1) => self.ofp_one_click(),
+            (Page::Init, false, 1) => self.start_fetch(),
             (Page::Init, false, 2) => {
+                if self.from_to.0.is_empty() {
+                    self.msg = "SAISIR DEP/DEST (LIGNE 1)".into();
+                } else {
+                    self.ofp_one_click();
+                }
+            }
+            (Page::Init, false, 3) => {
                 // Code de type (B77W) ou identifiant d'un avion personnalisé SimBrief (ex. 793553_1731...)
                 if (3..=30).contains(&sp.len()) && sp.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') {
                     self.acft = sp.clone();
@@ -2013,10 +2020,11 @@ fn page_lines(f: &Fms, ac: &Aircraft) -> (String, Color, Vec<(Line, Line)>) {
             let ft = if o.is_empty() { "____/____".to_string() } else { format!("{o}/{d}") };
             let user = if f.user.is_empty() { "________".to_string() } else { f.user.to_uppercase() };
             rows.push((ln(" ROUTE DEP/DEST", LBL_M, "ID SIMBRIEF ", LBL_M), ln(ft, if o.is_empty() { AMB_M } else { CYAN_M }, user, if f.user.is_empty() { AMB_M } else { CYAN_M })));
-            let st = if f.busy() || f.ofp_wait.is_some() { "EN ATTENTE..." } else if o.is_empty() { "IMPORT OFP>" } else { "GENERER+IMPORT>" };
-            rows.push((ln(" INDICATIF", LBL_M, "OFP SIMBRIEF ", LBL_M), ln(f.plan().map(|p| p.flt.clone()).unwrap_or("DKS01".into()), CYAN_M, st, if f.ofp_wait.is_some() { AMB_M } else { WHITE_M })));
-            rows.push((ln(" CROISIERE FL/MACH", LBL_M, "TYPE ", LBL_M), ln(if f.crz_max { format!("MAX({:.0})/M{:.1}", f.crz.0, f.crz.1) } else { format!("FL{:.0}/M{:.1}", f.crz.0, f.crz.1) }, CYAN_M, "DKS", CYAN_M)));
-            rows.push((ln(" PLAN HORS LIGNE", LBL_M, "", LBL_M), ln("<PLAN DARKSTAR", WHITE_M, "", CYAN_M)));
+            let imp = if f.busy() && f.ofp_wait.is_none() { "EN COURS" } else { "IMPORT OFP>" };
+            rows.push((ln(" INDICATIF", LBL_M, "DERNIER OFP ", LBL_M), ln(f.plan().map(|p| p.flt.clone()).unwrap_or("DKS01".into()), CYAN_M, imp, WHITE_M)));
+            let gen_l = if f.ofp_wait.is_some() { "ATTENTE OFP..." } else { "GENERER OFP>" };
+            rows.push((ln(" CROISIERE FL/MACH", LBL_M, "NOUVEL OFP + IMPORT ", LBL_M), ln(if f.crz_max { format!("MAX({:.0})/M{:.1}", f.crz.0, f.crz.1) } else { format!("FL{:.0}/M{:.1}", f.crz.0, f.crz.1) }, CYAN_M, gen_l, if f.ofp_wait.is_some() { AMB_M } else { WHITE_M })));
+            rows.push((ln(" PLAN HORS LIGNE", LBL_M, "TYPE ", LBL_M), ln("<PLAN DARKSTAR", WHITE_M, "DKS", CYAN_M)));
             let info = match f.plan() {
                 Some(p) => format!("{} {}-{} {:.0}NM", p.source, p.origin, p.dest, p.total() / NM),
                 None => "AUCUN PLAN".into(),

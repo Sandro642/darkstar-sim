@@ -20,14 +20,6 @@ pub enum Act {
 const FACE: Color = Color::new(0.07, 0.08, 0.09, 1.0);
 const LBL: Color = Color::new(0.62, 0.66, 0.7, 1.0);
 
-/// Bouton carré vert du poste (allumé = vert vif).
-fn sq_button(r: Rect, lit: bool) -> bool {
-    let c = if lit { Color::new(0.35, 1.0, 0.45, 1.0) } else { Color::new(0.18, 0.42, 0.22, 1.0) };
-    rrect(r, 3.0, c);
-    draw_rectangle(r.x + 3.0, r.y + 3.0, r.w - 6.0, r.h * 0.35, Color::new(1.0, 1.0, 1.0, if lit { 0.3 } else { 0.08 }));
-    clicked(r)
-}
-
 /// Bouton-poussoir à légende (voyant en haut).
 fn push(r: Rect, title: &str, state: &str, lit: Option<Color>) -> bool {
     rrect(r, 4.0, if hovered(r) { Color::new(0.14, 0.15, 0.18, 1.0) } else { Color::new(0.10, 0.11, 0.13, 1.0) });
@@ -175,15 +167,27 @@ pub fn engines(ac: &Aircraft, mon: &crate::health::ChamberMon, r: Rect, page: &m
             crate::panels::draw_nacelles(ac, Rect::new(scr.x + 4.0, scr.y + 16.0, scr.w - 8.0, scr.h - 20.0), time);
         }
     }
-    // Trois boutons de page
-    let n = 3.0;
-    let bw = 34.0;
-    let gap = (r.w - n * bw) / (n + 1.0);
-    for k in 0..3u8 {
-        let b = Rect::new(r.x + gap + k as f32 * (bw + gap), r.y + r.h - bh - 6.0, bw, bh);
-        if sq_button(b, *page == k) {
-            *page = k;
+    // Un seul bouton : page suivante (nom de la page, repères de position)
+    let names = ["NACELLES", "DONNEES MOTEUR", "MANETTE"];
+    let b = Rect::new(r.x + 6.0, r.y + r.h - bh - 6.0, r.w - 12.0, bh);
+    let hov = hovered(b);
+    rrect(b, 4.0, if hov { Color::new(0.2, 0.21, 0.235, 1.0) } else { Color::new(0.14, 0.145, 0.16, 1.0) });
+    rrect_lines(b, 4.0, 1.0, Color::new(0.24, 0.25, 0.28, 1.0));
+    let cur = (*page as usize).min(2);
+    txt(names[cur], b.x + 10.0, b.y + b.h / 2.0 + 4.0, 11.0, WHITE);
+    for k in 0..3 {
+        let c = vec2(b.x + b.w - 44.0 + k as f32 * 10.0, b.y + b.h / 2.0);
+        if k == cur {
+            draw_circle(c.x, c.y, 3.0, ACCENT);
+        } else {
+            draw_circle_lines(c.x, c.y, 3.0, 1.0, LBL);
         }
+    }
+    let (ax, ay) = (b.x + b.w - 12.0, b.y + b.h / 2.0);
+    draw_line(ax - 4.0, ay - 4.0, ax, ay, 1.5, WHITE);
+    draw_line(ax, ay, ax - 4.0, ay + 4.0, 1.5, WHITE);
+    if clicked(b) {
+        *page = ((cur + 1) % 3) as u8;
     }
 }
 

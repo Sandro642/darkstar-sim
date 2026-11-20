@@ -20,6 +20,11 @@ fn deg_txt(s: &str, x: f32, y: f32, size: f32, c: Color, unit: &str) {
     txt(unit, x + w + size * 0.30, y, size, c);
 }
 
+thread_local! {
+    /// Position affichée de la gorge variable du scram (0 stato .. 1 scram), par moteur
+    static SCR_VIS: std::cell::Cell<[f32; 2]> = const { std::cell::Cell::new([0.0; 2]) };
+}
+
 /// Nacelle TBCC reproduite d'après l'écran moteurs du Darkstar : silhouette grise, turbine claire
 /// (cône, GEN, RPM), conduit inférieur stato/scram (CIT), portes et repères orange entrée/tuyère.
 fn nacelle(r: Rect, side: &str, ac: &Aircraft, i: usize, egt_off: f64, time: f64) {
@@ -129,6 +134,68 @@ fn nacelle(r: Rect, side: &str, ac: &Aircraft, i: usize, egt_off: f64, time: f64
     let cc = if cit_show > 430.0 { RED } else if cit_show > 400.0 { AMBER } else { WHITE };
     let cit_s = format!("{:.0}", f_of(cit_show));
     deg_txt(&cit_s, p(620.0, 0.0).x - txt_w(&cit_s, fs) * 0.6, p(0.0, 214.0).y, fs, cc, "F");
+
+    // ---- Vannes d'entrée animées (transition turbines <-> stato / scram) ----
+    // Volet de répartition à l'entrée : turbines (volet abaissé, conduit inférieur fermé) ->
+    // stato / scram (volet relevé, veine turbine fermée) ; suit la position réelle des portes
+    // (6 s de course). Gorge variable du conduit : se resserre en scram.
+    let dt_f = get_frame_time().min(0.1);
+    let scr_tgt = if matches!(e.scram, ScramState::Lit | ScramState::Unstart) { 1.0 } else { 0.0 };
+    let scr_vis = SCR_VIS.with(|c| {
+        let mut v = c.get();
+        v[i] += (scr_tgt - v[i]).clamp(-dt_f / 2.5, dt_f / 2.5);
+        c.set(v);
+        v[i]
+    });
+    let d = e.doors as f32;
+    let moving = d > 0.01 && d < 0.99;
+    let hinge = p(318.0, 142.0);
+    let tip_turb = p(408.0, 172.0);
+    let tip_ram = p(408.0, 104.0);
+    let a0 = (tip_turb.y - hinge.y).atan2(tip_turb.x - hinge.x);
+    let a1 = (tip_ram.y - hinge.y).atan2(tip_ram.x - hinge.x);
+    let ang = a0 + (a1 - a0) * d;
+    let len = (tip_turb - hinge).length();
+    let tip = hinge + vec2(ang.cos(), ang.sin()) * len;
+    let vc = if moving { AMBER } else { Color::new(0.82, 0.84, 0.86, 1.0) };
+    round_line(hinge, tip, (10.0 * sy).max(4.5), Color::new(0.08, 0.08, 0.09, 1.0));
+    round_line(hinge, tip, (7.0 * sy).max(3.0), vc);
+    draw_circle(hinge.x, hinge.y, (6.0 * sy).max(2.5), Color::new(0.15, 0.15, 0.16, 1.0));
+    draw_circle_lines(hinge.x, hinge.y, (6.0 * sy).max(2.5), 1.2, vc);
+    // Vérin du volet
+    let jack = p(282.0, 196.0);
+    let mid = hinge + (tip - hinge) * 0.45;
+    round_line(jack, mid, (2.5 * sy).max(1.2), Color::new(0.55, 0.57, 0.6, 1.0));
+    // Gorge variable du conduit (rampe supérieure / inférieure) : se referme pour le scram
+    let th = 8.0 + 18.0 * scr_vis;
+    let wc = Color::new(0.8, 0.82, 0.85, 1.0);
+    let w1 = [(460.0, 166.0), (540.0, 166.0 + th), (620.0, 166.0)];
+    let w2 = [(460.0, 216.0), (540.0, 216.0 - th * 0.7), (620.0, 214.0)];
+    poly(&w1, Color::new(0.42, 0.44, 0.47, 1.0));
+    poly(&w2, Color::new(0.42, 0.44, 0.47, 1.0));
+    outline(&w1, 1.4, wc);
+    outline(&w2, 1.4, wc);
+    // Écoulement à l'entrée : vers la turbine (volet bas) ou vers le conduit (volet haut)
+    let to_turb = (1.0 - d) * if running { 1.0 } else { 0.25 };
+    let to_duct = d * if lower.is_some() { 1.0 } else { 0.3 };
+    for k in 0..7 {
+        let t = ((k as f64 / 7.0 + time * 0.9) % 1.0) as f32;
+        let x = 190.0 + t * 230.0;
+        if to_turb > 0.02 {
+            let y = 150.0 - t * 45.0;
+            round_line(p(x, y), p(x + 26.0, y - 5.0), 1.5, Color::new(0.85, 0.9, 1.0, 0.55 * to_turb * (1.0 - t * 0.6)));
+        }
+        if to_duct > 0.02 {
+            let y = 160.0 + t * 28.0;
+            round_line(p(x, y), p(x + 26.0, y + 3.0), 1.5, Color::new(0.85, 0.9, 1.0, 0.55 * to_duct * (1.0 - t * 0.6)));
+        }
+    }
+    if moving {
+        let lbl = if e.inlet_open { "VOLET -> TURBINES" } else { "VOLET -> STATO / SCRAM" };
+        txt_c(&format!("{lbl}  {:.0} %", d * 100.0), p(300.0, 0.0).x, p(0.0, 240.0).y, fs * 0.5, AMBER);
+    } else if scr_vis > 0.02 && scr_vis < 0.98 {
+        txt_c(&format!("GORGE SCRAM {:.0} %", scr_vis * 100.0), p(540.0, 0.0).x, p(0.0, 240.0).y, fs * 0.5, MAGENTA_S);
+    }
 
     // Turbine : cône, carter clair avec bagues, bride, tuyère
     let core_c = if running { Color::new(0.66, 0.67, 0.68, 1.0) } else { Color::new(0.42, 0.43, 0.44, 1.0) };

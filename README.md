@@ -969,3 +969,9 @@ Le SR-72 est un avion de reconnaissance : sa charge utile est simulée.
   route, importe le dernier OFP ; avec route DEP/DEST, ouvre la génération pré-remplie (indicatif
   DKS, type de base B77W) et importe automatiquement le nouvel OFP dès sa publication ; bouton
   GENERER retiré ; type affiché DKS (B77W en réalité pour SimBrief). Instruction DMC <PAGE>.
+- v1.75.0 : DMC MSN — deux boutons : IMPORT OFP (dernier OFP) et GENERER OFP (génération SimBrief
+  pré-remplie puis import automatique du nouvel OFP). Bloc moteur : un seul bouton qui fait défiler
+  les pages (NACELLES, DONNEES MOTEUR, MANETTE, repères de position). Nacelles animées : volet de
+  répartition d'entrée sur vérin qui bascule entre veine turbine et conduit stato / scram (suit la
+  course réelle des portes, ambre pendant la transition, pourcentage), écoulement d'air dévié vers
+  la turbine ou le conduit, gorge variable du conduit qui se resserre au passage en scram.
