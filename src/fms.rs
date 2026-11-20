@@ -659,6 +659,8 @@ pub enum Page {
     RadNav,
     /// DATA : base de données active (AIRAC SimBrief), terrains, transitions, METAR
     Data,
+    /// PROFIL : profil vertical hypersonique de la route (graphique)
+    Profil,
 }
 
 /// Sélection en cours sur les pages DEPARTURES / ARRIVAL : piste (ou approche), procédure,
@@ -700,6 +702,9 @@ pub struct Fms {
     pub vnav: bool,
     /// Type d'avion SimBrief utilisé pour générer la route (code SimBrief, ex. B77W, A359)
     pub acft: String,
+    /// OFP en un clic : génération lancée à cet instant (heure Unix), import automatique du nouvel
+    /// OFP dès qu'il apparaît ; dernier essai d'import (horloge locale)
+    pub ofp_wait: Option<(f64, f64)>,
     pub desc_started: bool,
     land_sent: bool,
     /// Dernière phase annoncée
@@ -1278,7 +1283,7 @@ impl Fms {
 
     pub fn new() -> Fms {
         let user = std::fs::read_to_string(config_path()).map(|s| s.trim().to_string()).unwrap_or_default();
-        Fms { fpln: None, temp: None, page: Page::Init, scroll: 0, scratch: String::new(), msg: String::new(), user, from_to: (String::new(), String::new()), crz: (ceiling_fl(11.0), 11.0), crz_max: true, fetch: Arc::new(Mutex::new(Fetch::Idle)), focus: true, acft: "B77W".into(), vnav: true, desc_started: false, land_sent: false, phase: "", dep: ProcSel::default(), arr: ProcSel::default(), ils: None, eco_mach: None, ga_ok: true, jp7_at_dest: 0.0, fuel_warned: false, eco_decided: false, navupd: None }
+        Fms { fpln: None, temp: None, page: Page::Init, scroll: 0, scratch: String::new(), msg: String::new(), user, from_to: (String::new(), String::new()), crz: (ceiling_fl(11.0), 11.0), crz_max: true, fetch: Arc::new(Mutex::new(Fetch::Idle)), focus: true, acft: "B77W".into(), ofp_wait: None, vnav: true, desc_started: false, land_sent: false, phase: "", dep: ProcSel::default(), arr: ProcSel::default(), ils: None, eco_mach: None, ga_ok: true, jp7_at_dest: 0.0, fuel_warned: false, eco_decided: false, navupd: None }
     }
 
     /// Plan affiché / modifié : temporaire s'il existe, sinon actif.
@@ -1312,28 +1317,69 @@ impl Fms {
         self.msg = "IMPORT OFP EN COURS".into();
     }
 
+    /// OFP en un clic : sans route saisie, importe le dernier OFP ; sinon ouvre la génération
+    /// SimBrief pré-remplie (indicatif DKS, type de base B77W) puis importe automatiquement le
+    /// nouvel OFP dès qu'il est publié (sondage toutes les 8 s pendant 6 min).
+    pub fn ofp_one_click(&mut self) {
+        if self.user.is_empty() {
+            self.msg = "ID SIMBRIEF REQUIS (MSN)".into();
+            return;
+        }
+        if self.from_to.0.is_empty() {
+            self.start_fetch();
+            return;
+        }
+        self.open_simbrief();
+        let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs_f64()).unwrap_or(0.0);
+        self.ofp_wait = Some((now, macroquad::time::get_time()));
+        self.msg = "OFP : GENERATION, IMPORT AUTO".into();
+    }
+
     /// Ouvre la page de génération SimBrief pré-remplie dans le navigateur.
     pub fn open_simbrief(&mut self) {
         let (o, d) = &self.from_to;
         // SimBrief ne connaît pas le Darkstar : un long-courrier sert à tracer la route (seule la
         // route est reprise à l'import, le profil vertical est celui du Darkstar)
-        let url = format!("https://dispatch.simbrief.com/options/custom?orig={o}&dest={d}&type={}", self.acft);
+        let url = format!("https://dispatch.simbrief.com/options/custom?orig={o}&dest={d}&type={}&airline=DKS&fltnum=01", self.acft);
         let ok = std::process::Command::new("/usr/bin/open").arg(&url).spawn().is_ok();
-        self.msg = if ok { "SIMBRIEF OUVERT : GENERER PUIS IMPORT".into() } else { "NAVIGATEUR INDISPONIBLE".into() };
+        self.msg = if ok { "SIMBRIEF OUVERT".into() } else { "NAVIGATEUR INDISPONIBLE".into() };
     }
 
     /// Suivi du téléchargement ; à appeler chaque image.
     pub fn poll(&mut self) -> Option<McduOut> {
         let st = self.fetch.lock().unwrap().clone();
+        // OFP en un clic : sondage du nouvel OFP
+        if let Some((t0, last)) = self.ofp_wait {
+            let now = macroquad::time::get_time();
+            if matches!(st, Fetch::Idle) && now - last > 8.0 {
+                self.ofp_wait = Some((t0, now));
+                self.start_fetch();
+                self.msg = "OFP : ATTENTE DE LA GENERATION".into();
+            }
+        }
         if let Fetch::Done(r) = st {
             *self.fetch.lock().unwrap() = Fetch::Idle;
-            let res = r.and_then(|body| parse_json(&body)).and_then(|j| from_simbrief(&j, self.crz.0, self.crz.1, self.crz_max));
+            let parsed = r.and_then(|body| parse_json(&body));
+            // En attente d'une génération : on ignore l'ancien OFP (heure de génération)
+            if let (Some((t0, _)), Ok(j)) = (self.ofp_wait, parsed.as_ref()) {
+                let t_gen = j.path(&["params", "time_generated"]).map(|x| x.s()).unwrap_or_default().parse::<f64>().unwrap_or(0.0);
+                let started = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs_f64()).unwrap_or(0.0);
+                if t_gen < t0 - 30.0 {
+                    if started - t0 > 360.0 {
+                        self.ofp_wait = None;
+                        self.msg = "OFP : PAS DE NOUVEL OFP (6 MIN)".into();
+                    }
+                    return None;
+                }
+                self.ofp_wait = None;
+            }
+            let res = parsed.and_then(|j| from_simbrief(&j, self.crz.0, self.crz.1, self.crz_max));
             return Some(match res {
                 Ok(fp) => {
                     crate::procs::set_airac(fp.rwys.clone());
                     self.msg = format!("OFP {}-{} : {} PTS", fp.origin, fp.dest, fp.wpts.len());
                     self.from_to = (fp.origin.clone(), fp.dest.clone());
-                    let m = format!("SIMBRIEF : OFP {} {}-{} IMPORTE ({} POINTS, {:.0} NM) — MCDU : ACTIVATE", fp.flt, fp.origin, fp.dest, fp.wpts.len(), fp.total() / NM);
+                    let m = format!("SIMBRIEF : OFP {} {}-{} IMPORTE ({} POINTS, {:.0} NM) — DMC : ACTIVER LA ROUTE", fp.flt, fp.origin, fp.dest, fp.wpts.len(), fp.total() / NM);
                     self.temp = Some(fp);
                     self.page = Page::Fpln;
                     self.scroll = 0;
@@ -1437,15 +1483,14 @@ impl Fms {
                     self.msg = "FORMAT : 950/6.0 OU MAX/11".into();
                 }
             }
-            (Page::Init, false, 1) => self.start_fetch(),
-            (Page::Init, false, 2) => self.open_simbrief(),
-            (Page::Init, false, 3) => {
+            (Page::Init, false, 1) => self.ofp_one_click(),
+            (Page::Init, false, 2) => {
                 // Code de type (B77W) ou identifiant d'un avion personnalisé SimBrief (ex. 793553_1731...)
                 if (3..=30).contains(&sp.len()) && sp.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') {
                     self.acft = sp.clone();
                     self.scratch.clear();
                 } else {
-                    self.msg = "CODE SIMBRIEF : B77W".into();
+                    self.msg = "TYPE DE BASE SIMBRIEF : B77W".into();
                 }
             }
             (Page::Init, true, 3) => {
@@ -1902,7 +1947,7 @@ fn page_lines(f: &Fms, ac: &Aircraft) -> (String, Color, Vec<(Line, Line)>) {
             rows.push((blank(), ln("<RETURN", WHITE_M, "INSERT*", AMB_M)));
         }
         Page::Data => {
-            title = "DATA INDEX".into();
+            title = "DONNEES".into();
             let p = f.plan();
             let cycle = p.map(|p| p.airac.clone()).filter(|c| !c.is_empty());
             rows.push((ln(" ACTIVE DATA BASE", LBL_M, "SOURCE ", LBL_M), ln(cycle.as_ref().map(|c| format!("AIRAC {c}")).unwrap_or("BASE MONDE".into()), CYAN_M, if cycle.is_some() { "SIMBRIEF" } else { "OURAIRPORTS" }, GREEN_M)));
@@ -1945,7 +1990,7 @@ fn page_lines(f: &Fms, ac: &Aircraft) -> (String, Color, Vec<(Line, Line)>) {
             rows.push((ln(format!(" {}", stxt.chars().take(23).collect::<String>()), sc, "", LBL_M), ln("<MAJ NAVDATA", WHITE_M, "", WHITE_M)));
         }
         Page::RadNav => {
-            title = "RAD NAV".into();
+            title = format!("NAV  INS {}", ac.ins.phase());
             // VOR1 / VOR2 : prochaines balises du plan (fréquences AIRAC)
             let navs: Vec<&Wpt> = f.fpln.as_ref().map(|p| p.wpts[p.active.min(p.wpts.len())..].iter().filter(|w| (w.kind == "VOR" || w.kind == "NDB") && !w.freq.is_empty()).take(2).collect()).unwrap_or_default();
             let nav = |k: usize| navs.get(k).map(|w| format!("{}/{}", w.ident, w.freq)).unwrap_or("[ ]/[ ]".into());
@@ -1963,25 +2008,25 @@ fn page_lines(f: &Fms, ac: &Aircraft) -> (String, Color, Vec<(Line, Line)>) {
             }
         }
         Page::Init => {
-            title = "INIT  DK-FMS".to_string();
+            title = "MISSION".to_string();
             let (o, d) = &f.from_to;
             let ft = if o.is_empty() { "____/____".to_string() } else { format!("{o}/{d}") };
             let user = if f.user.is_empty() { "________".to_string() } else { f.user.to_uppercase() };
-            rows.push((ln(" CO RTE", LBL_M, "SIMBRIEF ID ", LBL_M), ln(ft, if o.is_empty() { AMB_M } else { CYAN_M }, user, if f.user.is_empty() { AMB_M } else { CYAN_M })));
-            let st = if f.busy() { "EN COURS" } else { "IMPORT OFP>" };
-            rows.push((ln(" FLT NBR", LBL_M, "", LBL_M), ln(f.plan().map(|p| p.flt.clone()).unwrap_or("DKS01".into()), CYAN_M, st, WHITE_M)));
-            rows.push((ln(" CRZ FL/MACH", LBL_M, "GENERER", LBL_M), ln(if f.crz_max { format!("MAX({:.0})/M{:.1}", f.crz.0, f.crz.1) } else { format!("FL{:.0}/M{:.1}", f.crz.0, f.crz.1) }, CYAN_M, "SIMBRIEF>", WHITE_M)));
-            rows.push((ln(" CALCUL PLAN", LBL_M, "AVION SIMBRIEF ", LBL_M), ln("<DARKSTAR DISPATCH", WHITE_M, f.acft.clone(), CYAN_M)));
+            rows.push((ln(" ROUTE DEP/DEST", LBL_M, "ID SIMBRIEF ", LBL_M), ln(ft, if o.is_empty() { AMB_M } else { CYAN_M }, user, if f.user.is_empty() { AMB_M } else { CYAN_M })));
+            let st = if f.busy() || f.ofp_wait.is_some() { "EN ATTENTE..." } else if o.is_empty() { "IMPORT OFP>" } else { "GENERER+IMPORT>" };
+            rows.push((ln(" INDICATIF", LBL_M, "OFP SIMBRIEF ", LBL_M), ln(f.plan().map(|p| p.flt.clone()).unwrap_or("DKS01".into()), CYAN_M, st, if f.ofp_wait.is_some() { AMB_M } else { WHITE_M })));
+            rows.push((ln(" CROISIERE FL/MACH", LBL_M, "TYPE ", LBL_M), ln(if f.crz_max { format!("MAX({:.0})/M{:.1}", f.crz.0, f.crz.1) } else { format!("FL{:.0}/M{:.1}", f.crz.0, f.crz.1) }, CYAN_M, "DKS", CYAN_M)));
+            rows.push((ln(" PLAN HORS LIGNE", LBL_M, "", LBL_M), ln("<PLAN DARKSTAR", WHITE_M, "", CYAN_M)));
             let info = match f.plan() {
                 Some(p) => format!("{} {}-{} {:.0}NM", p.source, p.origin, p.dest, p.total() / NM),
                 None => "AUCUN PLAN".into(),
             };
             rows.push((ln(format!(" {info}"), if f.plan().is_some() { GREEN_M } else { LBL_M }, "", LBL_M), ln("<VOL D'ESSAI", WHITE_M, "", WHITE_M)));
-            rows.push((blank(), if f.temp.is_some() { ln("<F-PLN", WHITE_M, "ACTIVATE*", AMB_M) } else { ln("<F-PLN", WHITE_M, "", WHITE_M) }));
+            rows.push((blank(), if f.temp.is_some() { ln("<ROUTE", WHITE_M, "ACTIVER*", AMB_M) } else { ln("<ROUTE", WHITE_M, "", WHITE_M) }));
         }
         Page::Fpln => {
             let tmp = f.temp.is_some();
-            title = if tmp { "TMPY F-PLN".into() } else { format!("FROM  {}", f.plan().map(|p| p.flt.clone()).unwrap_or_default()) };
+            title = if tmp { "ROUTE PROVISOIRE".into() } else { format!("ROUTE  {}", f.plan().map(|p| p.flt.clone()).unwrap_or_default()) };
             tc = if tmp { AMB_M } else { WHITE_M };
             match f.plan() {
                 None => {
@@ -2034,7 +2079,7 @@ fn page_lines(f: &Fms, ac: &Aircraft) -> (String, Color, Vec<(Line, Line)>) {
             }
         }
         Page::Perf => {
-            title = "PERF  DARKSTAR".into();
+            title = "PERF  PROPULSION".into();
             let (crz_fl, crz_m) = f.plan().map(|p| (p.crz_fl, p.crz_mach)).unwrap_or(f.crz);
             let mode = ac.mode_name();
             let phases = [
@@ -2049,6 +2094,12 @@ fn page_lines(f: &Fms, ac: &Aircraft) -> (String, Color, Vec<(Line, Line)>) {
             }
             rows.push((ln(" DES q CONST", LBL_M, "AUTOLAND ", LBL_M), ln("<DESCENTE", WHITE_M, "ATTERRIR>", WHITE_M)));
             rows.push((ln(" VNAV / MACH GERES", LBL_M, "CRZ ", LBL_M), ln(if f.vnav { "<VNAV ON" } else { "<VNAV OFF" }, if f.vnav { GREEN_M } else { AMB_M }, format!("FL{crz_fl:.0}/M{crz_m:.1}"), CYAN_M)));
+        }
+        Page::Profil => {
+            title = format!("PROFIL  {}", ac.mode_name());
+            while rows.len() < 6 {
+                rows.push((blank(), blank()));
+            }
         }
         Page::Prog => {
             title = format!("PROG  {}", ac.mode_name());
@@ -2077,7 +2128,7 @@ fn page_lines(f: &Fms, ac: &Aircraft) -> (String, Color, Vec<(Line, Line)>) {
             }
         }
         Page::Fuel => {
-            title = "FUEL PRED".into();
+            title = "ENERGIE  JP-7 / H2".into();
             rows.push((ln(" JP-7 BORD", LBL_M, "H2 BORD ", LBL_M), ln(format!("{:.1}T", ac.fuel / 1000.0), GREEN_M, format!("{:.1}T", ac.h2 / 1000.0), GREEN_M)));
             match f.plan() {
                 Some(p) => {
@@ -2100,7 +2151,7 @@ fn page_lines(f: &Fms, ac: &Aircraft) -> (String, Color, Vec<(Line, Line)>) {
             }
         }
         Page::Dir => {
-            title = "DIR TO".into();
+            title = "DIRECT".into();
             match &f.fpln {
                 Some(p) => {
                     for k in 0..5 {
@@ -2174,6 +2225,102 @@ fn mkey(r: Rect, label: &str, accent: bool) -> bool {
     let sz = if label.len() > 4 { base * 0.72 } else if label.len() > 2 { base * 0.85 } else { base };
     txt_c(label, r.x + r.w / 2.0, r.y + r.h / 2.0 + sz * 0.36, sz, if accent { Color::new(0.95, 0.75, 0.35, 1.0) } else { WHITE_M });
     clicked(r)
+}
+
+/// Page PROFIL : profil vertical de la route (distance / altitude), segments colorés par mode de
+/// propulsion (turbines, stato, scram, descente à q constant, procédures), Mach prévu, T/D,
+/// position de l'avion ; données de progression en bas.
+fn profile_view(f: &Fms, ac: &Aircraft, scr: Rect, brt: f32) {
+    let dim = |c: Color| Color::new(c.r * brt, c.g * brt, c.b * brt, c.a);
+    let rowh = scr.h / 14.0;
+    let g = Rect::new(scr.x + 44.0, scr.y + rowh * 1.9, scr.w - 56.0, rowh * 8.6);
+    let Some(p) = f.fpln.as_ref().or(f.temp.as_ref()) else {
+        txt_c("PAS DE ROUTE : MSN > OFP OU PLAN DARKSTAR", scr.x + scr.w / 2.0, scr.y + scr.h / 2.0, 13.0, dim(AMB_M));
+        return;
+    };
+    if p.wpts.len() < 2 {
+        return;
+    }
+    // Distances cumulées et altitude max
+    let mut dist = vec![0.0f64];
+    for w in p.wpts.windows(2) {
+        let d = dist.last().copied().unwrap_or(0.0) + dist_brg(w[0].lat, w[0].lon, w[1].lat, w[1].lon).0;
+        dist.push(d);
+    }
+    let total = dist.last().copied().unwrap_or(1.0).max(1.0);
+    let amax = p.wpts.iter().map(|w| w.alt_ft).fold(ac.alt / FT, f64::max).max(10_000.0) * 1.1;
+    let px = |d: f64| g.x + (d / total) as f32 * g.w;
+    let py = |a: f64| g.y + g.h - (a / amax) as f32 * g.h;
+    // Grille : niveaux et distances
+    for k in 0..=4 {
+        let a = amax / 4.0 * k as f64;
+        let y = py(a);
+        draw_line(g.x, y, g.x + g.w, y, 1.0, Color::new(1.0, 1.0, 1.0, 0.06));
+        txt_r(&format!("FL{:.0}", a / 100.0), g.x - 4.0, y + 4.0, 9.0, dim(LBL_M));
+    }
+    let step = [100.0, 250.0, 500.0, 1000.0, 2000.0].into_iter().find(|s| total / NM / s <= 6.0).unwrap_or(4000.0);
+    let mut d = 0.0;
+    while d <= total / NM {
+        let x = px(d * NM);
+        draw_line(x, g.y, x, g.y + g.h, 1.0, Color::new(1.0, 1.0, 1.0, 0.05));
+        txt_c(&format!("{d:.0}"), x, g.y + g.h + 12.0, 9.0, dim(LBL_M));
+        d += step;
+    }
+    txt_r("NM", g.x + g.w, g.y + g.h + 24.0, 9.0, dim(LBL_M));
+    // Segments colorés par phase
+    let col = |ph: &str| {
+        if ph.contains("SCRAM") {
+            MAG_M
+        } else if ph.contains("RAM") {
+            CYAN_M
+        } else if ph.contains("DES") {
+            GREEN_M
+        } else if ph.contains("TURB") {
+            WHITE_M
+        } else {
+            LBL_M
+        }
+    };
+    let mut last_ph = String::new();
+    for i in 1..p.wpts.len() {
+        let (a, b) = (&p.wpts[i - 1], &p.wpts[i]);
+        let c = col(a.phase);
+        draw_line(px(dist[i - 1]), py(a.alt_ft), px(dist[i]), py(b.alt_ft), 2.5, dim(c));
+        if a.phase != last_ph && px(dist[i]) - px(dist[i - 1]) > 30.0 {
+            last_ph = a.phase.to_string();
+            let mx = (px(dist[i - 1]) + px(dist[i])) / 2.0;
+            let my = (py(a.alt_ft) + py(b.alt_ft)) / 2.0 - 8.0;
+            txt_c(&format!("{} M{:.1}", a.phase, a.mach.max(b.mach)), mx, my, 9.0, dim(c));
+        }
+    }
+    // T/D
+    let tod_d = total - p.tod();
+    if tod_d > 0.0 {
+        let x = px(tod_d);
+        draw_line(x, g.y, x, g.y + g.h, 1.0, dim(Color::new(0.4, 0.95, 0.5, 0.5)));
+        txt_c("T/D", x, g.y - 3.0, 10.0, dim(GREEN_M));
+    }
+    // Avion (route active)
+    let rem = p.remaining(ac.lat, ac.lon);
+    if f.fpln.is_some() {
+        let flown = (total - rem).clamp(0.0, total);
+        let (x, y) = (px(flown), py(ac.alt / FT));
+        draw_triangle(vec2(x + 7.0, y), vec2(x - 5.0, y - 5.0), vec2(x - 5.0, y + 5.0), dim(AMB_M));
+        draw_line(x, y + 6.0, x, g.y + g.h, 1.0, dim(Color::new(1.0, 0.68, 0.15, 0.35)));
+    }
+    // Progression
+    let gs = ac.ground_speed().max(50.0);
+    let y1 = scr.y + rowh * 12.6;
+    let tod_left = rem - p.tod();
+    txt(&format!("M{:.2}  FL{:.0}  {}", ac.d.mach, ac.alt / FT / 100.0, ac.mode_name()), scr.x + 6.0, y1, 12.0, dim(GREEN_M));
+    let right = if f.fpln.is_none() {
+        "ROUTE PROVISOIRE".to_string()
+    } else if tod_left > 0.0 {
+        format!("T/D {:.0}NM  {} {:.0}NM {}", tod_left / NM, p.dest, rem / NM, fmt_eta(rem / gs))
+    } else {
+        format!("DESCENTE  {} {:.0}NM {}", p.dest, rem / NM, fmt_eta(rem / gs))
+    };
+    txt_r(&right, scr.x + scr.w - 6.0, y1, 12.0, dim(WHITE_M));
 }
 
 /// Clavier du DMC dans `kb` : pavé numérique, fonctions (défilement, DEST, CLR, SP) et lettres.
@@ -2264,14 +2411,14 @@ pub fn draw_mcdu(f: &Fms, ac: &Aircraft, r: Rect, time: f64) -> Option<McduKey> 
     }
     txt_r("BRT", b.x + b.w - 70.0, b.y + 16.0, 9.0, LBL_M);
     // Onglets de pages (tactiles)
-    let tabs: [(&str, Page); 8] = [("MSN", Page::Init), ("FPLN", Page::Fpln), ("DIR", Page::Dir), ("PROG", Page::Prog), ("PERF", Page::Perf), ("FUEL", Page::Fuel), ("NAV", Page::RadNav), ("DATA", Page::Data)];
+    let tabs: [(&str, Page); 8] = [("MSN", Page::Init), ("ROUTE", Page::Fpln), ("DIR", Page::Dir), ("PROFIL", Page::Profil), ("ENERGIE", Page::Fuel), ("NAV", Page::RadNav), ("PERF", Page::Perf), ("DATA", Page::Data)];
     let ty = b.y + 26.0;
     let th = (b.h * 0.045).clamp(22.0, 34.0);
     let tfs = (th * 0.5).clamp(11.0, 15.0);
     let tw = (b.w - 28.0 - 7.0 * 4.0) / tabs.len() as f32;
     for (k, (l, pg)) in tabs.iter().enumerate() {
         let tr = Rect::new(b.x + 14.0 + k as f32 * (tw + 4.0), ty, tw, th);
-        let on = f.page == *pg || (*pg == Page::Fpln && matches!(f.page, Page::Dep | Page::Arr));
+        let on = f.page == *pg || (*pg == Page::Fpln && matches!(f.page, Page::Dep | Page::Arr)) || (*pg == Page::Profil && f.page == Page::Prog);
         let hov = hovered(tr);
         chamfer(tr, 4.0, if on { Color::new(0.22, 0.235, 0.26, 1.0) } else if hov { Color::new(0.17, 0.18, 0.2, 1.0) } else { Color::new(0.14, 0.145, 0.16, 1.0) });
         txt_c(l, tr.x + tr.w / 2.0, tr.y + th / 2.0 + tfs * 0.36, tfs, if on { WHITE_M } else { LBL_M });
@@ -2303,6 +2450,9 @@ pub fn draw_mcdu(f: &Fms, ac: &Aircraft, r: Rect, time: f64) -> Option<McduKey> 
         out = Some(McduKey::Focus);
     }
     proc_preview(f, scr, brt);
+    if f.page == Page::Profil {
+        profile_view(f, ac, scr, brt);
+    }
     let dim = |c: Color| Color::new(c.r * brt, c.g * brt, c.b * brt, c.a);
     let rowh = scr.h / 14.0;
     let fs = (rowh * 1.0).min(if land { 24.0 } else { 20.0 });
@@ -2323,7 +2473,8 @@ pub fn draw_mcdu(f: &Fms, ac: &Aircraft, r: Rect, time: f64) -> Option<McduKey> 
         txt_c(&dat.c, cx_col, yd, fs * 0.8, dim(dat.cc));
         txt_r(&dat.r, scr.x + scr.w - 4.0, yd, fs, dim(dat.rc));
         // Touches de ligne intégrées au bord de l'écran : chevron, surbrillance au survol
-        for left in [true, false] {
+        // (absentes sur la page graphique PROFIL)
+        for left in [true, false].into_iter().filter(|_| f.page != Page::Profil) {
             let kx = if left { scr_out.x + 2.0 } else { scr_out.x + scr_out.w - sk - 2.0 };
             let kr = Rect::new(kx, yd - rowh * 0.8, sk, rowh * 1.1);
             let hov = hovered(kr);

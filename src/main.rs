@@ -2024,6 +2024,29 @@ impl Game {
                     reply = Ok("VERSION DEVELOPPEUR — FENETRES DEPLACABLES, CONSOLE DANS LA BARRE (MENU CONSOLE)".into());
                 }
             }
+            // Calculateur de mission : DMC MSN / ROUTE / DIR / PROFIL / ENERGIE / NAV / PERF / DATA
+            "DMC" => {
+                use fms::Page;
+                let pg = match arg(1) {
+                    "MSN" | "MISSION" | "INIT" => Some(Page::Init),
+                    "ROUTE" | "FPLN" => Some(Page::Fpln),
+                    "DIR" => Some(Page::Dir),
+                    "PROFIL" | "PROG" => Some(Page::Profil),
+                    "ENERGIE" | "FUEL" => Some(Page::Fuel),
+                    "NAV" => Some(Page::RadNav),
+                    "PERF" => Some(Page::Perf),
+                    "DATA" => Some(Page::Data),
+                    _ => None,
+                };
+                reply = match pg {
+                    Some(p) => {
+                        self.fms.page = p;
+                        self.tab = gcs::Tab::Mcdu;
+                        Ok(format!("DMC : PAGE {}", arg(1)))
+                    }
+                    None => Err("DMC MSN / ROUTE / DIR / PROFIL / ENERGIE / NAV / PERF / DATA".into()),
+                };
+            }
             // Centrale inertielle : INS OFF / ATT / ALIGN / NAV
             "INS" | "IRS" => {
                 use ins::InsMode;

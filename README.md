@@ -962,3 +962,10 @@ Le SR-72 est un avion de reconnaissance : sa charge utile est simulée.
   arrondis, titres de panneaux simples avec filet ; onglets, barre du haut, écran à pages, page
   COMMANDES harmonisés ; version dev : fond blanc conservé, menus et listes déroulantes modernisés.
   Couleurs d'instruments (vert / cyan / ambre / magenta) inchangées.
+- v1.74.0 : DMC refait dans l'esprit Darkstar — menus MSN (mission), ROUTE, DIR, PROFIL, ENERGIE
+  (JP-7 / H2), NAV (avec l'état de l'INS), PERF (propulsion), DATA ; nouvelle page PROFIL graphique
+  (profil vertical de la route coloré par mode : turbines, stato, scram, descente à q constant ;
+  Mach prévus, T/D, position de l'avion, progression). Page MSN : OFP SimBrief en un clic — sans
+  route, importe le dernier OFP ; avec route DEP/DEST, ouvre la génération pré-remplie (indicatif
+  DKS, type de base B77W) et importe automatiquement le nouvel OFP dès sa publication ; bouton
+  GENERER retiré ; type affiché DKS (B77W en réalité pour SimBrief). Instruction DMC <PAGE>.
