@@ -987,3 +987,5 @@ Le SR-72 est un avion de reconnaissance : sa charge utile est simulée.
   d'entrée, tuyère et post-combustion, pastille STATO / SCRAM) sur le rendu en coupe réaliste
   (titane sombre, étages d'aubes, chambre, conduit stato / scram, volet animé, train de chocs, gorge
   variable, flammes, panache). La page séparée VUE EN COUPE est retirée (intégrée).
+- v1.76.2 : bloc moteur — libellés RPM et DOORS agrandis et lisibles même en petite fenêtre,
+  RPM placé au-dessus de sa valeur, FWD / AFT en double retirés.

@@ -162,9 +162,7 @@ pub fn engines(ac: &Aircraft, mon: &crate::health::ChamberMon, r: Rect, page: &m
         1 => crate::panels::draw_engines(ac, mon, scr, time),
         2 => throttle_page(ac, scr),
         _ => {
-            txt("FWD", scr.x + 6.0, scr.y + 12.0, 9.0, LBL);
-            txt_r("AFT", scr.x + scr.w - 6.0, scr.y + 12.0, 9.0, LBL);
-            crate::panels::draw_nacelles(ac, Rect::new(scr.x + 4.0, scr.y + 16.0, scr.w - 8.0, scr.h - 20.0), time);
+            crate::panels::draw_nacelles(ac, Rect::new(scr.x + 4.0, scr.y + 4.0, scr.w - 8.0, scr.h - 8.0), time);
         }
     }
     // Un seul bouton : page suivante (nom de la page, repères de position)

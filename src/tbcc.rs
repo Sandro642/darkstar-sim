@@ -570,7 +570,9 @@ fn draw_ex(r: Rect, side: &str, ac: &Aircraft, i: usize, egt_off: f64, time: f64
         // RPM (grand), sur la turbine
         let rpm = n2 * 104.0;
         let rc = if rpm > 106.0 { RED } else if rpm > 102.0 { AMBER } else { WHITE };
-        txt_c("RPM", m.p(590.0, 0.0).x, m.p(0.0, 106.0).y, ffs * 0.42, label);
+        let lab_sz = (ffs * 0.6).max(10.0);
+        let rpm_y = (m.p(0.0, 142.0).y - ffs * 1.05 - 3.0).min(m.p(0.0, 104.0).y);
+        txt_c("RPM", m.p(590.0, 0.0).x, rpm_y, lab_sz, Color::new(0.8, 0.82, 0.85, 1.0));
         let rs = format!("{rpm:.0}%");
         txt_c(&rs, m.p(590.0, 0.0).x + 1.0, m.p(0.0, 142.0).y + 1.0, ffs * 1.05, Color::new(0.0, 0.0, 0.0, 0.7));
         txt_c(&rs, m.p(590.0, 0.0).x, m.p(0.0, 142.0).y, ffs * 1.05, rc);
@@ -584,7 +586,7 @@ fn draw_ex(r: Rect, side: &str, ac: &Aircraft, i: usize, egt_off: f64, time: f64
         deg(&format!("{:.0}", f_of(cit_show)), m.p(400.0, 0.0).x, m.p(0.0, 212.0).y, ffs * 0.85, cc, "F");
         // DOORS
         let dcol = if ac.fails.has(crate::systems::Fail::InletJam) { RED } else if moving { AMBER } else { WHITE };
-        txt("DOORS", m.p(6.0, 0.0).x, m.p(0.0, 182.0).y, ffs * 0.42, label);
+        txt("DOORS", m.p(6.0, 0.0).x, m.p(0.0, 180.0).y, (ffs * 0.6).max(10.0), Color::new(0.8, 0.82, 0.85, 1.0));
         deg(&format!("{:02.0}", d * 90.0), m.p(8.0, 0.0).x, m.p(0.0, 222.0).y, ffs * 1.0, dcol, "");
         // Pastille de mode dans le conduit
         let pill = if scram_lit {
