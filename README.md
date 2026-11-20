@@ -957,3 +957,8 @@ Le SR-72 est un avion de reconnaissance : sa charge utile est simulée.
   (version dev) : écran du DMC à gauche sur toute la hauteur, clavier à droite (numérique + fonctions
   au-dessus, lettres en dessous) ; portrait étiré sur toute la hauteur ailleurs ; touches, légendes et
   onglets à l'échelle de la place disponible.
+- v1.73.0 : style moderne et sobre sur toute l'interface (comme le DMC) — gris neutres au lieu des
+  bleus nuit, accent unique bleu discret (onglet actif, sélection, prochaine action), coins moins
+  arrondis, titres de panneaux simples avec filet ; onglets, barre du haut, écran à pages, page
+  COMMANDES harmonisés ; version dev : fond blanc conservé, menus et listes déroulantes modernisés.
+  Couleurs d'instruments (vert / cyan / ambre / magenta) inchangées.

@@ -367,7 +367,7 @@ impl DevUi {
         let r = self.rect_of(&self.wins[i]);
         draw_rectangle(r.x + 3.0, r.y + 3.0, r.w, r.h, Color::new(0.0, 0.0, 0.0, 0.12));
         draw_rectangle(r.x, r.y, r.w, r.h, Color::new(0.05, 0.06, 0.07, 1.0));
-        draw_rectangle(r.x, r.y, r.w, 20.0, Color::new(0.82, 0.84, 0.87, 1.0));
+        draw_rectangle(r.x, r.y, r.w, 20.0, Color::new(0.88, 0.89, 0.91, 1.0));
         draw_rectangle_lines(r.x, r.y, r.w, r.h, 1.0, Color::new(0.55, 0.58, 0.62, 1.0));
         txt(win_name(self.wins[i].kind), r.x + 8.0, r.y + 14.0, 11.0, Color::new(0.1, 0.12, 0.15, 1.0));
         let x = Rect::new(r.x + r.w - 22.0, r.y + 2.0, 18.0, 16.0);
@@ -394,8 +394,11 @@ impl DevUi {
         for (k, (p, l)) in PAGES.iter().enumerate() {
             let b = Rect::new(r.x + k as f32 * bw + 1.0, r.y, bw - 2.0, bh);
             let on = self.page == *p || (*p == Page::Systemes && matches!(self.page, Page::Armement | Page::DonneesMoteur));
-            draw_rectangle(b.x, b.y, b.w, b.h, if on { Color::new(0.1, 0.32, 0.45, 1.0) } else if hovered(b) { Color::new(0.14, 0.16, 0.19, 1.0) } else { Color::new(0.09, 0.1, 0.12, 1.0) });
-            txt_c(l, b.x + b.w / 2.0, b.y + 15.0, 10.0, if on { WHITE } else { Color::new(0.7, 0.74, 0.78, 1.0) });
+            draw_rectangle(b.x, b.y, b.w, b.h, if on { Color::new(0.2, 0.21, 0.235, 1.0) } else if hovered(b) { Color::new(0.16, 0.17, 0.19, 1.0) } else { Color::new(0.12, 0.125, 0.14, 1.0) });
+            if on {
+                draw_rectangle(b.x + 6.0, b.y + b.h - 2.0, b.w - 12.0, 2.0, ACCENT);
+            }
+            txt_c(l, b.x + b.w / 2.0, b.y + 15.0, 10.0, if on { WHITE } else { Color::new(0.7, 0.72, 0.75, 1.0) });
             if self.menu.is_none() && clicked(b) {
                 self.page = *p;
             }
@@ -407,7 +410,7 @@ impl DevUi {
             for (k, (p, l)) in subs.iter().enumerate() {
                 let b = Rect::new(r.x + 1.0 + k as f32 * (sw + 2.0), y, sw, 18.0);
                 let on = self.page == *p;
-                draw_rectangle(b.x, b.y, b.w, b.h, if on { Color::new(0.12, 0.38, 0.30, 1.0) } else { Color::new(0.09, 0.1, 0.12, 1.0) });
+                draw_rectangle(b.x, b.y, b.w, b.h, if on { Color::new(0.2, 0.21, 0.235, 1.0) } else { Color::new(0.12, 0.125, 0.14, 1.0) });
                 txt_c(l, b.x + b.w / 2.0, b.y + 13.0, 9.0, if on { WHITE } else { Color::new(0.7, 0.74, 0.78, 1.0) });
                 if self.menu.is_none() && clicked(b) {
                     self.page = *p;
@@ -559,7 +562,8 @@ impl DevUi {
         draw_rectangle(bar.x, bar.y, bar.w, bar.h, Color::new(1.0, 1.0, 1.0, 1.0));
         draw_line(0.0, BAR_H, sw, BAR_H, 1.0, Color::new(0.75, 0.77, 0.8, 1.0));
         let dark = Color::new(0.1, 0.12, 0.15, 1.0);
-        txt("DARKSTAR  DEV", 12.0, 20.0, 14.0, Color::new(0.05, 0.3, 0.5, 1.0));
+        txt("DARKSTAR", 12.0, 20.0, 14.0, dark);
+        txt("DEV", 12.0 + txt_w("DARKSTAR", 14.0) + 8.0, 20.0, 11.0, Color::new(0.35, 0.5, 0.75, 1.0));
         let menus = ["FENETRES", "CONSOLE", "DISPOSITION", "SIMULATEUR"];
         let mut x = 150.0;
         let mut rects = Vec::new();
@@ -567,7 +571,7 @@ impl DevUi {
             let w = txt_w(m, 12.0) + 24.0;
             let b = Rect::new(x, 3.0, w, BAR_H - 6.0);
             let on = self.menu == Some(k) || (k == 1 && console.is_some());
-            draw_rectangle(b.x, b.y, b.w, b.h, if on { Color::new(0.85, 0.9, 0.96, 1.0) } else if hovered(b) { Color::new(0.93, 0.94, 0.96, 1.0) } else { WHITE });
+            rrect(b, 4.0, if on { Color::new(0.86, 0.88, 0.91, 1.0) } else if hovered(b) { Color::new(0.92, 0.93, 0.95, 1.0) } else { WHITE });
             txt_c(m, b.x + b.w / 2.0, b.y + 16.0, 12.0, dark);
             if clicked(b) {
                 if k == 1 {
@@ -591,14 +595,14 @@ impl DevUi {
             };
             let w = 240.0;
             let r = Rect::new(b.x, BAR_H, w, items.len() as f32 * 24.0 + 8.0);
-            draw_rectangle(r.x + 3.0, r.y + 3.0, r.w, r.h, Color::new(0.0, 0.0, 0.0, 0.12));
-            draw_rectangle(r.x, r.y, r.w, r.h, WHITE);
-            draw_rectangle_lines(r.x, r.y, r.w, r.h, 1.0, Color::new(0.75, 0.77, 0.8, 1.0));
+            rrect(Rect::new(r.x + 2.0, r.y + 4.0, r.w, r.h), 6.0, Color::new(0.0, 0.0, 0.0, 0.10));
+            rrect(r, 6.0, WHITE);
+            rrect_lines(r, 6.0, 1.0, Color::new(0.82, 0.84, 0.87, 1.0));
             let mut chosen = None;
             for (i, (l, on)) in items.iter().enumerate() {
                 let it = Rect::new(r.x + 4.0, r.y + 4.0 + i as f32 * 24.0, r.w - 8.0, 22.0);
                 if hovered(it) {
-                    draw_rectangle(it.x, it.y, it.w, it.h, Color::new(0.9, 0.94, 0.98, 1.0));
+                    rrect(it, 4.0, Color::new(0.92, 0.93, 0.95, 1.0));
                 }
                 if k == 0 {
                     draw_rectangle_lines(it.x + 6.0, it.y + 5.0, 12.0, 12.0, 1.0, dark);

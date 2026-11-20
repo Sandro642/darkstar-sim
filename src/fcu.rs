@@ -404,13 +404,13 @@ fn fit(s: &str, size: f32, w: f32) -> String {
 /// Carte à interrupteur ; vrai si cliquée.
 fn draw_card(r: Rect, k: &Card, compact: bool) -> bool {
     let hov = hovered(r) && !matches!(k.act, Do::Nothing);
-    let base = if hov { Color::new(0.13, 0.15, 0.18, 1.0) } else { Color::new(0.075, 0.085, 0.10, 1.0) };
+    let base = if hov { Color::new(0.17, 0.175, 0.19, 1.0) } else { Color::new(0.12, 0.125, 0.135, 1.0) };
     rrect(r, 8.0, base);
     if let Some(l) = k.lit {
         // Halo léger de la couleur d'état
         rrect(Rect::new(r.x, r.y, r.w, r.h), 8.0, Color::new(l.r, l.g, l.b, 0.07));
     }
-    rrect_lines(r, 8.0, 1.0, k.lit.map(|l| Color::new(l.r, l.g, l.b, 0.8)).unwrap_or(Color::new(0.22, 0.25, 0.29, 1.0)));
+    rrect_lines(r, 6.0, 1.0, k.lit.map(|l| Color::new(l.r, l.g, l.b, 0.6)).unwrap_or(Color::new(0.2, 0.21, 0.23, 1.0)));
     let pad = 12.0;
     let mut right = r.x + r.w - pad;
     // Interrupteur (pilule)
@@ -481,8 +481,8 @@ pub fn draw(ac: &Aircraft, cx: &Ctx, r: Rect, only: Option<usize>) -> Option<Act
         let hb = Rect::new(x0, y, w0, hh);
         let pulse = (0.5 + 0.5 * (get_time() * 3.0).sin()) as f32;
         let has = act.is_some();
-        rrect(hb, 10.0, Color::new(0.05, 0.13, 0.18, 1.0));
-        rrect_lines(hb, 10.0, if has { 1.0 + pulse } else { 1.0 }, if has { Color::new(0.3, 0.78, 1.0, 0.5 + 0.5 * pulse) } else { PANEL_BORDER });
+        rrect(hb, 6.0, Color::new(0.13, 0.135, 0.15, 1.0));
+        rrect_lines(hb, 10.0, if has { 1.0 + pulse } else { 1.0 }, if has { Color::new(ACCENT.r, ACCENT.g, ACCENT.b, 0.4 + 0.5 * pulse) } else { PANEL_BORDER });
         let bw = if has { if hh < 50.0 { 76.0 } else { 96.0 } } else { 0.0 };
         if hh < 50.0 {
             txt("SUIVANT", hb.x + 12.0, hb.y + 15.0, 9.0, ACCENT);
@@ -497,7 +497,7 @@ pub fn draw(ac: &Aircraft, cx: &Ctx, r: Rect, only: Option<usize>) -> Option<Act
         if let Some(a) = act {
             let bh = (hh - 12.0).min(32.0);
             let b = Rect::new(hb.x + hb.w - bw - 8.0, hb.y + hh / 2.0 - bh / 2.0, bw, bh);
-            rrect(b, 8.0, if hovered(b) { Color::new(0.35, 0.82, 1.0, 1.0) } else { Color::new(0.22, 0.62, 0.85, 1.0) });
+            rrect(b, 5.0, if hovered(b) { Color::new(0.45, 0.7, 1.0, 1.0) } else { ACCENT });
             txt_c("EXECUTER", b.x + b.w / 2.0, b.y + b.h / 2.0 + 4.0, if bw < 90.0 { 10.0 } else { 12.0 }, BLACK);
             if clicked(b) {
                 out = Some(a);
@@ -516,7 +516,7 @@ pub fn draw(ac: &Aircraft, cx: &Ctx, r: Rect, only: Option<usize>) -> Option<Act
                 let b = Rect::new(x0 + k as f32 * bw + 2.0, y, bw - 4.0, if r.h < 330.0 { 28.0 } else { 40.0 });
                 let small = b.h < 34.0;
                 let sel = k == tab;
-                rrect(b, 6.0, if sel { Color::new(0.08, 0.2, 0.28, 1.0) } else if hovered(b) { Color::new(0.1, 0.12, 0.15, 1.0) } else { Color::new(0.06, 0.07, 0.09, 1.0) });
+                rrect(b, 6.0, if sel { Color::new(0.2, 0.21, 0.235, 1.0) } else if hovered(b) { Color::new(0.16, 0.17, 0.19, 1.0) } else { Color::new(0.12, 0.125, 0.14, 1.0) });
                 if small {
                     icon(k, b.x + 14.0, b.y + b.h / 2.0, 14.0, if sel { ACCENT } else { DIM });
                     txt_c(short, b.x + b.w / 2.0 + 8.0, b.y + b.h / 2.0 + 4.0, 9.0, if sel { WHITE } else { DIM });
@@ -536,7 +536,7 @@ pub fn draw(ac: &Aircraft, cx: &Ctx, r: Rect, only: Option<usize>) -> Option<Act
             for (k, (name, _)) in TABS.iter().enumerate() {
                 let b = Rect::new(x0, y + k as f32 * (ih + 6.0), rw, ih);
                 let sel = k == tab;
-                rrect(b, 8.0, if sel { Color::new(0.08, 0.2, 0.28, 1.0) } else if hovered(b) { Color::new(0.1, 0.12, 0.15, 1.0) } else { Color::new(0.06, 0.07, 0.09, 1.0) });
+                rrect(b, 8.0, if sel { Color::new(0.2, 0.21, 0.235, 1.0) } else if hovered(b) { Color::new(0.16, 0.17, 0.19, 1.0) } else { Color::new(0.12, 0.125, 0.14, 1.0) });
                 if sel {
                     draw_rectangle(b.x, b.y + 8.0, 3.0, b.h - 16.0, ACCENT);
                 }

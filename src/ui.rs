@@ -7,7 +7,7 @@ pub const GREEN_S: Color = Color::new(0.2, 1.0, 0.35, 1.0);
 pub const CYAN_S: Color = Color::new(0.2, 0.9, 1.0, 1.0);
 pub const MAGENTA_S: Color = Color::new(1.0, 0.35, 1.0, 1.0);
 pub const DIM: Color = Color::new(0.6, 0.65, 0.7, 1.0);
-pub const PANEL_BG: Color = Color::new(0.058, 0.07, 0.088, 1.0);
+pub const PANEL_BG: Color = Color::new(0.085, 0.088, 0.096, 1.0);
 
 /// Taille unique de rastérisation : macroquad re-téléverse tout l'atlas de glyphes à chaque
 /// nouvelle combinaison caractère/taille, ce qui sature la mémoire GPU (GL sur Metal).
@@ -72,9 +72,10 @@ pub fn scissor(r: Option<Rect>) {
     gl.quad_gl.scissor(r.map(|r| ((r.x * dpi) as i32, (r.y * dpi) as i32, (r.w * dpi) as i32, (r.h * dpi) as i32)));
 }
 
-pub const BG: Color = Color::new(0.035, 0.043, 0.055, 1.0);
-pub const PANEL_BORDER: Color = Color::new(0.16, 0.19, 0.23, 1.0);
-pub const ACCENT: Color = Color::new(0.30, 0.78, 1.0, 1.0);
+pub const BG: Color = Color::new(0.05, 0.052, 0.058, 1.0);
+pub const PANEL_BORDER: Color = Color::new(0.17, 0.18, 0.2, 1.0);
+/// Accent unique de l'interface (sélection, onglet actif) : bleu sobre
+pub const ACCENT: Color = Color::new(0.35, 0.62, 0.95, 1.0);
 
 /// Rectangle à coins arrondis (plein).
 /// Étiquette d'alerte de l'horizon (style unique) : bloc de couleur avec la catégorie en noir
@@ -132,11 +133,12 @@ pub fn rrect_lines(r: Rect, rad: f32, th: f32, c: Color) {
 
 /// Panneau moderne : fond sombre arrondi, titre en petites capitales avec liseré d'accent.
 pub fn panel(r: Rect, title: &str) {
-    rrect(r, 8.0, PANEL_BG);
-    rrect_lines(r, 8.0, 1.0, PANEL_BORDER);
+    rrect(r, 6.0, PANEL_BG);
+    rrect_lines(r, 6.0, 1.0, PANEL_BORDER);
     if !title.is_empty() {
-        draw_rectangle(r.x + 10.0, r.y + 8.0, 3.0, 13.0, ACCENT);
-        txt(title, r.x + 18.0, r.y + 19.0, 15.0, Color::new(0.78, 0.84, 0.9, 1.0));
+        // Titre sobre : texte clair et filet discret
+        txt(title, r.x + 12.0, r.y + 19.0, 14.0, Color::new(0.88, 0.89, 0.91, 1.0));
+        draw_line(r.x + 10.0, r.y + 25.0, r.x + r.w - 10.0, r.y + 25.0, 1.0, Color::new(1.0, 1.0, 1.0, 0.06));
     }
 }
 

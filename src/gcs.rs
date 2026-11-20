@@ -27,7 +27,7 @@ fn chip(x: f32, y: f32, label: &str, value: &str, vc: Color) -> f32 {
     let lw = txt_w(label, 12.0);
     let vw = txt_w(value, 16.0);
     let w = lw + vw + 22.0;
-    rrect(Rect::new(x, y, w, 22.0), 6.0, Color::new(0.09, 0.11, 0.14, 1.0));
+    rrect(Rect::new(x, y, w, 22.0), 4.0, Color::new(0.13, 0.135, 0.15, 1.0));
     txt(label, x + 8.0, y + 15.0, 12.0, DIM);
     txt(value, x + lw + 14.0, y + 16.0, 16.0, vc);
     w
@@ -35,7 +35,7 @@ fn chip(x: f32, y: f32, label: &str, value: &str, vc: Color) -> f32 {
 
 pub fn draw_topbar(r: Rect, t: &TopBar) -> TopActions {
     let mut act = TopActions::default();
-    draw_rectangle(r.x, r.y, r.w, r.h, Color::new(0.05, 0.06, 0.075, 1.0));
+    draw_rectangle(r.x, r.y, r.w, r.h, Color::new(0.075, 0.078, 0.085, 1.0));
     draw_line(r.x, r.y + r.h, r.x + r.w, r.y + r.h, 1.0, PANEL_BORDER);
     let y = r.y + (r.h - 22.0) / 2.0;
     draw_rectangle(r.x + 12.0, y + 3.0, 4.0, 16.0, ACCENT);
@@ -59,12 +59,12 @@ pub fn draw_topbar(r: Rect, t: &TopBar) -> TopActions {
     // Droite : alarmes maîtres, son, aide
     let mut rx = r.x + r.w - 12.0;
     let help = Rect::new(rx - 54.0, y, 54.0, 22.0);
-    rrect(help, 6.0, Color::new(0.09, 0.11, 0.14, 1.0));
+    rrect(help, 4.0, Color::new(0.13, 0.135, 0.15, 1.0));
     txt_c("AIDE", help.x + help.w / 2.0, y + 16.0, 13.0, DIM);
     act.help = clicked(help);
     rx -= 62.0;
     let snd = Rect::new(rx - 70.0, y, 70.0, 22.0);
-    rrect(snd, 6.0, Color::new(0.09, 0.11, 0.14, 1.0));
+    rrect(snd, 4.0, Color::new(0.13, 0.135, 0.15, 1.0));
     txt_c(if t.muted { "SON OFF" } else { "SON ON" }, snd.x + snd.w / 2.0, y + 16.0, 13.0, if t.muted { AMBER } else { DIM });
     act.mute = clicked(snd);
     act
@@ -121,10 +121,10 @@ pub fn draw_tabs(r: Rect, cur: Tab, alert: &[Tab]) -> Option<Tab> {
     for (i, (tab, label)) in TABS.iter().enumerate() {
         let tr = Rect::new(r.x + (i % per_row) as f32 * w + 2.0, r.y + (i / per_row) as f32 * rh + 1.0, w - 4.0, rh - 2.0);
         let active = *tab == cur;
-        let bg = if active { Color::new(0.10, 0.16, 0.22, 1.0) } else if hovered(tr) { Color::new(0.08, 0.10, 0.13, 1.0) } else { Color::new(0.06, 0.075, 0.095, 1.0) };
-        rrect(tr, 6.0, bg);
+        let bg = if active { Color::new(0.2, 0.21, 0.235, 1.0) } else if hovered(tr) { Color::new(0.16, 0.17, 0.19, 1.0) } else { Color::new(0.12, 0.125, 0.14, 1.0) };
+        rrect(tr, 4.0, bg);
         if active {
-            draw_rectangle(tr.x + 8.0, tr.y + tr.h - 3.0, tr.w - 16.0, 3.0, ACCENT);
+            draw_rectangle(tr.x + 8.0, tr.y + tr.h - 2.0, tr.w - 16.0, 2.0, ACCENT);
         }
         let c = if alert.contains(tab) { AMBER } else if active { WHITE } else { DIM };
         let key = if i < 7 { format!("{} ", (i + 4) % 10) } else { String::new() };
