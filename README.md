@@ -1008,3 +1008,7 @@ Le SR-72 est un avion de reconnaissance : sa charge utile est simulée.
   fixe pour une vitesse de tangage donnée ; vol d'essai LOW SPEED : autorité de tangage 16 °/s. La
   loi LOW SPEED atteint désormais sa limite (90 % de la rupture calculée) : ~5 g à 82 t, ~6,3 g à
   30 t dès 350-450 KEAS (avant : plafond ~4,2-5,2 g par l'autorité de tangage).
+- v1.77.4 : Auto-GCAS — aérofreins sortis et manette réduite en piqué rapide (> 380 KEAS, pente
+  < -8°) pour réduire le rayon de ressource, rentrés quand la pente remonte, sous 300 KEAS, à la
+  fin de la récupération ou si l'Auto-GCAS est coupé (la récupération survitesse les utilisait
+  déjà). Split-S du 15/11 : passage à 2430 ft du sol au lieu de 920 ft.

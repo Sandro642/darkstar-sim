@@ -238,6 +238,8 @@ pub struct Aircraft {
     pub gcas_on: bool,
     /// Récupération en cours ; `gcas_ovr` : protections FCS dépassées pour sauver l'avion
     pub gcas_active: bool,
+    /// Aérofreins sortis par l'Auto-GCAS (rentrés à la fin de la récupération)
+    pub gcas_sb: bool,
     pub gcas_ovr: bool,
     /// Temps (s) avant déclenchement de la récupération (alerte chevrons sur l'horizon)
     pub gcas_t: f64,
@@ -457,6 +459,7 @@ impl Aircraft {
             air_data_ovrd: false,
             gcas_on: true,
             gcas_active: false,
+            gcas_sb: false,
             gcas_ovr: false,
             gcas_t: f64::INFINITY,
             gcas_clear_t: 0.0,
@@ -1332,6 +1335,10 @@ impl Aircraft {
             if self.gcas_active && !self.gcas_on {
                 self.gcas_active = false;
                 self.gcas_ovr = false;
+                if self.gcas_sb {
+                    self.speedbrake = false;
+                    self.gcas_sb = false;
+                }
                 self.msg(Level::Caution, "AUTO-GCAS OFF — RECUPERATION INTERROMPUE, PILOTE A VOUS");
             }
             if !self.gcas_active && !inhibit && m < 0.0 && self.gamma < -2f64.to_radians() {
@@ -1358,6 +1365,19 @@ impl Aircraft {
                     ((0.3 * a1g - alpha) * 3.0 + self.d.gamma_dot).clamp(-qmax_r * 2.0, qmax_r)
                 };
                 self.gcas_g_max = self.gcas_g_max.max(self.d.nz);
+                // Aérofreins et manette réduite en piqué rapide : le rayon de ressource diminue avec
+                // le carré de la vitesse (gain de hauteur) ; rentrés dès que la vitesse redevient
+                // utile (pente qui remonte ou vitesse modérée)
+                let fast = self.d.keas > 380.0 && self.gamma < -8f64.to_radians();
+                if fast && !self.speedbrake {
+                    self.speedbrake = true;
+                    self.gcas_sb = true;
+                    self.throttle = self.throttle.min(0.3);
+                    self.msg(Level::Info, "AUTO-GCAS : AEROFREINS SORTIS, MANETTE REDUITE (RAYON DE RESSOURCE)");
+                } else if self.gcas_sb && (self.gamma > 0.0 || self.d.keas < 300.0) {
+                    self.speedbrake = false;
+                    self.gcas_sb = false;
+                }
                 let (m_ok, _) = self.gcas_margin(self.nz_law_max() * 0.95);
                 if self.gamma > 3f64.to_radians() && m_ok > 150.0 {
                     self.gcas_clear_t += dt;
@@ -1366,6 +1386,10 @@ impl Aircraft {
                 }
                 if self.gcas_clear_t > 1.5 {
                     self.gcas_active = false;
+                    if self.gcas_sb {
+                        self.speedbrake = false;
+                        self.gcas_sb = false;
+                    }
                     self.msg(Level::Info, format!("AUTO-GCAS : RECUPERATION TERMINEE ({:.1} G MAX) — PILOTE A VOUS", self.gcas_g_max));
                     // Pas de panne automatique : les pannes ne sont injectées que par l'opérateur
                     self.gcas_ovr = false;
@@ -1374,6 +1398,10 @@ impl Aircraft {
         } else {
             self.gcas_active = false;
             self.gcas_ovr = false;
+            if self.gcas_sb {
+                self.speedbrake = false;
+                self.gcas_sb = false;
+            }
             self.gcas_t = f64::INFINITY;
         }
         // --- Auto recovery survitesse : prédiction de q sur 10 s (accélération et descente dans un
