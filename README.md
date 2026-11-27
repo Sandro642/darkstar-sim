@@ -1012,3 +1012,9 @@ Le SR-72 est un avion de reconnaissance : sa charge utile est simulée.
   < -8°) pour réduire le rayon de ressource, rentrés quand la pente remonte, sous 300 KEAS, à la
   fin de la récupération ou si l'Auto-GCAS est coupé (la récupération survitesse les utilisait
   déjà). Split-S du 15/11 : passage à 2430 ft du sol au lieu de 920 ft.
+- v1.78.0 : vol d'essai LOW SPEED — protections de rupture désactivées (facteur de charge et charge
+  des gouvernes libres jusqu'à la casse réelle : ~5,5 g plein, ~7 g léger), bandeau HUD « PROT
+  RUPTURE OFF » et alerte OVER-G au-delà de 90 % de la rupture. Casse structurale / des gouvernes :
+  la liaison et la télémesure restent, les FCS sont perdus (manche, AP, récupérations sans effet),
+  voilure endommagée, vrille divergente jusqu'à l'impact ; alarme FCS LOST, bandeau « FCS PERDUS —
+  AVION INCONTROLABLE — EJECTION ». Instruction RUPTURE (panne injectée).

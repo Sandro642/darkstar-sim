@@ -240,6 +240,10 @@ pub struct Aircraft {
     pub gcas_active: bool,
     /// Aérofreins sortis par l'Auto-GCAS (rentrés à la fin de la récupération)
     pub gcas_sb: bool,
+    /// Rupture structurale / des gouvernes : commandes de vol perdues (cause). La liaison et la
+    /// télémesure restent ; l'avion part en vrille jusqu'à l'impact (éjection possible).
+    pub fcs_lost: Option<String>,
+    lost_rates: (f64, f64),
     pub gcas_ovr: bool,
     /// Temps (s) avant déclenchement de la récupération (alerte chevrons sur l'horizon)
     pub gcas_t: f64,
@@ -460,6 +464,8 @@ impl Aircraft {
             gcas_on: true,
             gcas_active: false,
             gcas_sb: false,
+            fcs_lost: None,
+            lost_rates: (0.0, 0.0),
             gcas_ovr: false,
             gcas_t: f64::INFINITY,
             gcas_clear_t: 0.0,
@@ -897,6 +903,19 @@ impl Aircraft {
         n_break_at(self.mass(), self.skin_temp - 273.15)
     }
 
+    /// Rupture : commandes de vol perdues, voilure endommagée ; l'avion reste en liaison.
+    pub fn lose_fcs(&mut self, why: String) {
+        self.ap.on = false;
+        self.autoland = None;
+        self.gcas_active = false;
+        self.osr_active = false;
+        // Mouvement divergent : roulis dans le sens de l'inclinaison, nez qui tombe
+        let sgn = if self.phi >= 0.0 { 1.0 } else { -1.0 };
+        self.lost_rates = (-4f64.to_radians(), sgn * 38f64.to_radians());
+        self.msg(Level::Warning, format!("{why} — FCS PERDUS : AVION INCONTROLABLE, LIAISON MAINTENUE — EJECTION"));
+        self.fcs_lost = Some(why);
+    }
+
     /// Facteur de charge visé par les récupérations automatiques : 90 % de la rupture calculée.
     pub fn n_recovery(&self) -> f64 {
         (self.n_break().0 * RECOVERY_MARGIN).max(2.0)
@@ -1197,6 +1216,9 @@ impl Aircraft {
         let pmax = (35.0f64).to_radians() / (1.0 + mach / 6.0) * hyd;
         // Protections inhibées : FBW OVERRIDE ou panne FCS (loi directe)
         let prot_off = self.ovr_fbw || self.fails.has(Fail::FcsDirect);
+        // Vol d'essai LOW SPEED : protections de rupture désactivées (facteur de charge et charge
+        // des gouvernes libres jusqu'à la casse réelle) ; incidence et récupérations conservées
+        let test_free = self.test_mode && self.test_low_speed && mach < 1.5;
         // Limites de la loi FBW normale (facteur de charge) et part utilisée par l'AP
         let nz_law = self.nz_law_max();
         let perf = self.ap.max_perf && !matches!(self.ap.vert, VertMode::Gs | VertMode::Flare) && self.autoland.is_none();
@@ -1314,7 +1336,7 @@ impl Aircraft {
         }
         // --- Auto-GCAS : récupération automatique avant impact (prioritaire sur le manche et l'AP) ---
         if !self.on_ground {
-            let inhibit = !self.gcas_on || self.gear_down || self.autoland.is_some();
+            let inhibit = !self.gcas_on || self.gear_down || self.autoland.is_some() || self.fcs_lost.is_some();
             // Dernier instant : marge calculée avec la ressource que la récupération peut réellement
             // tirer (limite structurale calculée, montée en g comprise). Tant qu'une récupération
             // reste possible, le pilote garde la main.
@@ -1417,7 +1439,7 @@ impl Aircraft {
                 *c = (qi / 1000.0) as f32;
                 peak = peak.max(qi);
             }
-            let enabled = self.gcas_on && !self.on_ground && self.autoland.is_none();
+            let enabled = self.gcas_on && !self.on_ground && self.autoland.is_none() && self.fcs_lost.is_none();
             if enabled && !self.osr_active && peak > 0.97 * q_rupt && k > 0.0 {
                 self.osr_active = true;
                 self.osr_clear_t = 0.0;
@@ -1527,7 +1549,7 @@ impl Aircraft {
             fcs.defl_limit = if self.osr_active { (0.95 * systems::defl_destroy(q_kpa)).min(systems::DEFL_MAX) } else { systems::defl_limit_normal(q_kpa) };
             fcs.defl_cmd = d_cmd.min(systems::DEFL_MAX);
             if !self.on_ground {
-                if !prot_off || self.osr_active {
+                if (!prot_off && !test_free) || self.osr_active {
                     if d_cmd > fcs.defl_limit {
                         let k = fcs.defl_limit / d_cmd;
                         pitch_rate *= k;
@@ -1579,6 +1601,11 @@ impl Aircraft {
             self.throttle = (self.throttle + rate * dt).clamp(0.0, self.thr_max());
         }
 
+        // FCS perdus : plus aucune commande (manche, AP, récupérations) — vrille divergente
+        if self.fcs_lost.is_some() {
+            pitch_rate = self.lost_rates.0;
+            roll_rate = self.lost_rates.1;
+        }
         // --- Inertie de la cellule : les vitesses angulaires réelles suivent l'ordre de la loi
         // (2e ordre, amortissement 0,7). Pulsation selon la pression dynamique : réponse molle
         // à basse vitesse, vive à forte q (gouvernes efficaces), plus lente en hypersonique.
@@ -1637,7 +1664,7 @@ impl Aircraft {
             // loi normale : jamais au-delà de cette même marge
             let recov = self.gcas_active || self.gcas_ovr || self.osr_active;
             let n_rec = self.n_recovery();
-            let nmax = if recov { n_rec } else { self.nz_law_max().min(n_rec) };
+            let nmax = if recov { n_rec } else if test_free { self.n_break().0 * 1.4 } else { self.nz_law_max().min(n_rec) };
             // Incidence donnant nmax (portance linéaire), corrigée par le g mesuré : le modèle linéaire
             // sous-estime la portance réelle (effet de sol, rafales, composante de poussée) ; la
             // correction intégrale garantit que la récupération ne dépasse pas sa cible
@@ -1667,7 +1694,7 @@ impl Aircraft {
             fcs.alpha_limit_active = (unclamped - self.theta).abs() > 1e-6 && !prot_off;
             fcs.alpha_max = amax.to_degrees();
             fcs.alpha_min = amin.to_degrees();
-            fcs.nz_max = if prot_off { self.n_break().0 } else { nmax };
+            fcs.nz_max = if prot_off || (test_free && !recov) { self.n_break().0 } else { nmax };
             fcs.inlet_protect = self.eng.scram == ScramState::Lit && !prot_off;
             // Roulis libre sur 360° (tonneau) : angle ramené dans ]-180°, 180°]
             self.phi = wrap_pi(self.phi + roll_rate * dt);
@@ -1704,6 +1731,9 @@ impl Aircraft {
         // --- Aérodynamique ---
         let a_stall = 20f64.to_radians();
         let mut cl = if alpha <= a_stall { cla * alpha } else { cla * a_stall * (1.0 - (alpha - a_stall) * 2.0).max(0.3) };
+        if self.fcs_lost.is_some() {
+            cl *= 0.45;
+        }
         // Effet de sol (aile delta, envergure ~20 m) : coussin d'air sous une demi-envergure,
         // portance accrue et traînée induite réduite — l'avion « flotte » à l'arrondi
         let ge = if self.on_ground { 0.0 } else { (1.0 - agl.max(0.0) / 22.0).clamp(0.0, 1.0) };
@@ -1870,21 +1900,25 @@ impl Aircraft {
 
         // --- Contact sol / limites ---
         if !self.on_ground && self.alt <= elev {
+            if let Some(c) = self.fcs_lost.clone() {
+                self.crash(&format!("IMPACT — AVION INCONTROLABLE APRES {c}"));
+                return;
+            }
             self.touchdown(elev);
         }
         if q > Q_RUPTURE {
             self.crash("RUPTURE STRUCTURELLE — PRESSION DYNAMIQUE EXCESSIVE");
         }
         let (nb_pos, nb_neg) = self.n_break();
-        if self.d.nz > nb_pos || self.d.nz < nb_neg {
+        if self.fcs_lost.is_none() && (self.d.nz > nb_pos || self.d.nz < nb_neg) {
             let n = self.d.nz;
-            self.crash(&format!("RUPTURE STRUCTURELLE — FACTEUR DE CHARGE {n:+.1} G (LIMITE CALCULEE {nb_pos:+.1} / {nb_neg:+.1} G)"));
+            self.lose_fcs(format!("RUPTURE STRUCTURELLE — FACTEUR DE CHARGE {n:+.1} G (LIMITE CALCULEE {nb_pos:+.1} / {nb_neg:+.1} G)"));
         }
         if self.skin_temp - 273.15 > 1400.0 {
             self.crash("DÉFAILLANCE THERMIQUE DE LA STRUCTURE");
         }
-        if self.fcs_overload_t > 1.5 {
-            self.crash("DESTRUCTION DES GOUVERNES (FCS) — CHARGE AÉRODYNAMIQUE EXCESSIVE");
+        if self.fcs_lost.is_none() && self.fcs_overload_t > 1.5 {
+            self.lose_fcs("DESTRUCTION DES GOUVERNES (FCS) — CHARGE AÉRODYNAMIQUE EXCESSIVE".into());
         }
         // Paroi au-delà de la limite de rupture : compte à rebours (8 s) avant la rupture
         let over = (self.eng.ram == RamState::Lit && self.eng.ram_wall > systems::RAM_WALL_BURST) || (self.eng.scram == ScramState::Lit && self.eng.scram_wall > systems::SCRAM_WALL_BURST);
@@ -2708,7 +2742,7 @@ mod tests {
                 ac.step(1.0 / 120.0, p, r);
                 gmax = gmax.max(ac.d.nz);
                 dmax = dmax.max(ac.fcs.defl_cmd);
-                if ac.crashed.is_some() {
+                if ac.crashed.is_some() || ac.fcs_lost.is_some() {
                     break;
                 }
             }
@@ -2725,7 +2759,7 @@ mod tests {
                 let mut ac = start(keas, true);
                 let nb = ac.n_break().0;
                 let (g, _d) = parabola(&mut ac, k, roll);
-                match &ac.crashed {
+                match ac.fcs_lost.as_ref().or(ac.crashed.as_ref()) {
                     None => last_ok = g,
                     Some(c) => {
                         broke = Some((k, g, c.clone(), nb));
@@ -2749,7 +2783,7 @@ mod tests {
             // Loi normale : parabole manche à fond sans casse, g sous la limite de la loi
             let mut ac = start(keas, false);
             let (g, _) = parabola(&mut ac, 1.0, roll);
-            assert!(ac.crashed.is_none(), "loi normale {keas} KEAS : {:?}", ac.crashed);
+            assert!(ac.crashed.is_none() && ac.fcs_lost.is_none(), "loi normale {keas} KEAS : {:?} {:?}", ac.crashed, ac.fcs_lost);
             assert!(g < ac.n_break().0, "loi normale {keas} KEAS : {g:.2} g");
         }
         }
@@ -2786,14 +2820,55 @@ mod tests {
                         ac.step(1.0 / 120.0, 1.0, 0.0);
                         g = g.max(ac.d.nz);
                     }
-                    assert!(ac.crashed.is_none(), "{keas} KEAS low={low} : {:?}", ac.crashed);
+                    if low {
+                        // Protections de rupture désactivées : casse structurale possible
+                        assert!(ac.crashed.is_none(), "liaison perdue : {:?}", ac.crashed);
+                        if let Some(c) = &ac.fcs_lost {
+                            assert!(c.contains("RUPTURE") || c.contains("GOUVERNES"), "{c}");
+                        }
+                    } else {
+                        assert!(ac.crashed.is_none(), "{keas} KEAS normale : {:?}", ac.crashed);
+                    }
                     res[k] = g;
                 }
                 println!("{keas:4.0} | {:3.0} t | {:5.2} g | {:5.2} g | {lim:4.2} g", (M_EMPTY + fuel + if fuel < FUEL_MAX { 0.0 } else { H2_MAX }) / 1000.0, res[0], res[1]);
-                // La loi LOW SPEED relève la limite de g (jamais au-delà de 90 % de la rupture)
-                assert!(res[1] >= res[0] - 0.05 && res[1] < lim / RECOVERY_MARGIN - 0.1, "{keas} KEAS : {:.2} g pour {lim:.2} g", res[1]);
+                // LOW SPEED : plus de limiteur de rupture, le g n'est borné que par l'avion
+                assert!(res[1] >= res[0] - 0.05, "{keas} KEAS : {:.2} g", res[1]);
             }
         }
+    }
+
+    /// Casse structurale (over-G, protections désactivées) : la liaison reste, les FCS sont
+    /// perdus (manche sans effet), l'avion tombe jusqu'à l'impact.
+    #[test]
+    fn break_keeps_link_loses_fcs() {
+        let mut ac = Aircraft::new_on_runway(0);
+        let elev = ground_elev(ac.lat, ac.lon);
+        ac.on_ground = false;
+        ac.gear_down = false;
+        ac.gear_pos = 0.0;
+        ac.brakes = false;
+        ac.alt = elev + 15_000.0 * FT;
+        ac.tas = 520.0 * KT / (isa(ac.alt).rho / RHO0).sqrt();
+        ac.set_turbines(TurbState::Running, 1.0);
+        ac.throttle = 1.0;
+        ac.gcas_on = true;
+        ac.test_mode = true;
+        ac.test_low_speed = true;
+        let mut t = 0.0;
+        while ac.fcs_lost.is_none() && t < 20.0 {
+            ac.step(1.0 / 120.0, 1.0, 0.0);
+            t += 1.0 / 120.0;
+        }
+        assert!(ac.fcs_lost.is_some() && ac.crashed.is_none(), "casse sans perte de liaison");
+        // Manche à pousser : sans effet, l'avion ne se rétablit pas ; impact
+        let mut t2 = 0.0;
+        while ac.crashed.is_none() && t2 < 400.0 {
+            ac.step(1.0 / 60.0, -1.0, 0.0);
+            t2 += 1.0 / 60.0;
+        }
+        println!("casse a {t:.1} s : {:?} ; impact apres {t2:.0} s : {:?}", ac.fcs_lost, ac.crashed);
+        assert!(ac.crashed.as_deref().is_some_and(|c| c.contains("INCONTROLABLE")));
     }
 
     /// Pilote qui se dégage lui-même d'un piqué (ailes à plat, ressource franche) : l'Auto-GCAS ne

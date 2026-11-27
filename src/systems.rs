@@ -240,15 +240,16 @@ mod tests {
             }
             for _ in 0..(5 * 120) {
                 ac.step(1.0 / 120.0, 1.0, 1.0);
-                if ac.crashed.is_some() {
+                if ac.crashed.is_some() || ac.fcs_lost.is_some() {
                     break;
                 }
             }
-            println!("FBW OVERRIDE {ovr} : q {:.0} kPa, braquage {:.1} deg, crash {:?}", ac.d.q / 1000.0, ac.fcs.defl_cmd, ac.crashed);
+            println!("FBW OVERRIDE {ovr} : q {:.0} kPa, braquage {:.1} deg, casse {:?} crash {:?}", ac.d.q / 1000.0, ac.fcs.defl_cmd, ac.fcs_lost, ac.crashed);
+            // Rupture : FCS perdus, liaison conservée
             if ovr {
-                assert!(ac.crashed.as_deref().is_some_and(|c| c.contains("GOUVERNES") || c.contains("FACTEUR")), "{:?}", ac.crashed);
+                assert!(ac.fcs_lost.as_deref().is_some_and(|c| c.contains("GOUVERNES") || c.contains("FACTEUR")) && ac.crashed.is_none(), "{:?}", ac.fcs_lost);
             } else {
-                assert!(!ac.crashed.as_deref().is_some_and(|c| c.contains("GOUVERNES")));
+                assert!(!ac.fcs_lost.as_deref().is_some_and(|c| c.contains("GOUVERNES")));
             }
         }
     }

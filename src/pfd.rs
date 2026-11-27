@@ -280,6 +280,13 @@ pub fn draw_pfd(ac: &Aircraft, v: &View, r: Rect, info: &PfdInfo) {
     draw_heading(ac, &g, info);
     ins_flags(ac, &g, info.time);
     test_law_hud(ac, &g, info.time);
+    if ac.fcs_lost.is_some() && ac.crashed.is_none() {
+        let s = g.inner;
+        let blink = (info.time * 2.5).fract() < 0.6;
+        tag(s.x + s.w / 2.0, s.y + s.h * 0.38, "FCS PERDUS", "AVION INCONTROLABLE  -  EJECTION", RED, 22.0, false, blink);
+        let cause: String = ac.fcs_lost.as_deref().unwrap_or("").chars().take(70).collect();
+        txt_c(&cause, s.x + s.w / 2.0, s.y + s.h * 0.38 + 30.0, 12.0, Color::new(1.0, 0.6, 0.55, 1.0));
+    }
     rrect_lines(r, 6.0, 1.5, Color::new(0.78, 0.80, 0.82, 0.85));
 
     if let Some((k, since)) = info.mishap {
@@ -330,7 +337,7 @@ fn test_law_hud(ac: &Aircraft, g: &Geo, time: f64) {
     let nmax = ac.fcs.nz_max;
     let nz = ac.d.nz;
     let gc = if nz > ac.n_break().0 * 0.95 { RED } else if nz > nmax * 0.9 { AMBER } else { GREEN_S };
-    let law = if ac.test_low_speed { "LOW SPEED" } else { "HIGH SPEED" };
+    let law = if ac.test_low_speed { "LOW SPEED  PROT RUPTURE OFF" } else { "HIGH SPEED" };
     let body = format!("{law}   G {nz:+.1}  /  MAX {nmax:.1}");
     tag(cx, s.y + s.h - 70.0, "ESSAI", &body, if low { AMBER } else { CYAN_S }, 14.0, false, true);
     // Barre de g : g actuel par rapport au max autorisé et à la rupture
@@ -341,12 +348,15 @@ fn test_law_hud(ac: &Aircraft, g: &Geo, time: f64) {
     let fx = |n: f64| b.x + ((n / nb).clamp(0.0, 1.0) as f32) * b.w;
     draw_rectangle(b.x, b.y, fx(nz.max(0.0)) - b.x, b.h, gc);
     draw_line(fx(nmax), b.y - 3.0, fx(nmax), b.y + b.h + 3.0, 2.0, WHITE);
-    // Warning au passage de loi
+    if low && nz > ac.n_break().0 * 0.9 && (time * 4.0).fract() < 0.6 {
+        tag(cx, s.y + s.h - 128.0, "OVER-G", &format!("{nz:.1} G  -  RUPTURE A {:.1} G", ac.n_break().0), RED, 18.0, false, true);
+    }
+        // Warning au passage de loi
     let age = get_time() - ac.test_switch_t;
     if age < 6.0 {
         let blink = (time * 3.0).fract() < 0.6;
         let (msg, c) = if ac.test_low_speed {
-            (format!("LOI FCS LOW SPEED  -  G MAX {nmax:.1} (90 % RUPTURE)"), AMBER)
+            (format!("LOI FCS LOW SPEED  -  PROTECTIONS RUPTURE OFF (CASSE {nmax:.1} G)"), AMBER)
         } else {
             ("LOI FCS HIGH SPEED  -  LOI NORMALE".to_string(), CYAN_S)
         };

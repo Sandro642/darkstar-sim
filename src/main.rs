@@ -933,6 +933,9 @@ impl Game {
             return a;
         }
         a.extend(ac.fire.alerts());
+        if ac.fcs_lost.is_some() {
+            a.push((Level::Warning, "FCS LOST — AVION INCONTROLABLE".to_string()));
+        }
         let agl_ft = d.agl / FT;
         let fpm = d.vs / FT * 60.0;
         if !ac.on_ground && !ac.landing_config() && agl_ft < 2500.0 && -fpm > agl_ft * 1.4 + 800.0 {
@@ -2039,6 +2042,17 @@ impl Game {
                     reply = Ok("VERSION DEVELOPPEUR — FENETRES DEPLACABLES, CONSOLE DANS LA BARRE (MENU CONSOLE)".into());
                 }
             }
+            // Panne injectée : rupture structurale (FCS perdus, liaison conservée)
+            "RUPTURE" => {
+                if ac.on_ground {
+                    reply = Err("RUPTURE : EN VOL UNIQUEMENT".into());
+                } else if ac.fcs_lost.is_some() {
+                    reply = Err("FCS DEJA PERDUS".into());
+                } else {
+                    ac.lose_fcs("RUPTURE STRUCTURELLE INJECTEE".into());
+                    reply = Ok("RUPTURE INJECTEE — FCS PERDUS".into());
+                }
+            }
             // Vol d'essai : loi FCS LOW SPEED (manœuvre jusqu'à 90 % de la rupture calculée) / HIGH SPEED
             "FCS" if matches!(arg(1), "SPEED" | "LOW" | "HIGH") => {
                 if !ac.test_mode {
@@ -2055,7 +2069,7 @@ impl Game {
                         self.cues.push(audio::Cue::Ack);
                     }
                     reply = Ok(if ac.test_low_speed {
-                        format!("FCS LOW SPEED — MANOEUVRE JUSQU'A {:.1} G (90 % RUPTURE CALCULEE) SOUS MACH 1,5", ac.n_recovery())
+                        format!("FCS LOW SPEED — PROTECTIONS DE RUPTURE DESACTIVEES SOUS MACH 1,5 (CASSE A {:.1} G)", ac.n_break().0)
                     } else {
                         "FCS HIGH SPEED — LOI NORMALE".into()
                     });
