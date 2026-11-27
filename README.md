@@ -994,3 +994,8 @@ Le SR-72 est un avion de reconnaissance : sa charge utile est simulée.
   en paysage, horizontal en portrait ; contenu en cartes cliquables (moitié gauche / droite =
   touches de ligne, libellé discret + valeur lisible, actions en boutons fléchés) ; champ de saisie
   dédié avec CLR ; clavier repensé (rangée de fonctions, lettres en grand, pavé numérique 7-8-9).
+- v1.77.1 : vol d'essai — sélecteur LOI FCS HIGH / LOW SPEED (DMC MISSION, à droite de VOL D'ESSAI ;
+  instruction FCS LOW / HIGH / SPEED) : LOW SPEED relève la limite de g de la loi jusqu'à 90 % de la
+  rupture calculée sous Mach 1,5 (au lieu de 3-4 g) ; page FCS « LOI ESSAI LOW / HIGH SPEED ». Test
+  des g atteignables à 300 / 350 / 450 KEAS (lourd / léger) : à basse vitesse le g reste limité par
+  l'autorité des élevons (~10 °/s de tangage) et la portance, pas par la loi.

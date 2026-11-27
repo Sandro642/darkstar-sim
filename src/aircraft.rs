@@ -257,6 +257,10 @@ pub struct Aircraft {
     pub fuel_cool: u8,
     /// Limiteur de g : false NORM (3 g / 2 g au-delà de Mach 4), true HIGH (4 g / 2,5 g)
     pub g_lim_high: bool,
+    /// Vol d'essai actif (plan ESSAI) et sélecteur FCS LOW SPEED : loi de manœuvre jusqu'à 90 % de
+    /// la rupture calculée (sinon HIGH SPEED : loi normale)
+    pub test_mode: bool,
+    pub test_low_speed: bool,
     /// Réchauffage des sondes ; givrage accumulé (s) quand il est coupé par air froid
     pub pitot_heat: bool,
     pitot_ice: f64,
@@ -463,6 +467,8 @@ impl Aircraft {
             osr_clear_t: 0.0,
             fuel_cool: 0,
             g_lim_high: false,
+            test_mode: false,
+            test_low_speed: false,
             pitot_heat: true,
             pitot_ice: 0.0,
             nws_hi: false,
@@ -892,6 +898,9 @@ impl Aircraft {
 
     /// Facteur de charge maximal de la loi normale selon le limiteur et le Mach.
     pub fn nz_law_max(&self) -> f64 {
+        if self.test_mode && self.test_low_speed && self.d.mach < 1.5 {
+            return self.n_recovery();
+        }
         match (self.g_lim_high, self.d.mach > 4.0) {
             (false, false) => 3.0,
             (false, true) => 2.0,
@@ -2704,6 +2713,47 @@ mod tests {
             assert!(ac.crashed.is_none(), "loi normale {keas} KEAS : {:?}", ac.crashed);
             assert!(g < ac.n_break().0, "loi normale {keas} KEAS : {g:.2} g");
         }
+        }
+    }
+
+    /// Vol d'essai, loi FCS LOW SPEED : ressource manche à fond à 300 / 350 KEAS (lourd / léger),
+    /// g atteint sans casse ; comparaison avec la loi normale.
+    #[test]
+    fn test_low_speed_g() {
+        println!("KEAS | masse | loi normale | LOW SPEED | limite calculee");
+        for keas in [300.0, 350.0, 450.0] {
+            for fuel in [FUEL_MAX, 2_000.0] {
+                let mut res = [0.0f64; 2];
+                let mut lim = 0.0;
+                for (k, low) in [false, true].into_iter().enumerate() {
+                    let mut ac = Aircraft::new_on_runway(0);
+                    ac.fuel = fuel;
+                    ac.h2 = if fuel < FUEL_MAX { 0.0 } else { H2_MAX };
+                    ac.on_ground = false;
+                    ac.gear_down = false;
+                    ac.gear_pos = 0.0;
+                    ac.brakes = false;
+                    ac.alt = 10_000.0 * FT;
+                    ac.tas = keas * KT / (isa(ac.alt).rho / RHO0).sqrt();
+                    ac.theta = 2f64.to_radians();
+                    ac.set_turbines(TurbState::Running, 1.0);
+                    ac.throttle = 1.0;
+                    ac.gcas_on = false;
+                    ac.test_mode = true;
+                    ac.test_low_speed = low;
+                    lim = ac.n_recovery();
+                    let mut g: f64 = 0.0;
+                    for _ in 0..(4 * 120) {
+                        ac.step(1.0 / 120.0, 1.0, 0.0);
+                        g = g.max(ac.d.nz);
+                    }
+                    assert!(ac.crashed.is_none(), "{keas} KEAS low={low} : {:?}", ac.crashed);
+                    res[k] = g;
+                }
+                println!("{keas:4.0} | {:3.0} t | {:5.2} g | {:5.2} g | {lim:4.2} g", (M_EMPTY + fuel + if fuel < FUEL_MAX { 0.0 } else { H2_MAX }) / 1000.0, res[0], res[1]);
+                // La loi LOW SPEED relève la limite de g (jamais au-delà de 90 % de la rupture)
+                assert!(res[1] >= res[0] - 0.05 && res[1] < lim + 0.1);
+            }
         }
     }
 

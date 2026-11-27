@@ -1287,7 +1287,7 @@ impl Fms {
     }
 
     /// Plan affiché / modifié : temporaire s'il existe, sinon actif.
-    fn plan(&self) -> Option<&Fpln> {
+    pub fn plan(&self) -> Option<&Fpln> {
         self.temp.as_ref().or(self.fpln.as_ref())
     }
 
@@ -1489,6 +1489,11 @@ impl Fms {
                     self.msg = "SAISIR DEP/DEST (LIGNE 1)".into();
                 } else {
                     self.ofp_one_click();
+                }
+            }
+            (Page::Init, false, 4) => {
+                if self.plan().is_some_and(|p| p.source == "ESSAI") {
+                    return Some(McduOut::Cmd("FCS SPEED TOGGLE".into()));
                 }
             }
             (Page::Init, false, 3) => {
@@ -2029,7 +2034,9 @@ fn page_lines(f: &Fms, ac: &Aircraft) -> (String, Color, Vec<(Line, Line)>) {
                 Some(p) => format!("{} {}-{} {:.0}NM", p.source, p.origin, p.dest, p.total() / NM),
                 None => "AUCUN PLAN".into(),
             };
-            rows.push((ln(format!(" {info}"), if f.plan().is_some() { GREEN_M } else { LBL_M }, "", LBL_M), ln("<VOL D'ESSAI", WHITE_M, "", WHITE_M)));
+            let essai = f.plan().is_some_and(|p| p.source == "ESSAI");
+            let (fl, fc) = if !essai { ("", LBL_M) } else if ac.test_low_speed { ("LOW SPEED>", AMB_M) } else { ("HIGH SPEED>", GREEN_M) };
+            rows.push((ln(format!(" {info}"), if f.plan().is_some() { GREEN_M } else { LBL_M }, if essai { "LOI FCS ESSAI " } else { "" }, LBL_M), ln("<VOL D'ESSAI", WHITE_M, fl, fc)));
             rows.push((blank(), if f.temp.is_some() { ln("<ROUTE", WHITE_M, "ACTIVER*", AMB_M) } else { ln("<ROUTE", WHITE_M, "", WHITE_M) }));
         }
         Page::Fpln => {

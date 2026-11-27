@@ -34,7 +34,15 @@ pub fn draw_fcs(ac: &Aircraft, r: Rect) {
     panel(r, "FCS - COMMANDES DE VOL");
     let f = &ac.fcs;
     let ovr = ac.ovr_fbw;
-    let law = if ovr { ("LOI DIRECTE (FBW OVERRIDE)", AMBER) } else { ("LOI NORMALE", GREEN_S) };
+    let law = if ovr {
+        ("LOI DIRECTE (FBW OVERRIDE)", AMBER)
+    } else if ac.test_mode && ac.test_low_speed {
+        ("LOI ESSAI LOW SPEED", AMBER)
+    } else if ac.test_mode {
+        ("LOI ESSAI HIGH SPEED", GREEN_S)
+    } else {
+        ("LOI NORMALE", GREEN_S)
+    };
     txt_r(law.0, r.x + r.w - 12.0, r.y + 19.0, 14.0, law.1);
 
     let x = r.x + 12.0;

@@ -1339,6 +1339,11 @@ impl Game {
                 _ => {}
             }
         }
+        // Vol d'essai : plan ESSAI actif ou provisoire
+        self.ac.test_mode = self.fms.plan().is_some_and(|p| p.source == "ESSAI");
+        if !self.ac.test_mode {
+            self.ac.test_low_speed = false;
+        }
         if let Some(m) = self.fms.autotune(&self.ac) {
             self.push(Level::Info, m);
         }
@@ -2023,6 +2028,23 @@ impl Game {
                     pfd::hide_menu(true);
                     connect::save_mode(true);
                     reply = Ok("VERSION DEVELOPPEUR — FENETRES DEPLACABLES, CONSOLE DANS LA BARRE (MENU CONSOLE)".into());
+                }
+            }
+            // Vol d'essai : loi FCS LOW SPEED (manœuvre jusqu'à 90 % de la rupture calculée) / HIGH SPEED
+            "FCS" if matches!(arg(1), "SPEED" | "LOW" | "HIGH") => {
+                if !ac.test_mode {
+                    reply = Err("FCS LOW / HIGH SPEED : VOL D'ESSAI UNIQUEMENT (DMC MISSION > VOL D'ESSAI)".into());
+                } else {
+                    ac.test_low_speed = match arg(1) {
+                        "LOW" => true,
+                        "HIGH" => false,
+                        _ => !ac.test_low_speed,
+                    };
+                    reply = Ok(if ac.test_low_speed {
+                        format!("FCS LOW SPEED — MANOEUVRE JUSQU'A {:.1} G (90 % RUPTURE CALCULEE) SOUS MACH 1,5", ac.n_recovery())
+                    } else {
+                        "FCS HIGH SPEED — LOI NORMALE".into()
+                    });
                 }
             }
             // Calculateur de mission : DMC MSN / ROUTE / DIR / PROFIL / ENERGIE / NAV / PERF / DATA
