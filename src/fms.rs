@@ -2241,7 +2241,7 @@ fn mkey(r: Rect, label: &str, accent: bool) -> bool {
 fn profile_view(f: &Fms, ac: &Aircraft, scr: Rect, brt: f32) {
     let dim = |c: Color| Color::new(c.r * brt, c.g * brt, c.b * brt, c.a);
     let rowh = scr.h / 14.0;
-    let g = Rect::new(scr.x + 44.0, scr.y + rowh * 1.9, scr.w - 56.0, rowh * 8.6);
+    let g = Rect::new(scr.x + 44.0, scr.y + 20.0, scr.w - 56.0, scr.h - 70.0);
     let Some(p) = f.fpln.as_ref().or(f.temp.as_ref()) else {
         txt_c("PAS DE ROUTE : MSN > OFP OU PLAN DARKSTAR", scr.x + scr.w / 2.0, scr.y + scr.h / 2.0, 13.0, dim(AMB_M));
         return;
@@ -2318,7 +2318,8 @@ fn profile_view(f: &Fms, ac: &Aircraft, scr: Rect, brt: f32) {
     }
     // Progression
     let gs = ac.ground_speed().max(50.0);
-    let y1 = scr.y + rowh * 12.6;
+    let y1 = scr.y + scr.h - 10.0;
+    let _ = rowh;
     let tod_left = rem - p.tod();
     txt(&format!("M{:.2}  FL{:.0}  {}", ac.d.mach, ac.alt / FT / 100.0, ac.mode_name()), scr.x + 6.0, y1, 12.0, dim(GREEN_M));
     let right = if f.fpln.is_none() {
@@ -2331,188 +2332,350 @@ fn profile_view(f: &Fms, ac: &Aircraft, scr: Rect, brt: f32) {
     txt_r(&right, scr.x + scr.w - 6.0, y1, 12.0, dim(WHITE_M));
 }
 
-/// Clavier du DMC dans `kb` : pavé numérique, fonctions (défilement, DEST, CLR, SP) et lettres.
-/// Empilé (paysage, colonne de droite) : numérique + fonctions en haut, lettres en dessous ;
-/// sinon côte à côte.
-fn keyboard(kb: Rect, stacked: bool) -> Option<McduKey> {
+/// Pictogramme d'une rubrique du DMC (traits fins).
+fn dmc_icon(k: usize, c: Vec2, sz: f32, col: Color) {
+    let w = (sz * 0.09).max(1.3);
+    match k {
+        // MISSION : cible
+        0 => {
+            draw_circle_lines(c.x, c.y, sz * 0.45, w, col);
+            draw_circle_lines(c.x, c.y, sz * 0.2, w, col);
+            draw_circle(c.x, c.y, w, col);
+        }
+        // ROUTE : ligne brisée à points
+        1 => {
+            let pts = [c + vec2(-sz * 0.45, sz * 0.3), c + vec2(-sz * 0.1, -sz * 0.15), c + vec2(sz * 0.15, sz * 0.15), c + vec2(sz * 0.45, -sz * 0.35)];
+            for p in pts.windows(2) {
+                draw_line(p[0].x, p[0].y, p[1].x, p[1].y, w, col);
+            }
+            for p in pts {
+                draw_circle(p.x, p.y, w * 1.4, col);
+            }
+        }
+        // DIRECT : flèche
+        2 => {
+            draw_line(c.x - sz * 0.45, c.y + sz * 0.3, c.x + sz * 0.35, c.y - sz * 0.3, w, col);
+            draw_triangle(c + vec2(sz * 0.45, -sz * 0.4), c + vec2(sz * 0.12, -sz * 0.32), c + vec2(sz * 0.35, -sz * 0.05), col);
+        }
+        // PROFIL : montée, palier, descente
+        3 => {
+            let pts = [c + vec2(-sz * 0.48, sz * 0.35), c + vec2(-sz * 0.15, -sz * 0.3), c + vec2(sz * 0.2, -sz * 0.3), c + vec2(sz * 0.48, sz * 0.35)];
+            for p in pts.windows(2) {
+                draw_line(p[0].x, p[0].y, p[1].x, p[1].y, w, col);
+            }
+            draw_line(c.x - sz * 0.5, c.y + sz * 0.4, c.x + sz * 0.5, c.y + sz * 0.4, w * 0.7, col);
+        }
+        // ENERGIE : goutte
+        4 => {
+            draw_circle_lines(c.x, c.y + sz * 0.12, sz * 0.28, w, col);
+            draw_line(c.x - sz * 0.24, c.y, c.x, c.y - sz * 0.45, w, col);
+            draw_line(c.x + sz * 0.24, c.y, c.x, c.y - sz * 0.45, w, col);
+        }
+        // NAV : boussole
+        5 => {
+            draw_circle_lines(c.x, c.y, sz * 0.45, w, col);
+            draw_triangle(c + vec2(0.0, -sz * 0.35), c + vec2(-sz * 0.1, 0.0), c + vec2(sz * 0.1, 0.0), col);
+        }
+        // PERF : cadran
+        6 => {
+            let pts: Vec<Vec2> = (0..=10).map(|i| {
+                let a = (200.0 + i as f32 * 14.0).to_radians();
+                c + vec2(a.cos(), a.sin()) * sz * 0.45
+            }).collect();
+            for p in pts.windows(2) {
+                draw_line(p[0].x, p[0].y, p[1].x, p[1].y, w, col);
+            }
+            draw_line(c.x, c.y + sz * 0.05, c.x + sz * 0.3, c.y - sz * 0.25, w, col);
+        }
+        // DONNEES : base empilée
+        _ => {
+            for k in 0..3 {
+                let y = c.y - sz * 0.3 + k as f32 * sz * 0.3;
+                draw_rectangle_lines(c.x - sz * 0.4, y - sz * 0.1, sz * 0.8, sz * 0.2, w, col);
+            }
+        }
+    }
+}
+
+/// Rubriques du DMC : nom, page.
+const DMC_MENU: [(&str, Page); 8] = [
+    ("MISSION", Page::Init),
+    ("ROUTE", Page::Fpln),
+    ("DIRECT", Page::Dir),
+    ("PROFIL", Page::Profil),
+    ("ENERGIE", Page::Fuel),
+    ("NAV", Page::RadNav),
+    ("PERF", Page::Perf),
+    ("DONNEES", Page::Data),
+];
+
+fn menu_active(f: &Fms, pg: Page) -> bool {
+    f.page == pg || (pg == Page::Fpln && matches!(f.page, Page::Dep | Page::Arr)) || (pg == Page::Profil && f.page == Page::Prog)
+}
+
+/// Clavier du DMC : rangée de fonctions (défilement, SP, DEST, CLR), lettres, pavé numérique.
+/// `tall` : colonne (paysage) — fonctions, lettres 6 colonnes, pavé en bas ; sinon bandeau bas
+/// (portrait) — fonctions en haut, lettres 9 colonnes à gauche, pavé à droite.
+fn keyboard(kb: Rect, tall: bool) -> Option<McduKey> {
     let mut out = None;
     let gap = 6.0;
-    let nums = ["1", "2", "3", "4", "5", "6", "7", "8", "9", ".", "0", "+/-"];
-    let funcs: [(&str, McduKey, bool); 6] = [
+    let nums = ["7", "8", "9", "4", "5", "6", "1", "2", "3", ".", "0", "+/-"];
+    let funcs: [(&str, McduKey, bool); 7] = [
         ("^", McduKey::Slew(false), false),
         ("v", McduKey::Slew(true), false),
         ("<", McduKey::Slew(false), false),
         (">", McduKey::Slew(true), false),
+        ("SP", McduKey::Char(' '), false),
         ("DEST", McduKey::Airport, true),
         ("CLR", McduKey::Clr, true),
     ];
     let letters = ["A", "B", "C", "D", "E", "F", "G", "H", "I", "J", "K", "L", "M", "N", "O", "P", "Q", "R", "S", "T", "U", "V", "W", "X", "Y", "Z", "/"];
-    // Blocs : (x, y, w) du pavé numérique, des fonctions et des lettres ; hauteur de touche
-    let (num, fun, alp, kh) = if stacked {
-        let kh = ((kb.h - 6.0 * gap - 12.0) / 8.0).clamp(18.0, 72.0);
-        let top_w = kb.w;
-        let nw = top_w * 0.6;
+    let grid = |blk: Rect, cols: usize, rows: usize, k: usize| {
+        let w = (blk.w - (cols as f32 - 1.0) * gap) / cols as f32;
+        let h = (blk.h - (rows as f32 - 1.0) * gap) / rows as f32;
+        Rect::new(blk.x + (k % cols) as f32 * (w + gap), blk.y + (k / cols) as f32 * (h + gap), w, h)
+    };
+    let (fun, alp, acols, arows, num) = if tall {
+        let kh = ((kb.h - 9.0 * gap - 2.0 * 10.0) / 10.0).clamp(18.0, 60.0);
+        let fy = kb.y;
+        let ay = fy + kh + 10.0;
+        let ny = ay + 5.0 * kh + 4.0 * gap + 10.0;
         (
-            Rect::new(kb.x, kb.y, nw, 4.0 * (kh + gap)),
-            Rect::new(kb.x + nw + 12.0, kb.y, top_w - nw - 12.0, 4.0 * (kh + gap)),
-            Rect::new(kb.x, kb.y + 4.0 * (kh + gap) + 12.0, kb.w, 4.0 * (kh + gap)),
-            kh,
+            Rect::new(kb.x, fy, kb.w, kh),
+            Rect::new(kb.x, ay, kb.w, 5.0 * kh + 4.0 * gap),
+            6,
+            5,
+            Rect::new(kb.x + kb.w * 0.1, ny, kb.w * 0.8, 4.0 * kh + 3.0 * gap),
         )
     } else {
-        let kh = ((kb.h - 3.0 * gap) / 4.0).clamp(18.0, 44.0);
-        let nw = kb.w * 0.28;
-        let fw = kb.w * 0.16;
+        let kh = ((kb.h - 4.0 * gap - 10.0) / 5.0).clamp(18.0, 52.0);
+        let body_y = kb.y + kh + 10.0;
+        let body_h = 4.0 * kh + 3.0 * gap;
+        let nw = kb.w * 0.27;
         (
-            Rect::new(kb.x, kb.y, nw, kb.h),
-            Rect::new(kb.x + nw + 8.0, kb.y, fw, kb.h),
-            Rect::new(kb.x + nw + fw + 16.0, kb.y, kb.w - nw - fw - 16.0, kb.h),
-            kh,
+            Rect::new(kb.x, kb.y, kb.w, kh),
+            Rect::new(kb.x, body_y, kb.w - nw - 14.0, body_h),
+            9,
+            3,
+            Rect::new(kb.x + kb.w - nw, body_y, nw, body_h),
         )
     };
-    let cell = |blk: Rect, cols: usize, k: usize| {
-        let w = (blk.w - (cols as f32 - 1.0) * gap) / cols as f32;
-        Rect::new(blk.x + (k % cols) as f32 * (w + gap), blk.y + (k / cols) as f32 * (kh + gap), w, kh)
-    };
-    for (k, n) in nums.iter().enumerate() {
-        if mkey(cell(num, 3, k), n, false) {
-            out = Some(if *n == "+/-" { McduKey::PlusMinus } else { McduKey::Char(n.chars().next().unwrap()) });
-        }
-    }
     for (k, (l, a, acc)) in funcs.into_iter().enumerate() {
-        if mkey(cell(fun, 2, k), l, acc) {
+        if mkey(grid(fun, 7, 1, k), l, acc) {
             out = Some(a);
         }
     }
-    let spr = cell(fun, 2, 6);
-    if mkey(Rect::new(spr.x, spr.y, fun.w, kh), "SP", false) {
-        out = Some(McduKey::Char(' '));
-    }
     for (k, l) in letters.iter().enumerate() {
-        if mkey(cell(alp, 7, k), l, false) {
+        if mkey(grid(alp, acols, arows, k), l, false) {
             out = Some(McduKey::Char(l.chars().next().unwrap()));
+        }
+    }
+    for (k, n) in nums.iter().enumerate() {
+        if mkey(grid(num, 3, 4, k), n, false) {
+            out = Some(if *n == "+/-" { McduKey::PlusMinus } else { McduKey::Char(n.chars().next().unwrap()) });
         }
     }
     out
 }
 
-/// Calculateur de mission du Darkstar (DMC) : écran tactile en verre noir au cadre chanfreiné,
-/// onglets de pages tactiles, touches de ligne intégrées au bord de l'écran (chevrons), clavier
-/// plat (pavé numérique, alphabétique, fonctions). Mêmes pages et mêmes actions que le FMS.
+/// Valeur d'action « <TEXTE » / « TEXTE> » : texte nettoyé et sens de la flèche.
+fn action_of(v: &str) -> (String, i8) {
+    let t = v.trim();
+    if let Some(x) = t.strip_prefix('<') {
+        (x.trim().to_string(), -1)
+    } else if let Some(x) = t.strip_suffix('>') {
+        (x.trim().to_string(), 1)
+    } else {
+        (t.to_string(), 0)
+    }
+}
+
+/// Calculateur de mission du Darkstar (DMC) : en-tête d'état, rail de rubriques à icônes,
+/// contenu en cartes cliquables (moitié gauche / droite = touches de ligne), champ de saisie,
+/// clavier. Paysage : rail à gauche, clavier à droite ; portrait : rail en haut, clavier en bas.
 pub fn draw_mcdu(f: &Fms, ac: &Aircraft, r: Rect, time: f64) -> Option<McduKey> {
     let mut out = None;
-    // Paysage (écran large de la vue réelle) : écran à gauche, clavier à droite ; sinon portrait
     let land = r.w > r.h * 1.15;
-    let bw = if land { r.w - 16.0 } else { (r.w - 16.0).min(640.0) };
+    let bw = if land { r.w - 12.0 } else { (r.w - 12.0).min(680.0) };
     let b = Rect::new(r.x + (r.w - bw) / 2.0, r.y + 6.0, bw, r.h - 12.0);
-    // Boîtier : façade noire mate, cadre chanfreiné, liseré
-    chamfer(b, 14.0, Color::new(0.11, 0.115, 0.125, 1.0));
-    chamfer_lines(b, 14.0, 1.0, Color::new(0.2, 0.21, 0.23, 1.0));
-    txt("DMC", b.x + 16.0, b.y + 16.0, 11.0, WHITE_M);
-    txt("DARKSTAR MISSION COMPUTER", b.x + 46.0, b.y + 16.0, 9.0, LBL_M);
-    // Luminosité : - / +
     let brt = BRT.with(|c| c.get());
+    let dim = |c: Color| Color::new(c.r * brt, c.g * brt, c.b * brt, c.a);
+    chamfer(b, 14.0, Color::new(0.1, 0.105, 0.115, 1.0));
+    chamfer_lines(b, 14.0, 1.0, Color::new(0.19, 0.2, 0.22, 1.0));
+    // ---------- En-tête : identité, rubrique, état de vol, luminosité ----------
+    let hh = 34.0;
+    let hy = b.y + 8.0;
+    txt("DMC", b.x + 14.0, hy + 18.0, 15.0, WHITE_M);
+    txt("DARKSTAR MISSION COMPUTER", b.x + 14.0 + txt_w("DMC", 15.0) + 10.0, hy + 17.0, 9.0, LBL_M);
+    let chips = [
+        format!("FL{:03.0}", ac.alt / FT / 100.0),
+        format!("HDG {:03.0}", ac.hdg_deg().rem_euclid(360.0)),
+        format!("M{:.2}", ac.d.mach),
+        format!("INS {}", ac.ins.phase()),
+    ];
+    let mut cx = b.x + b.w - 70.0;
+    for c in chips.iter().rev() {
+        let w = txt_w(c, 11.0) + 16.0;
+        cx -= w + 6.0;
+        if cx < b.x + b.w * 0.45 {
+            break;
+        }
+        let cr = Rect::new(cx, hy + 4.0, w, 20.0);
+        chamfer(cr, 4.0, Color::new(0.14, 0.145, 0.16, 1.0));
+        txt_c(c, cr.x + cr.w / 2.0, cr.y + 14.0, 11.0, if c.starts_with("INS") && !ac.ins.hdg_ok() { AMB_M } else { WHITE_M });
+    }
     for (k, (l, d)) in [("-", -1), ("+", 1)].into_iter().enumerate() {
-        let kr = Rect::new(b.x + b.w - 66.0 + k as f32 * 26.0, b.y + 5.0, 22.0, 16.0);
-        if mkey(kr, l, false) {
+        if mkey(Rect::new(b.x + b.w - 62.0 + k as f32 * 26.0, hy + 3.0, 22.0, 22.0), l, false) {
             out = Some(McduKey::Bright(d));
         }
     }
-    txt_r("BRT", b.x + b.w - 70.0, b.y + 16.0, 9.0, LBL_M);
-    // Onglets de pages (tactiles)
-    let tabs: [(&str, Page); 8] = [("MSN", Page::Init), ("ROUTE", Page::Fpln), ("DIR", Page::Dir), ("PROFIL", Page::Profil), ("ENERGIE", Page::Fuel), ("NAV", Page::RadNav), ("PERF", Page::Perf), ("DATA", Page::Data)];
-    let ty = b.y + 26.0;
-    let th = (b.h * 0.045).clamp(22.0, 34.0);
-    let tfs = (th * 0.5).clamp(11.0, 15.0);
-    let tw = (b.w - 28.0 - 7.0 * 4.0) / tabs.len() as f32;
-    for (k, (l, pg)) in tabs.iter().enumerate() {
-        let tr = Rect::new(b.x + 14.0 + k as f32 * (tw + 4.0), ty, tw, th);
-        let on = f.page == *pg || (*pg == Page::Fpln && matches!(f.page, Page::Dep | Page::Arr)) || (*pg == Page::Profil && f.page == Page::Prog);
-        let hov = hovered(tr);
-        chamfer(tr, 4.0, if on { Color::new(0.22, 0.235, 0.26, 1.0) } else if hov { Color::new(0.17, 0.18, 0.2, 1.0) } else { Color::new(0.14, 0.145, 0.16, 1.0) });
-        txt_c(l, tr.x + tr.w / 2.0, tr.y + th / 2.0 + tfs * 0.36, tfs, if on { WHITE_M } else { LBL_M });
-        if on {
-            draw_rectangle(tr.x + 6.0, tr.y + tr.h - 3.0, tr.w - 12.0, 2.0, DMC_ACC);
+    let top = hy + hh;
+    // ---------- Zones : rail, contenu, clavier ----------
+    let (rail, content, kb) = if land {
+        let rw = (b.w * 0.12).clamp(96.0, 150.0);
+        let kw = (b.w * 0.3).clamp(250.0, 440.0);
+        let y0 = top + 4.0;
+        let h = b.y + b.h - 12.0 - y0;
+        (
+            Rect::new(b.x + 10.0, y0, rw, h),
+            Rect::new(b.x + 10.0 + rw + 10.0, y0, b.w - rw - kw - 40.0, h),
+            Rect::new(b.x + b.w - 10.0 - kw, y0, kw, h),
+        )
+    } else {
+        let rh = 46.0;
+        let y0 = top + 4.0;
+        let ch = (b.h * 0.55).min(520.0);
+        (
+            Rect::new(b.x + 10.0, y0, b.w - 20.0, rh),
+            Rect::new(b.x + 10.0, y0 + rh + 8.0, b.w - 20.0, ch),
+            Rect::new(b.x + 10.0, y0 + rh + 8.0 + ch + 10.0, b.w - 20.0, b.y + b.h - 12.0 - (y0 + rh + 8.0 + ch + 10.0)),
+        )
+    };
+    // ---------- Rail des rubriques ----------
+    let n = DMC_MENU.len() as f32;
+    for (k, (name, pg)) in DMC_MENU.iter().enumerate() {
+        let it = if land {
+            let ih = ((rail.h - (n - 1.0) * 5.0) / n).min(58.0);
+            Rect::new(rail.x, rail.y + k as f32 * (ih + 5.0), rail.w, ih)
+        } else {
+            let iw = (rail.w - (n - 1.0) * 4.0) / n;
+            Rect::new(rail.x + k as f32 * (iw + 4.0), rail.y, iw, rail.h)
+        };
+        let on = menu_active(f, *pg);
+        let hov = hovered(it);
+        chamfer(it, 6.0, if on { Color::new(0.2, 0.21, 0.235, 1.0) } else if hov { Color::new(0.155, 0.16, 0.18, 1.0) } else { Color::new(0.125, 0.13, 0.145, 1.0) });
+        let ic = if on { DMC_ACC } else { Color::new(0.62, 0.65, 0.7, 1.0) };
+        if land {
+            if on {
+                draw_rectangle(it.x, it.y + 6.0, 3.0, it.h - 12.0, DMC_ACC);
+            }
+            let isz = (it.h * 0.42).min(20.0);
+            dmc_icon(k, vec2(it.x + 10.0 + isz / 2.0, it.y + it.h / 2.0), isz, ic);
+            txt(name, it.x + 18.0 + isz, it.y + it.h / 2.0 + 4.0, 11.0, if on { WHITE_M } else { LBL_M });
+        } else {
+            if on {
+                draw_rectangle(it.x + 6.0, it.y + it.h - 3.0, it.w - 12.0, 2.0, DMC_ACC);
+            }
+            dmc_icon(k, vec2(it.x + it.w / 2.0, it.y + 16.0), 16.0, ic);
+            let fs = if txt_w(name, 9.0) > it.w - 4.0 { 8.0 } else { 9.0 };
+            txt_c(name, it.x + it.w / 2.0, it.y + it.h - 7.0, fs, if on { WHITE_M } else { LBL_M });
         }
-        if clicked(tr) {
+        if clicked(it) {
             out = Some(McduKey::Page(*pg));
         }
     }
-    // Écran (verre) avec bande de touches de ligne intégrée de chaque côté
-    let sk = 24.0;
-    let body_y = ty + th + 8.0;
-    let body_h = b.y + b.h - 12.0 - body_y;
-    let scr_out = if land {
-        Rect::new(b.x + 12.0, body_y, (b.w - 24.0) * 0.6, body_h)
-    } else {
-        Rect::new(b.x + 12.0, body_y, b.w - 24.0, (b.h * 0.5).min(420.0))
-    };
-    let kb = if land {
-        Rect::new(scr_out.x + scr_out.w + 14.0, body_y, b.x + b.w - 12.0 - (scr_out.x + scr_out.w + 14.0), body_h)
-    } else {
-        Rect::new(b.x + 14.0, scr_out.y + scr_out.h + 12.0, b.w - 28.0, b.y + b.h - 12.0 - (scr_out.y + scr_out.h + 12.0))
-    };
-    chamfer(scr_out, 10.0, DMC_GLASS);
-    chamfer_lines(scr_out, 10.0, 2.0, Color::new(0.06, 0.065, 0.07, 1.0));
-    let scr = Rect::new(scr_out.x + sk, scr_out.y + 4.0, scr_out.w - 2.0 * sk, scr_out.h - 8.0);
-    if clicked(scr) {
-        out = Some(McduKey::Focus);
-    }
-    proc_preview(f, scr, brt);
-    if f.page == Page::Profil {
-        profile_view(f, ac, scr, brt);
-    }
-    let dim = |c: Color| Color::new(c.r * brt, c.g * brt, c.b * brt, c.a);
-    let rowh = scr.h / 14.0;
-    let fs = (rowh * 1.0).min(if land { 24.0 } else { 20.0 });
-    let small = fs * 0.72;
+    // ---------- Contenu ----------
+    chamfer(content, 10.0, DMC_GLASS);
     let (title, tc, rows) = page_lines(f, ac);
-    // Bandeau titre
-    draw_rectangle(scr.x, scr.y, scr.w, rowh * 1.25, Color::new(0.12, 0.125, 0.135, 1.0));
-    txt(&title, scr.x + 6.0, scr.y + rowh * 0.95, fs * 0.85, dim(tc));
-    txt_r(&format!("{} / {}", ac.hdg_deg().round() as i32, (ac.alt / FT / 100.0).round() as i32), scr.x + scr.w - 6.0, scr.y + rowh * 0.95, small, dim(LBL_M));
-    let cx_col = scr.x + scr.w * 0.47;
-    for (k, (lab, dat)) in rows.iter().enumerate().take(6) {
-        let yl = scr.y + rowh * (2.0 * k as f32 + 1.95);
-        let yd = yl + rowh * 0.95;
-        txt(&lab.l, scr.x + 4.0, yl, small, dim(lab.lc));
-        txt_c(&lab.c, cx_col, yl, small, dim(lab.cc));
-        txt_r(&lab.r, scr.x + scr.w - 4.0, yl, small, dim(lab.rc));
-        txt(&dat.l, scr.x + 4.0, yd, fs, dim(dat.lc));
-        txt_c(&dat.c, cx_col, yd, fs * 0.8, dim(dat.cc));
-        txt_r(&dat.r, scr.x + scr.w - 4.0, yd, fs, dim(dat.rc));
-        // Touches de ligne intégrées au bord de l'écran : chevron, surbrillance au survol
-        // (absentes sur la page graphique PROFIL)
-        for left in [true, false].into_iter().filter(|_| f.page != Page::Profil) {
-            let kx = if left { scr_out.x + 2.0 } else { scr_out.x + scr_out.w - sk - 2.0 };
-            let kr = Rect::new(kx, yd - rowh * 0.8, sk, rowh * 1.1);
-            let hov = hovered(kr);
-            let has = if left { !dat.l.trim().is_empty() } else { !dat.r.trim().is_empty() };
-            if hov {
-                chamfer(kr, 3.0, Color::new(0.18, 0.19, 0.21, 1.0));
+    let th = 30.0;
+    txt(&title, content.x + 14.0, content.y + 21.0, 15.0, dim(tc));
+    draw_line(content.x + 10.0, content.y + th, content.x + content.w - 10.0, content.y + th, 1.0, Color::new(1.0, 1.0, 1.0, 0.07));
+    let ih = 34.0;
+    let body = Rect::new(content.x + 10.0, content.y + th + 8.0, content.w - 20.0, content.h - th - ih - 26.0);
+    proc_preview(f, body, brt);
+    if f.page == Page::Profil {
+        profile_view(f, ac, body, brt);
+    } else {
+        let gap = 6.0;
+        let ch = ((body.h - 5.0 * gap) / 6.0).max(24.0);
+        let lfs = (ch * 0.22).clamp(8.0, 11.0);
+        let vfs = ((ch - lfs - 12.0) * 0.95).clamp(10.0, 19.0);
+        for (k, (lab, dat)) in rows.iter().enumerate().take(6) {
+            let cr = Rect::new(body.x, body.y + k as f32 * (ch + gap), body.w, ch);
+            let empty = lab.l.trim().is_empty() && lab.r.trim().is_empty() && dat.l.trim().is_empty() && dat.r.trim().is_empty() && dat.c.trim().is_empty() && lab.c.trim().is_empty();
+            if empty {
+                continue;
             }
-            let c = if hov { WHITE_M } else if has { Color::new(0.7, 0.72, 0.75, 1.0) } else { Color::new(0.3, 0.31, 0.33, 1.0) };
-            let (mx, my) = (kr.x + kr.w / 2.0, kr.y + kr.h / 2.0);
-            let dx = if left { -1.0 } else { 1.0 } * 4.0;
-            draw_line(mx - dx, my - 5.0, mx + dx, my, 2.0, c);
-            draw_line(mx + dx, my, mx - dx, my + 5.0, 2.0, c);
-            if clicked(kr) {
-                out = Some(McduKey::Lsk(left, k));
+            let half_l = Rect::new(cr.x, cr.y, cr.w / 2.0, cr.h);
+            let half_r = Rect::new(cr.x + cr.w / 2.0, cr.y, cr.w / 2.0, cr.h);
+            chamfer(cr, 6.0, Color::new(0.11, 0.115, 0.125, 0.88));
+            for (hr, side_has) in [(half_l, !dat.l.trim().is_empty()), (half_r, !dat.r.trim().is_empty())] {
+                if side_has && hovered(hr) {
+                    chamfer(hr, 6.0, Color::new(0.17, 0.18, 0.2, 0.9));
+                }
+            }
+            let ly = cr.y + lfs + 4.0;
+            let vy = (cr.y + cr.h - 6.0).max(ly + vfs + 2.0);
+            // Gauche
+            txt(lab.l.trim(), cr.x + 12.0, ly, lfs, dim(lab.lc));
+            let (lv, ldir) = action_of(&dat.l);
+            if ldir < 0 {
+                let (ax, ay) = (cr.x + 14.0, vy - vfs * 0.35);
+                draw_line(ax + 5.0, ay - 5.0, ax, ay, 2.0, dim(DMC_ACC));
+                draw_line(ax, ay, ax + 5.0, ay + 5.0, 2.0, dim(DMC_ACC));
+                txt(&lv, cr.x + 26.0, vy, vfs, dim(dat.lc));
+            } else {
+                txt(&lv, cr.x + 12.0, vy, vfs, dim(dat.lc));
+            }
+            // Centre
+            if !lab.c.trim().is_empty() {
+                txt_c(lab.c.trim(), cr.x + cr.w * 0.5, ly, lfs, dim(lab.cc));
+            }
+            if !dat.c.trim().is_empty() {
+                txt_c(dat.c.trim(), cr.x + cr.w * 0.5, vy, vfs * 0.85, dim(dat.cc));
+            }
+            // Droite
+            txt_r(lab.r.trim(), cr.x + cr.w - 12.0, ly, lfs, dim(lab.rc));
+            let (rv, rdir) = action_of(&dat.r);
+            if rdir > 0 {
+                let (ax, ay) = (cr.x + cr.w - 14.0, vy - vfs * 0.35);
+                draw_line(ax - 5.0, ay - 5.0, ax, ay, 2.0, dim(DMC_ACC));
+                draw_line(ax, ay, ax - 5.0, ay + 5.0, 2.0, dim(DMC_ACC));
+                txt_r(&rv, cr.x + cr.w - 26.0, vy, vfs, dim(dat.rc));
+            } else {
+                txt_r(&rv, cr.x + cr.w - 12.0, vy, vfs, dim(dat.rc));
+            }
+            if clicked(half_l) {
+                out = Some(McduKey::Lsk(true, k));
+            } else if clicked(half_r) {
+                out = Some(McduKey::Lsk(false, k));
             }
         }
     }
-    // Ligne de saisie (bloc-notes)
-    let ys = scr.y + rowh * 13.8;
-    draw_line(scr.x, ys - fs + 5.0, scr.x + scr.w, ys - fs + 5.0, 1.0, Color::new(0.3, 0.31, 0.33, 1.0));
+    // ---------- Champ de saisie ----------
+    let inp = Rect::new(content.x + 10.0, content.y + content.h - ih - 10.0, content.w - 20.0, ih);
+    chamfer(inp, 6.0, Color::new(0.07, 0.075, 0.085, 1.0));
+    chamfer_lines(inp, 6.0, 1.0, if f.focus { DMC_ACC } else { Color::new(0.22, 0.23, 0.26, 1.0) });
     let cursor = if f.focus && (time * 2.0).fract() < 0.5 { "_" } else { "" };
+    let ifs = 15.0;
     if !f.msg.is_empty() && f.scratch.is_empty() {
-        txt(&f.msg, scr.x + 4.0, ys, fs, dim(AMB_M));
+        txt(&f.msg, inp.x + 12.0, inp.y + inp.h / 2.0 + 5.0, ifs, dim(AMB_M));
+    } else if f.scratch.is_empty() {
+        txt(&format!("SAISIE{cursor}"), inp.x + 12.0, inp.y + inp.h / 2.0 + 5.0, 12.0, Color::new(0.4, 0.42, 0.45, 1.0));
     } else {
-        txt(&format!("{}{cursor}", f.scratch), scr.x + 4.0, ys, fs, dim(WHITE_M));
+        txt(&format!("{}{cursor}", f.scratch), inp.x + 12.0, inp.y + inp.h / 2.0 + 5.0, ifs, dim(WHITE_M));
     }
+    let clr = Rect::new(inp.x + inp.w - 58.0, inp.y + 5.0, 50.0, inp.h - 10.0);
+    if mkey(clr, "CLR", true) {
+        out = Some(McduKey::Clr);
+    } else if clicked(inp) {
+        out = Some(McduKey::Focus);
+    }
+    // ---------- Clavier ----------
     if let Some(k) = keyboard(kb, land) {
         out = Some(k);
     }
-    let _ = (COLS, MAG_M);
+    let _ = (COLS, MAG_M, CYAN_M);
     out
 }
 

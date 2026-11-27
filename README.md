@@ -989,3 +989,8 @@ Le SR-72 est un avion de reconnaissance : sa charge utile est simulée.
   variable, flammes, panache). La page séparée VUE EN COUPE est retirée (intégrée).
 - v1.76.2 : bloc moteur — libellés RPM et DOORS agrandis et lisibles même en petite fenêtre,
   RPM placé au-dessus de sa valeur, FWD / AFT en double retirés.
+- v1.77.0 : DMC entièrement réagencé — en-tête d'état (FL, cap, Mach, INS, luminosité) ; rail de
+  rubriques à icônes (MISSION, ROUTE, DIRECT, PROFIL, ENERGIE, NAV, PERF, DONNEES), vertical à gauche
+  en paysage, horizontal en portrait ; contenu en cartes cliquables (moitié gauche / droite =
+  touches de ligne, libellé discret + valeur lisible, actions en boutons fléchés) ; champ de saisie
+  dédié avec CLR ; clavier repensé (rangée de fonctions, lettres en grand, pavé numérique 7-8-9).
