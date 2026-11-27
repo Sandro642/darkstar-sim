@@ -1003,3 +1003,8 @@ Le SR-72 est un avion de reconnaissance : sa charge utile est simulée.
   autorisé, barre de g jusqu'à la rupture calculée, couleur selon la marge) et WARNING clignotant
   pendant 6 s au passage HIGH <-> LOW SPEED (avec le g max), signal sonore. Instruction
   VOL ESSAI [OACI] (comme DMC MISSION > <VOL D'ESSAI).
+- v1.77.3 : gouvernes plus réalistes — le braquage d'élevons nécessaire dépend de l'incidence
+  demandée et de la pression dynamique (faible à forte q, important à basse vitesse) au lieu d'être
+  fixe pour une vitesse de tangage donnée ; vol d'essai LOW SPEED : autorité de tangage 16 °/s. La
+  loi LOW SPEED atteint désormais sa limite (90 % de la rupture calculée) : ~5 g à 82 t, ~6,3 g à
+  30 t dès 350-450 KEAS (avant : plafond ~4,2-5,2 g par l'autorité de tangage).

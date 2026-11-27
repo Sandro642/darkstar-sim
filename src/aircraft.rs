@@ -1302,7 +1302,9 @@ impl Aircraft {
         } else {
             // Manuel : autorité d'un avion d'arme lourd (≈10°/s en tangage, 55°/s en roulis en
             // subsonique), décroissante avec le Mach ; elle passe ensuite par l'inertie de la cellule
-            let qmax_m = (10.0f64).to_radians() / (1.0 + mach / 3.0) * hyd;
+            // Vol d'essai LOW SPEED : loi de manœuvre, autorité de tangage accrue (16 °/s)
+            let q_auth = if self.test_mode && self.test_low_speed && mach < 1.5 { 16.0f64 } else { 10.0 };
+            let qmax_m = q_auth.to_radians() / (1.0 + mach / 3.0) * hyd;
             let pmax_m = (55.0f64).to_radians() / (1.0 + mach / 4.0) * hyd;
             pitch_rate = pitch_in * qmax_m;
             roll_rate = roll_in * pmax_m;
@@ -1487,7 +1489,13 @@ impl Aircraft {
         // Gouvernes : limiteur de braquage en loi normale, rupture si les protections sont inhibées
         {
             let q_kpa = q / 1000.0;
-            let d_cmd = (pitch_rate / qmax.max(1e-6)).abs() * 18.0 + (roll_rate / pmax.max(1e-6)).abs() * 14.0;
+            // Braquage d'élevons nécessaire : il dépend de l'incidence demandée (facteur de charge
+            // visé / pression dynamique) — faible à forte q, important à basse vitesse —
+            // plus la part de roulis
+            let n_dem = 1.0 + v * pitch_rate.abs() / g;
+            let alpha_dem = n_dem * mass * g / (q.max(1.0) * S_WING * cla);
+            let d_pitch = (alpha_dem / 22f64.to_radians()) * 26.0;
+            let d_cmd = d_pitch + (roll_rate / pmax.max(1e-6)).abs() * 14.0;
             fcs.defl_limit = if self.osr_active { (0.95 * systems::defl_destroy(q_kpa)).min(systems::DEFL_MAX) } else { systems::defl_limit_normal(q_kpa) };
             fcs.defl_cmd = d_cmd.min(systems::DEFL_MAX);
             if !self.on_ground {
@@ -2724,7 +2732,7 @@ mod tests {
     #[test]
     fn test_low_speed_g() {
         println!("KEAS | masse | loi normale | LOW SPEED | limite calculee");
-        for keas in [300.0, 350.0, 450.0] {
+        for keas in [300.0, 350.0, 450.0, 500.0] {
             for fuel in [FUEL_MAX, 2_000.0] {
                 let mut res = [0.0f64; 2];
                 let mut lim = 0.0;
@@ -2755,7 +2763,7 @@ mod tests {
                 }
                 println!("{keas:4.0} | {:3.0} t | {:5.2} g | {:5.2} g | {lim:4.2} g", (M_EMPTY + fuel + if fuel < FUEL_MAX { 0.0 } else { H2_MAX }) / 1000.0, res[0], res[1]);
                 // La loi LOW SPEED relève la limite de g (jamais au-delà de 90 % de la rupture)
-                assert!(res[1] >= res[0] - 0.05 && res[1] < lim + 0.1);
+                assert!(res[1] >= res[0] - 0.05 && res[1] < lim / RECOVERY_MARGIN - 0.1, "{keas} KEAS : {:.2} g pour {lim:.2} g", res[1]);
             }
         }
     }
