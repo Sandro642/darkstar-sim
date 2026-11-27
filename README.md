@@ -1024,3 +1024,7 @@ Le SR-72 est un avion de reconnaissance : sa charge utile est simulée.
   réglable (95 % de la rupture par défaut, 90-100 % ou OFF) : DMC MISSION > DERNIERE LIMITE ou
   FCS SEUIL n / OFF. HUD : seuil dans le bandeau ESSAI, repère ambre sur la barre de g, alerte
   « LIMITE RUPTURE — MANCHE PRIS PAR LE FCS ». Manche à fond : ~5,0 g plein, ~6,3 g léger, sans casse.
+- v1.79.1 : protection de dernière limite au dernier moment — plus d'anticipation : le pilote va
+  librement jusqu'au seuil, le FCS reprend le manche seulement au dépassement (tenue au seuil, main
+  rendue 0,3 s après le retour sous le seuil ou au relâché du manche) ; seule sécurité anticipée :
+  g qui atteindrait la rupture dans les 0,08 s. Dépassement du seuil ~0,1 g, jamais de casse.

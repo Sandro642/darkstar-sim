@@ -1342,31 +1342,33 @@ impl Aircraft {
             let qmax_m = q_auth.to_radians() / (1.0 + mach / 3.0) * hyd;
             let pmax_m = (55.0f64).to_radians() / (1.0 + mach / 4.0) * hyd;
             pitch_rate = pitch_in * qmax_m;
-            // Protection de dernière limite (LOW SPEED, protections de rupture coupées) : g prédit
-            // 0,4 s en avant ; si la rupture va être atteinte et que le pilote tire encore, le FCS
-            // prend le manche, ramène l'avion sous le seuil, puis rend la main une fois stable
+            // Protection de dernière limite (LOW SPEED, protections de rupture coupées) : au dernier
+            // moment — le pilote va librement jusqu'au seuil ; dès qu'il le dépasse en tirant, le FCS
+            // reprend le manche, tient l'avion au seuil et rend la main dès que c'est stable.
+            // Seule sécurité anticipée : g qui atteindrait la rupture dans les 0,08 s
             let free = self.test_mode && self.test_low_speed && mach < 1.5 && self.guard_pct <= 1.0;
             let nz = self.d.nz;
             let rate = ((nz - self.guard_prev_nz) / dt.max(1e-4)).clamp(-20.0, 20.0);
             self.guard_prev_nz = nz;
             let lim = self.n_break().0 * self.guard_pct;
             if free && self.fcs_lost.is_none() {
-                let pred = nz + rate.max(0.0) * 0.25;
-                if !self.guard_active && pred > lim && pitch_in > 0.1 {
+                let nb = self.n_break().0;
+                let over = nz > lim || nz + rate.max(0.0) * 0.08 > nb * 0.99;
+                if !self.guard_active && over && pitch_in > 0.05 {
                     self.guard_active = true;
                     self.guard_clear_t = 0.0;
                     self.msg(Level::Warning, format!("PROTECTION DERNIERE LIMITE : MANCHE PRIS PAR LE FCS ({:.1} G, RUPTURE {:.1} G)", nz, self.n_break().0));
                 }
                 if self.guard_active {
-                    // Tenue juste sous le seuil, sans à-coup
-                    let tgt = lim * 0.98;
+                    // Tenue au seuil, sans à-coup
+                    let tgt = lim * 0.995;
                     pitch_rate = (((tgt - nz) / tgt) * 4.0 * qmax_m).clamp(-2.0 * qmax_m, qmax_m.min(pitch_rate.max(0.0)));
-                    if nz < lim * 0.99 && rate <= 0.5 {
+                    if nz <= lim && rate <= 0.3 {
                         self.guard_clear_t += dt;
                     } else {
                         self.guard_clear_t = 0.0;
                     }
-                    if self.guard_clear_t > 1.0 || pitch_in < 0.05 {
+                    if self.guard_clear_t > 0.3 || pitch_in < 0.05 {
                         self.guard_active = false;
                         self.msg(Level::Info, "PROTECTION DERNIERE LIMITE : FCS STABLE, PILOTE A VOUS");
                     }
