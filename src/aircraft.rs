@@ -1194,6 +1194,10 @@ impl Aircraft {
         let pmax = (35.0f64).to_radians() / (1.0 + mach / 6.0) * hyd;
         // Protections inhibées : FBW OVERRIDE ou panne FCS (loi directe)
         let prot_off = self.ovr_fbw || self.fails.has(Fail::FcsDirect);
+        // Vol d'essai, loi LOW SPEED (sous Mach 1,5) : manche à fond = braquage maximal des gouvernes
+        // (butée mécanique, plafonnée à 95 % du braquage de rupture), autorité de tangage / roulis accrue
+        let low_law = self.test_mode && self.test_low_speed && mach < 1.5 && !prot_off;
+        let (k_q_low, k_p_low) = if low_law { (systems::DEFL_MAX / 18.0, systems::DEFL_MAX / 14.0) } else { (1.0, 1.0) };
         // Limites de la loi FBW normale (facteur de charge) et part utilisée par l'AP
         let nz_law = self.nz_law_max();
         let perf = self.ap.max_perf && !matches!(self.ap.vert, VertMode::Gs | VertMode::Flare) && self.autoland.is_none();
@@ -1302,8 +1306,8 @@ impl Aircraft {
         } else {
             // Manuel : autorité d'un avion d'arme lourd (≈10°/s en tangage, 55°/s en roulis en
             // subsonique), décroissante avec le Mach ; elle passe ensuite par l'inertie de la cellule
-            let qmax_m = (10.0f64).to_radians() / (1.0 + mach / 3.0) * hyd;
-            let pmax_m = (55.0f64).to_radians() / (1.0 + mach / 4.0) * hyd;
+            let qmax_m = (10.0f64).to_radians() / (1.0 + mach / 3.0) * hyd * k_q_low;
+            let pmax_m = (55.0f64).to_radians() / (1.0 + mach / 4.0) * hyd * k_p_low;
             pitch_rate = pitch_in * qmax_m;
             roll_rate = roll_in * pmax_m;
         }
@@ -1487,8 +1491,15 @@ impl Aircraft {
         // Gouvernes : limiteur de braquage en loi normale, rupture si les protections sont inhibées
         {
             let q_kpa = q / 1000.0;
-            let d_cmd = (pitch_rate / qmax.max(1e-6)).abs() * 18.0 + (roll_rate / pmax.max(1e-6)).abs() * 14.0;
-            fcs.defl_limit = if self.osr_active { (0.95 * systems::defl_destroy(q_kpa)).min(systems::DEFL_MAX) } else { systems::defl_limit_normal(q_kpa) };
+            let d_cmd = if low_law {
+                // Braquage du côté le plus sollicité : tangage + roulis différentiel, butée 30°
+                let dq = (pitch_rate / (qmax * 10.0 / 6.0 * k_q_low).max(1e-6)).abs() * systems::DEFL_MAX;
+                let dp = (roll_rate / (pmax * 55.0 / 35.0 * k_p_low).max(1e-6)).abs() * systems::DEFL_MAX;
+                dq.max(dp) + 0.5 * dq.min(dp)
+            } else {
+                (pitch_rate / qmax.max(1e-6)).abs() * 18.0 + (roll_rate / pmax.max(1e-6)).abs() * 14.0
+            };
+            fcs.defl_limit = if self.osr_active || low_law { (0.95 * systems::defl_destroy(q_kpa)).min(systems::DEFL_MAX) } else { systems::defl_limit_normal(q_kpa) };
             fcs.defl_cmd = d_cmd.min(systems::DEFL_MAX);
             if !self.on_ground {
                 if !prot_off || self.osr_active {
@@ -1606,10 +1617,13 @@ impl Aircraft {
             // sous-estime la portance réelle (effet de sol, rafales, composante de poussée) ; la
             // correction intégrale garantit que la récupération ne dépasse pas sa cible
             let ge_l = (1.0 - agl.max(0.0) / 22.0).clamp(0.0, 1.0);
-            let alpha_g = nmax * mass * g / (q.max(1.0) * S_WING * cla * (1.0 + 0.22 * ge_l * ge_l + 0.06 * ge_l));
-            if self.d.nz > nmax {
+            // LOW SPEED : la montée en g est plus vive (gouvernes en butée) -> cible et correction anticipées
+            let n_aim = if low_law { nmax * 0.97 } else { nmax };
+            let alpha_g = n_aim * mass * g / (q.max(1.0) * S_WING * cla * (1.0 + 0.22 * ge_l * ge_l + 0.06 * ge_l));
+            if self.d.nz > n_aim {
                 // Dépassement : on réduit l'incidence autorisée (correction rapide)
-                self.nz_trim = (self.nz_trim - (self.d.nz - nmax) / nmax * 6.0 * dt).max(0.4);
+                let kc = if low_law { 15.0 } else { 6.0 };
+                self.nz_trim = (self.nz_trim - (self.d.nz - n_aim) / nmax * kc * dt).max(0.4);
             } else {
                 // Sinon retour lent vers le modèle (jamais au-delà : pas d'emballement)
                 self.nz_trim += (1.0 - self.nz_trim) * (0.5 * dt).min(1.0);
@@ -1639,8 +1653,15 @@ impl Aircraft {
         // Gouvernes : élevons (tangage + roulis différentiel) et dérives (lacet), en degrés
         fcs.pitch_rate = pitch_rate.to_degrees();
         fcs.roll_rate = roll_rate.to_degrees();
-        let pitch_def = (pitch_rate / qmax.max(1e-6)).clamp(-1.0, 1.0) * 18.0 + (alpha_trim_hint(self) * 0.3);
-        let roll_def = (roll_rate / pmax.max(1e-6)).clamp(-1.0, 1.0) * 14.0;
+        let (pitch_def, roll_def) = if low_law {
+            // LOW SPEED : manche à fond = élevons en butée (ou au braquage autorisé si q élevée)
+            let dmax = fcs.defl_limit.min(systems::DEFL_MAX);
+            let fq = (pitch_rate / (qmax * 10.0 / 6.0 * k_q_low).max(1e-6)).clamp(-1.0, 1.0);
+            let fp = (roll_rate / (pmax * 55.0 / 35.0 * k_p_low).max(1e-6)).clamp(-1.0, 1.0);
+            (fq * dmax + alpha_trim_hint(self) * 0.3 * (1.0 - fq.abs()), fp * dmax)
+        } else {
+            ((pitch_rate / qmax.max(1e-6)).clamp(-1.0, 1.0) * 18.0 + (alpha_trim_hint(self) * 0.3), (roll_rate / pmax.max(1e-6)).clamp(-1.0, 1.0) * 14.0)
+        };
         fcs.elevon_l = (-pitch_def + roll_def).clamp(-30.0, 30.0);
         fcs.elevon_r = (-pitch_def - roll_def).clamp(-30.0, 30.0);
         let asym_y = (self.eng.t_side[0] - self.eng.t_side[1]) / 240_000.0;
@@ -2746,11 +2767,19 @@ mod tests {
                     ac.test_low_speed = low;
                     lim = ac.n_recovery();
                     let mut g: f64 = 0.0;
+                    let mut defl: f64 = 0.0;
                     for _ in 0..(4 * 120) {
                         ac.step(1.0 / 120.0, 1.0, 0.0);
                         g = g.max(ac.d.nz);
+                        defl = defl.max(ac.fcs.elevon_l.abs());
                     }
                     assert!(ac.crashed.is_none(), "{keas} KEAS low={low} : {:?}", ac.crashed);
+                    // LOW SPEED : manche à fond = élevons en butée (30°) ; loi normale : 18° + compensation
+                    if low {
+                        assert!(defl > crate::systems::DEFL_MAX - 0.5, "{keas} KEAS : élevons {defl:.1} deg");
+                    } else {
+                        assert!(defl < 25.0, "{keas} KEAS loi normale : élevons {defl:.1} deg");
+                    }
                     res[k] = g;
                 }
                 println!("{keas:4.0} | {:3.0} t | {:5.2} g | {:5.2} g | {lim:4.2} g", (M_EMPTY + fuel + if fuel < FUEL_MAX { 0.0 } else { H2_MAX }) / 1000.0, res[0], res[1]);
