@@ -1756,6 +1756,15 @@ impl Game {
             return;
         }
         self.push(Level::Info, format!("GCS > {}", w.join(" ")));
+        // VOL D'ESSAI [OACI] : plan local d'essai (comme DMC MISSION > <VOL D'ESSAI)
+        if w[0] == "VOL" && w.get(1) == Some(&"ESSAI") {
+            self.fms.page = fms::Page::Init;
+            self.fms.scratch = w.get(2).map(|x| x.to_string()).unwrap_or_default();
+            if let Some(o) = self.fms.lsk(true, 4, &self.ac) {
+                self.mcdu_out(o);
+            }
+            return;
+        }
         // Sans liaison : seules les instructions locales et de liaison passent. Le canal de secours
         // transmet toutes les instructions (avec sa latence) ; c'est l'avion qui refuse celles qu'il
         // ne peut pas exécuter (moteurs détruits...)
@@ -2035,11 +2044,16 @@ impl Game {
                 if !ac.test_mode {
                     reply = Err("FCS LOW / HIGH SPEED : VOL D'ESSAI UNIQUEMENT (DMC MISSION > VOL D'ESSAI)".into());
                 } else {
+                    let before = ac.test_low_speed;
                     ac.test_low_speed = match arg(1) {
                         "LOW" => true,
                         "HIGH" => false,
                         _ => !ac.test_low_speed,
                     };
+                    if before != ac.test_low_speed {
+                        ac.test_switch_t = get_time();
+                        self.cues.push(audio::Cue::Ack);
+                    }
                     reply = Ok(if ac.test_low_speed {
                         format!("FCS LOW SPEED — MANOEUVRE JUSQU'A {:.1} G (90 % RUPTURE CALCULEE) SOUS MACH 1,5", ac.n_recovery())
                     } else {

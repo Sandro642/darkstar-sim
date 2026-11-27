@@ -279,6 +279,7 @@ pub fn draw_pfd(ac: &Aircraft, v: &View, r: Rect, info: &PfdInfo) {
     }
     draw_heading(ac, &g, info);
     ins_flags(ac, &g, info.time);
+    test_law_hud(ac, &g, info.time);
     rrect_lines(r, 6.0, 1.5, Color::new(0.78, 0.80, 0.82, 0.85));
 
     if let Some((k, since)) = info.mishap {
@@ -314,6 +315,42 @@ pub fn draw_pfd(ac: &Aircraft, v: &View, r: Rect, info: &PfdInfo) {
         txt_c("LIAISON PERDUE - NO SIGNAL", cx, cy - 20.0, 30.0, RED);
         txt_c(ac.crashed.as_deref().unwrap_or(""), cx, cy + 14.0, 18.0, AMBER);
         txt_c("ENTREE : nouvel essai", cx, cy + 46.0, 18.0, WHITE);
+    }
+}
+
+/// Vol d'essai : bandeau permanent (loi FCS active, g actuel / g max autorisé) et warning
+/// clignotant pendant 6 s au passage HIGH <-> LOW SPEED.
+fn test_law_hud(ac: &Aircraft, g: &Geo, time: f64) {
+    if !ac.test_mode || ac.crashed.is_some() {
+        return;
+    }
+    let s = g.inner;
+    let cx = s.x + s.w / 2.0;
+    let low = ac.test_low_speed && ac.d.mach < 1.5;
+    let nmax = ac.fcs.nz_max;
+    let nz = ac.d.nz;
+    let gc = if nz > ac.n_break().0 * 0.95 { RED } else if nz > nmax * 0.9 { AMBER } else { GREEN_S };
+    let law = if ac.test_low_speed { "LOW SPEED" } else { "HIGH SPEED" };
+    let body = format!("{law}   G {nz:+.1}  /  MAX {nmax:.1}");
+    tag(cx, s.y + s.h - 70.0, "ESSAI", &body, if low { AMBER } else { CYAN_S }, 14.0, false, true);
+    // Barre de g : g actuel par rapport au max autorisé et à la rupture
+    let bw = 220.0f32.min(s.w * 0.4);
+    let b = Rect::new(cx - bw / 2.0, s.y + s.h - 58.0, bw, 6.0);
+    draw_rectangle(b.x, b.y, b.w, b.h, Color::new(0.0, 0.0, 0.0, 0.55));
+    let nb = ac.n_break().0;
+    let fx = |n: f64| b.x + ((n / nb).clamp(0.0, 1.0) as f32) * b.w;
+    draw_rectangle(b.x, b.y, fx(nz.max(0.0)) - b.x, b.h, gc);
+    draw_line(fx(nmax), b.y - 3.0, fx(nmax), b.y + b.h + 3.0, 2.0, WHITE);
+    // Warning au passage de loi
+    let age = get_time() - ac.test_switch_t;
+    if age < 6.0 {
+        let blink = (time * 3.0).fract() < 0.6;
+        let (msg, c) = if ac.test_low_speed {
+            (format!("LOI FCS LOW SPEED  -  G MAX {nmax:.1} (90 % RUPTURE)"), AMBER)
+        } else {
+            ("LOI FCS HIGH SPEED  -  LOI NORMALE".to_string(), CYAN_S)
+        };
+        tag(cx, s.y + s.h - 100.0, "WARNING", &msg, c, 16.0, false, blink);
     }
 }
 

@@ -261,6 +261,8 @@ pub struct Aircraft {
     /// la rupture calculée (sinon HIGH SPEED : loi normale)
     pub test_mode: bool,
     pub test_low_speed: bool,
+    /// Instant (horloge locale) du dernier passage HIGH / LOW SPEED : warning sur le HUD
+    pub test_switch_t: f64,
     /// Réchauffage des sondes ; givrage accumulé (s) quand il est coupé par air froid
     pub pitot_heat: bool,
     pitot_ice: f64,
@@ -469,6 +471,7 @@ impl Aircraft {
             g_lim_high: false,
             test_mode: false,
             test_low_speed: false,
+            test_switch_t: -100.0,
             pitot_heat: true,
             pitot_ice: 0.0,
             nws_hi: false,

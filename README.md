@@ -999,3 +999,7 @@ Le SR-72 est un avion de reconnaissance : sa charge utile est simulée.
   rupture calculée sous Mach 1,5 (au lieu de 3-4 g) ; page FCS « LOI ESSAI LOW / HIGH SPEED ». Test
   des g atteignables à 300 / 350 / 450 KEAS (lourd / léger) : à basse vitesse le g reste limité par
   l'autorité des élevons (~10 °/s de tangage) et la portance, pas par la loi.
+- v1.77.2 : HUD en vol d'essai — bandeau permanent « ESSAI » (loi HIGH / LOW SPEED, g actuel / g max
+  autorisé, barre de g jusqu'à la rupture calculée, couleur selon la marge) et WARNING clignotant
+  pendant 6 s au passage HIGH <-> LOW SPEED (avec le g max), signal sonore. Instruction
+  VOL ESSAI [OACI] (comme DMC MISSION > <VOL D'ESSAI).
