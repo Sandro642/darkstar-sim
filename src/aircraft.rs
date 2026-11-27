@@ -243,6 +243,12 @@ pub struct Aircraft {
     /// Rupture structurale / des gouvernes : commandes de vol perdues (cause). La liaison et la
     /// télémesure restent ; l'avion part en vrille jusqu'à l'impact (éjection possible).
     pub fcs_lost: Option<String>,
+    /// Protection de dernière limite (vol d'essai LOW SPEED) : seuil en part de la rupture
+    /// (> 1 : désactivée), prise du manche en cours, temps de stabilisation, g précédent
+    pub guard_pct: f64,
+    pub guard_active: bool,
+    guard_clear_t: f64,
+    guard_prev_nz: f64,
     lost_rates: (f64, f64),
     pub gcas_ovr: bool,
     /// Temps (s) avant déclenchement de la récupération (alerte chevrons sur l'horizon)
@@ -465,6 +471,10 @@ impl Aircraft {
             gcas_active: false,
             gcas_sb: false,
             fcs_lost: None,
+            guard_pct: 0.95,
+            guard_active: false,
+            guard_clear_t: 0.0,
+            guard_prev_nz: 1.0,
             lost_rates: (0.0, 0.0),
             gcas_ovr: false,
             gcas_t: f64::INFINITY,
@@ -1332,6 +1342,38 @@ impl Aircraft {
             let qmax_m = q_auth.to_radians() / (1.0 + mach / 3.0) * hyd;
             let pmax_m = (55.0f64).to_radians() / (1.0 + mach / 4.0) * hyd;
             pitch_rate = pitch_in * qmax_m;
+            // Protection de dernière limite (LOW SPEED, protections de rupture coupées) : g prédit
+            // 0,4 s en avant ; si la rupture va être atteinte et que le pilote tire encore, le FCS
+            // prend le manche, ramène l'avion sous le seuil, puis rend la main une fois stable
+            let free = self.test_mode && self.test_low_speed && mach < 1.5 && self.guard_pct <= 1.0;
+            let nz = self.d.nz;
+            let rate = ((nz - self.guard_prev_nz) / dt.max(1e-4)).clamp(-20.0, 20.0);
+            self.guard_prev_nz = nz;
+            let lim = self.n_break().0 * self.guard_pct;
+            if free && self.fcs_lost.is_none() {
+                let pred = nz + rate.max(0.0) * 0.25;
+                if !self.guard_active && pred > lim && pitch_in > 0.1 {
+                    self.guard_active = true;
+                    self.guard_clear_t = 0.0;
+                    self.msg(Level::Warning, format!("PROTECTION DERNIERE LIMITE : MANCHE PRIS PAR LE FCS ({:.1} G, RUPTURE {:.1} G)", nz, self.n_break().0));
+                }
+                if self.guard_active {
+                    // Tenue juste sous le seuil, sans à-coup
+                    let tgt = lim * 0.98;
+                    pitch_rate = (((tgt - nz) / tgt) * 4.0 * qmax_m).clamp(-2.0 * qmax_m, qmax_m.min(pitch_rate.max(0.0)));
+                    if nz < lim * 0.99 && rate <= 0.5 {
+                        self.guard_clear_t += dt;
+                    } else {
+                        self.guard_clear_t = 0.0;
+                    }
+                    if self.guard_clear_t > 1.0 || pitch_in < 0.05 {
+                        self.guard_active = false;
+                        self.msg(Level::Info, "PROTECTION DERNIERE LIMITE : FCS STABLE, PILOTE A VOUS");
+                    }
+                }
+            } else {
+                self.guard_active = false;
+            }
             roll_rate = roll_in * pmax_m;
         }
         // --- Auto-GCAS : récupération automatique avant impact (prioritaire sur le manche et l'AP) ---
@@ -1664,7 +1706,15 @@ impl Aircraft {
             // loi normale : jamais au-delà de cette même marge
             let recov = self.gcas_active || self.gcas_ovr || self.osr_active;
             let n_rec = self.n_recovery();
-            let nmax = if recov { n_rec } else if test_free { self.n_break().0 * 1.4 } else { self.nz_law_max().min(n_rec) };
+            let nmax = if recov {
+                n_rec
+            } else if test_free && self.guard_active {
+                self.n_break().0 * self.guard_pct
+            } else if test_free {
+                self.n_break().0 * 1.4
+            } else {
+                self.nz_law_max().min(n_rec)
+            };
             // Incidence donnant nmax (portance linéaire), corrigée par le g mesuré : le modèle linéaire
             // sous-estime la portance réelle (effet de sol, rafales, composante de poussée) ; la
             // correction intégrale garantit que la récupération ne dépasse pas sa cible
@@ -2822,10 +2872,9 @@ mod tests {
                     }
                     if low {
                         // Protections de rupture désactivées : casse structurale possible
-                        assert!(ac.crashed.is_none(), "liaison perdue : {:?}", ac.crashed);
-                        if let Some(c) = &ac.fcs_lost {
-                            assert!(c.contains("RUPTURE") || c.contains("GOUVERNES"), "{c}");
-                        }
+                        // Protection de dernière limite : pas de casse, g sous la rupture
+                        assert!(ac.crashed.is_none() && ac.fcs_lost.is_none(), "{keas} KEAS : {:?} {:?}", ac.crashed, ac.fcs_lost);
+                        assert!(g < ac.n_break().0, "{keas} KEAS : {g:.2} g / rupture {:.2}", ac.n_break().0);
                     } else {
                         assert!(ac.crashed.is_none(), "{keas} KEAS normale : {:?}", ac.crashed);
                     }
@@ -2855,6 +2904,7 @@ mod tests {
         ac.gcas_on = true;
         ac.test_mode = true;
         ac.test_low_speed = true;
+        ac.guard_pct = 2.0; // protection de dernière limite désactivée
         let mut t = 0.0;
         while ac.fcs_lost.is_none() && t < 20.0 {
             ac.step(1.0 / 120.0, 1.0, 0.0);

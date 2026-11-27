@@ -2054,6 +2054,22 @@ impl Game {
                 }
             }
             // Vol d'essai : loi FCS LOW SPEED (manœuvre jusqu'à 90 % de la rupture calculée) / HIGH SPEED
+            // Seuil de la protection de dernière limite (LOW SPEED) : FCS SEUIL 90..100 / OFF
+            "FCS" if arg(1) == "SEUIL" => {
+                match arg(2) {
+                    "OFF" => {
+                        ac.guard_pct = 2.0;
+                        reply = Ok("PROTECTION DERNIERE LIMITE DESACTIVEE — CASSE POSSIBLE".into());
+                    }
+                    v => match v.parse::<f64>() {
+                        Ok(p) if (90.0..=100.0).contains(&p) => {
+                            ac.guard_pct = p / 100.0;
+                            reply = Ok(format!("DERNIERE LIMITE A {p:.0} % DE LA RUPTURE ({:.1} G)", ac.n_break().0 * ac.guard_pct));
+                        }
+                        _ => reply = Err("FCS SEUIL 90..100 (% DE LA RUPTURE) OU FCS SEUIL OFF".into()),
+                    },
+                }
+            }
             "FCS" if matches!(arg(1), "SPEED" | "LOW" | "HIGH") => {
                 if !ac.test_mode {
                     reply = Err("FCS LOW / HIGH SPEED : VOL D'ESSAI UNIQUEMENT (DMC MISSION > VOL D'ESSAI)".into());

@@ -1496,6 +1496,12 @@ impl Fms {
                     return Some(McduOut::Cmd("FCS SPEED TOGGLE".into()));
                 }
             }
+            (Page::Init, false, 3) if self.plan().is_some_and(|p| p.source == "ESSAI") => {
+                // Seuil de dernière limite : 90..100 (% de la rupture) ou OFF
+                let v = if sp.is_empty() { "95".to_string() } else { sp.clone() };
+                self.scratch.clear();
+                return Some(McduOut::Cmd(format!("FCS SEUIL {v}")));
+            }
             (Page::Init, false, 3) => {
                 // Code de type (B77W) ou identifiant d'un avion personnalisé SimBrief (ex. 793553_1731...)
                 if (3..=30).contains(&sp.len()) && sp.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') {
@@ -2029,7 +2035,12 @@ fn page_lines(f: &Fms, ac: &Aircraft) -> (String, Color, Vec<(Line, Line)>) {
             rows.push((ln(" INDICATIF", LBL_M, "DERNIER OFP ", LBL_M), ln(f.plan().map(|p| p.flt.clone()).unwrap_or("DKS01".into()), CYAN_M, imp, WHITE_M)));
             let gen_l = if f.ofp_wait.is_some() { "ATTENTE OFP..." } else { "GENERER OFP>" };
             rows.push((ln(" CROISIERE FL/MACH", LBL_M, "NOUVEL OFP + IMPORT ", LBL_M), ln(if f.crz_max { format!("MAX({:.0})/M{:.1}", f.crz.0, f.crz.1) } else { format!("FL{:.0}/M{:.1}", f.crz.0, f.crz.1) }, CYAN_M, gen_l, if f.ofp_wait.is_some() { AMB_M } else { WHITE_M })));
-            rows.push((ln(" PLAN HORS LIGNE", LBL_M, "TYPE ", LBL_M), ln("<PLAN DARKSTAR", WHITE_M, "DKS", CYAN_M)));
+            if f.plan().is_some_and(|p| p.source == "ESSAI") {
+                let g = if ac.guard_pct <= 1.0 { format!("{:.0} %>", ac.guard_pct * 100.0) } else { "OFF>".into() };
+                rows.push((ln(" PLAN HORS LIGNE", LBL_M, "DERNIERE LIMITE ", LBL_M), ln("<PLAN DARKSTAR", WHITE_M, g, if ac.guard_pct <= 1.0 { CYAN_M } else { AMB_M })));
+            } else {
+                rows.push((ln(" PLAN HORS LIGNE", LBL_M, "TYPE ", LBL_M), ln("<PLAN DARKSTAR", WHITE_M, "DKS", CYAN_M)));
+            }
             let info = match f.plan() {
                 Some(p) => format!("{} {}-{} {:.0}NM", p.source, p.origin, p.dest, p.total() / NM),
                 None => "AUCUN PLAN".into(),

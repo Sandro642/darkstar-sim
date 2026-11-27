@@ -337,7 +337,13 @@ fn test_law_hud(ac: &Aircraft, g: &Geo, time: f64) {
     let nmax = ac.fcs.nz_max;
     let nz = ac.d.nz;
     let gc = if nz > ac.n_break().0 * 0.95 { RED } else if nz > nmax * 0.9 { AMBER } else { GREEN_S };
-    let law = if ac.test_low_speed { "LOW SPEED  PROT RUPTURE OFF" } else { "HIGH SPEED" };
+    let law = if !ac.test_low_speed {
+        "HIGH SPEED".to_string()
+    } else if ac.guard_pct <= 1.0 {
+        format!("LOW SPEED  DERNIERE LIMITE {:.0}%", ac.guard_pct * 100.0)
+    } else {
+        "LOW SPEED  PROT RUPTURE OFF".to_string()
+    };
     let body = format!("{law}   G {nz:+.1}  /  MAX {nmax:.1}");
     tag(cx, s.y + s.h - 70.0, "ESSAI", &body, if low { AMBER } else { CYAN_S }, 14.0, false, true);
     // Barre de g : g actuel par rapport au max autorisé et à la rupture
@@ -348,6 +354,14 @@ fn test_law_hud(ac: &Aircraft, g: &Geo, time: f64) {
     let fx = |n: f64| b.x + ((n / nb).clamp(0.0, 1.0) as f32) * b.w;
     draw_rectangle(b.x, b.y, fx(nz.max(0.0)) - b.x, b.h, gc);
     draw_line(fx(nmax), b.y - 3.0, fx(nmax), b.y + b.h + 3.0, 2.0, WHITE);
+    if low && ac.guard_pct <= 1.0 {
+        let gx = fx(nb * ac.guard_pct);
+        draw_line(gx, b.y - 4.0, gx, b.y + b.h + 4.0, 2.0, AMBER);
+    }
+    if ac.guard_active {
+        let blink = (time * 4.0).fract() < 0.6;
+        tag(cx, s.y + s.h - 156.0, "LIMITE RUPTURE", "MANCHE PRIS PAR LE FCS  -  STABILISATION", RED, 18.0, false, blink);
+    }
     if low && nz > ac.n_break().0 * 0.9 && (time * 4.0).fract() < 0.6 {
         tag(cx, s.y + s.h - 128.0, "OVER-G", &format!("{nz:.1} G  -  RUPTURE A {:.1} G", ac.n_break().0), RED, 18.0, false, true);
     }

@@ -1018,3 +1018,9 @@ Le SR-72 est un avion de reconnaissance : sa charge utile est simulée.
   la liaison et la télémesure restent, les FCS sont perdus (manche, AP, récupérations sans effet),
   voilure endommagée, vrille divergente jusqu'à l'impact ; alarme FCS LOST, bandeau « FCS PERDUS —
   AVION INCONTROLABLE — EJECTION ». Instruction RUPTURE (panne injectée).
+- v1.79.0 : vol d'essai LOW SPEED — protection de DERNIERE LIMITE : g prédit 0,25 s en avant ; si la
+  rupture va être atteinte et que le pilote tire encore, le FCS prend le manche, tient l'avion juste
+  sous le seuil puis rend la main une fois stable (1 s) ou dès que le manche est relâché. Seuil
+  réglable (95 % de la rupture par défaut, 90-100 % ou OFF) : DMC MISSION > DERNIERE LIMITE ou
+  FCS SEUIL n / OFF. HUD : seuil dans le bandeau ESSAI, repère ambre sur la barre de g, alerte
+  « LIMITE RUPTURE — MANCHE PRIS PAR LE FCS ». Manche à fond : ~5,0 g plein, ~6,3 g léger, sans casse.
