@@ -1852,6 +1852,11 @@ impl Game {
                 ac.ap.spd_managed = true;
                 reply = Ok("A/THR VITESSE GÉRÉE (APPROCHE / 250 KEAS SOUS 10 000 FT / 350 KEAS - M0.9)".into());
             }
+            "VITESSE" | "SPEED" if matches!(arg(1), "KT" | "KTS" | "KEAS" | "MACH" | "M") => {
+                let m = matches!(arg(1), "MACH" | "M");
+                pfd::set_speed_unit(m);
+                reply = Ok(format!("BANDE VITESSE EN {}", if m { "MACH" } else { "KT (KEAS)" }));
+            }
             "KEAS" | "VIT" | "VITESSE" | "SPD" | "SPEED" => match num(1) {
                 Some(k) => {
                     ac.ap.at_on = true;
@@ -2040,6 +2045,22 @@ impl Game {
                     pfd::hide_menu(true);
                     connect::save_mode(true);
                     reply = Ok("VERSION DEVELOPPEUR — FENETRES DEPLACABLES, CONSOLE DANS LA BARRE (MENU CONSOLE)".into());
+                }
+            }
+            // Bandes de l'horizon : ECHELLE VITESSE 150|300|600 (ou 1..3), ECHELLE ALT 1000|2000|5000|10000,
+            // VITESSE KT|MACH
+            "ECHELLE" | "SCALE" => {
+                let v = arg(2).parse::<f64>().ok();
+                match (arg(1), v) {
+                    ("VITESSE" | "VIT" | "SPD" | "SPEED", Some(x)) => {
+                        let i = if x <= 3.0 { (x as u8).saturating_sub(1) } else if x <= 200.0 { 0 } else if x <= 400.0 { 1 } else { 2 };
+                        reply = Ok(format!("BANDE VITESSE : {}", pfd::set_speed_scale(i)));
+                    }
+                    ("ALT" | "ALTITUDE", Some(x)) => {
+                        let i = if x <= 4.0 { (x as u8).saturating_sub(1) } else if x <= 1500.0 { 0 } else if x <= 3000.0 { 1 } else if x <= 7000.0 { 2 } else { 3 };
+                        reply = Ok(format!("BANDE ALTITUDE : +/-{:.0} FT", pfd::set_alt_scale(i)));
+                    }
+                    _ => reply = Err("ECHELLE VITESSE 150/300/600 OU ECHELLE ALT 1000/2000/5000/10000".into()),
                 }
             }
             // Panne injectée : rupture structurale (FCS perdus, liaison conservée)

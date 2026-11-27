@@ -1028,3 +1028,8 @@ Le SR-72 est un avion de reconnaissance : sa charge utile est simulée.
   librement jusqu'au seuil, le FCS reprend le manche seulement au dépassement (tenue au seuil, main
   rendue 0,3 s après le retour sous le seuil ou au relâché du manche) ; seule sécurité anticipée :
   g qui atteindrait la rupture dans les 0,08 s. Dépassement du seuil ~0,1 g, jamais de casse.
+- v1.80.0 : horizon — bande vitesse en KT (KEAS) ou en MACH (bouton KT / M au-dessus de la bande,
+  instruction VITESSE KT / MACH) ; échelles réglables par clic sur la bande ou par instruction :
+  vitesse +/-75, 150, 300 kt (Mach +/-0,5, 1, 2 ; ECHELLE VITESSE 150/300/600), altitude +/-500,
+  1000, 2500, 5000 ft (ECHELLE ALT 1000/2000/5000/10000) ; graduations adaptées, repères (limite q,
+  VLE, basse vitesse, VAPP, consigne A/THR, tendance) convertis dans l'unité choisie.

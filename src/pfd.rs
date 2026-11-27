@@ -1290,39 +1290,89 @@ fn draw_g_bracket(ac: &Aircraft, g: &Geo) {
     txt_c(&format!("{nz:+.1}"), x + 10.0, top - 11.0, 14.0, gc);
 }
 
+thread_local! {
+    /// Réglages des bandes : (unité vitesse 0 KT / 1 MACH, échelle vitesse 0..2, échelle altitude 0..3)
+    static TAPE: std::cell::Cell<(u8, u8, u8)> = const { std::cell::Cell::new((0, 0, 0)) };
+}
+
+const SPD_SPAN_KT: [f32; 3] = [150.0, 300.0, 600.0];
+const SPD_SPAN_M: [f32; 3] = [1.0, 2.0, 4.0];
+const ALT_SPAN: [f32; 4] = [1000.0, 2000.0, 5000.0, 10000.0];
+
+/// Unité de la bande vitesse : MACH (vrai) ou KT.
+pub fn set_speed_unit(mach: bool) {
+    TAPE.with(|c| {
+        let v = c.get();
+        c.set((mach as u8, v.1, v.2));
+    });
+}
+
+/// Échelle vitesse (0..2) ; renvoie la demi-plage affichée (texte).
+pub fn set_speed_scale(i: u8) -> String {
+    TAPE.with(|c| {
+        let v = c.get();
+        let i = i.min(2);
+        c.set((v.0, i, v.2));
+        if v.0 == 1 { format!("+/-M{:.1}", SPD_SPAN_M[i as usize] / 2.0) } else { format!("+/-{:.0} KT", SPD_SPAN_KT[i as usize] / 2.0) }
+    })
+}
+
+/// Échelle altitude (0..3) ; renvoie la demi-plage (ft).
+pub fn set_alt_scale(i: u8) -> f32 {
+    TAPE.with(|c| {
+        let v = c.get();
+        let i = i.min(3);
+        c.set((v.0, v.1, i));
+        ALT_SPAN[i as usize] / 2.0
+    })
+}
+
 fn draw_speed(ac: &Aircraft, g: &Geo, time: f64) {
     let d = &ac.d;
     let t = g.spd;
     tape_bg(t);
     let lx = t.x + t.w;
     let cy = t.y + t.h / 2.0;
-    let ppk = t.h / 150.0;
-    let spd = (d.keas + adc_noise(ac, time)).max(0.0) as f32;
+    let (unit, si, _) = TAPE.with(|c| c.get());
+    let mach_mode = unit == 1;
+    let si = (si as usize).min(2);
+    let span = if mach_mode { SPD_SPAN_M[si] } else { SPD_SPAN_KT[si] };
+    let ppk = t.h / span;
+    let air = crate::atmosphere::isa(ac.alt);
+    // Conversion d'une vitesse équivalente (KEAS) dans l'unité de la bande
+    let conv = |k: f32| -> f32 { if mach_mode { (k as f64 * KT / (air.rho / 1.225).sqrt() / air.a) as f32 } else { k } };
+    let noise = adc_noise(ac, time);
+    let spd = if mach_mode { (d.mach * (1.0 + noise / d.keas.max(50.0))).max(0.0) as f32 } else { (d.keas + noise).max(0.0) as f32 };
     scissor_push(t);
-    let base = (spd / 10.0).floor() as i32 * 10;
-    for k in -9..=9 {
-        let v = base + k * 10;
-        if v < 0 {
+    // Graduations : pas et libellés selon l'échelle
+    let (tick, lab) = if mach_mode { [(0.05f32, 0.1f32), (0.1, 0.2), (0.25, 0.5)][si] } else { [(10.0f32, 20.0f32), (20.0, 50.0), (50.0, 100.0)][si] };
+    let k0 = ((spd - span * 0.6) / tick).floor() as i32;
+    let k1 = ((spd + span * 0.6) / tick).ceil() as i32;
+    for k in k0..=k1 {
+        let v = k as f32 * tick;
+        if v < -1e-4 {
             continue;
         }
-        let y = cy - (v as f32 - spd) * ppk;
-        let l = if v % 20 == 0 { 9.0 } else { 5.0 };
+        let y = cy - (v - spd) * ppk;
+        let major = ((v / lab).round() * lab - v).abs() < tick * 0.25;
+        let l = if major { 9.0 } else { 5.0 };
         draw_line(lx - l, y, lx, y, 1.5, line());
-        if v % 20 == 0 {
-            txt_r(&format!("{:03}", v), lx - 13.0, y + 5.0, 15.0, label_c());
+        if major {
+            let s = if mach_mode { format!("{v:.1}") } else { format!("{:03.0}", v) };
+            txt_r(&s, lx - 13.0, y + 5.0, 15.0, label_c());
         }
     }
     // Bandes : limite q (rouge), VLE train (ambre), basse vitesse
     let q_lim = ((2.0 * Q_LIMIT / 1.225).sqrt() / KT) as f32;
-    let yq = cy - (q_lim - spd) * ppk;
+    let yq = cy - (conv(q_lim) - spd) * ppk;
     draw_rectangle(lx - 4.0, yq - 600.0, 4.0, 600.0, RED);
     if ac.gear_pos > 0.01 {
-        let yg = cy - (GEAR_VLE as f32 - spd) * ppk;
+        let yg = cy - (conv(GEAR_VLE as f32) - spd) * ppk;
         draw_rectangle(lx - 7.0, yg - 600.0, 3.0, 600.0, AMBER);
     }
     if !ac.on_ground {
         let vs1g = (crate::autoflight::vapp(ac) / 1.23) as f32;
-        let yl = cy - (vs1g - spd) * ppk;
+        let yl = cy - (conv(vs1g) - spd) * ppk;
         if yl < t.y + t.h {
             scissor_push(Rect::new(lx - 6.0, yl.max(t.y), 6.0, t.y + t.h - yl.max(t.y)));
             let mut yy = yl;
@@ -1334,22 +1384,22 @@ fn draw_speed(ac: &Aircraft, g: &Geo, time: f64) {
         }
         if ac.approach.is_some() && ac.gear_pos > 0.5 {
             let va = crate::autoflight::vapp(ac) as f32;
-            let y = cy - (va - spd) * ppk;
+            let y = cy - (conv(va) - spd) * ppk;
             draw_line(lx - 12.0, y, lx, y, 2.0, CYAN_S);
             txt_r("VAPP", lx - 14.0, y - 3.0, 11.0, CYAN_S);
         }
     }
     if ac.on_ground {
-        let y = cy - (170.0 - spd) * ppk;
+        let y = cy - (conv(170.0) - spd) * ppk;
         draw_line(lx - 10.0, y, lx, y, 2.0, CYAN_S);
         txt_r("R", lx - 12.0, y + 5.0, 14.0, CYAN_S);
     }
     if let Some(k) = ac.ap.spd_keas.filter(|_| ac.ap.at_on) {
-        let y = (cy - (k as f32 - spd) * ppk).clamp(t.y, t.y + t.h);
+        let y = (cy - (conv(k as f32) - spd) * ppk).clamp(t.y, t.y + t.h);
         draw_triangle(vec2(lx - 9.0, y), vec2(lx, y - 6.0), vec2(lx, y + 6.0), MAGENTA_S);
     }
-    let trend = (d.accel * 10.0 / KT * (crate::atmosphere::isa(ac.alt).rho / 1.225).sqrt()) as f32;
-    if trend.abs() > 2.0 {
+    let trend = if mach_mode { (d.accel * 10.0 / air.a) as f32 } else { (d.accel * 10.0 / KT * (air.rho / 1.225).sqrt()) as f32 };
+    if trend.abs() > tick * 0.2 {
         draw_line(lx - 3.0, cy, lx - 3.0, cy - trend * ppk, 2.0, GREEN_S);
     }
     scissor_pop();
@@ -1361,18 +1411,38 @@ fn draw_speed(ac: &Aircraft, g: &Geo, time: f64) {
     draw_triangle(vec2(lx + 2.0, cy), vec2(bx + bw, cy - 8.0), vec2(bx + bw, cy + 8.0), line());
     draw_rectangle(bx + bw - 20.0, cy - 24.0, 20.0, 48.0, BLACK);
     draw_rectangle_lines(bx + bw - 20.0, cy - 24.0, 20.0, 48.0, 1.5, line());
-    let s10 = (spd / 10.0).floor();
-    if s10 > 0.0 {
-        txt_r(&format!("{s10:.0}"), bx + bw - 21.0, cy + 9.0, 24.0, val_c());
+    if mach_mode {
+        txt_r(&format!("{spd:.2}"), bx + bw - 3.0, cy + 8.0, 22.0, val_c());
+    } else {
+        let s10 = (spd / 10.0).floor();
+        if s10 > 0.0 {
+            txt_r(&format!("{s10:.0}"), bx + bw - 21.0, cy + 9.0, 24.0, val_c());
+        }
+        drum(bx + bw, cy, 20.0, 46.0, spd as f64, 1.0, 10.0, 1, 22.0);
     }
-    drum(bx + bw, cy, 20.0, 46.0, spd as f64, 1.0, 10.0, 1, 22.0);
+    // Échelle affichée (bas de la bande) ; clic sur la bande : échelle suivante
+    let sc = if mach_mode { format!("+/-M{:.1}", span / 2.0) } else { format!("+/-{:.0}", span / 2.0) };
+    txt(&sc, t.x + 3.0, t.y + t.h - 4.0, 10.0, label_c());
+    if clicked(t) {
+        TAPE.with(|c| {
+            let v = c.get();
+            c.set((v.0, (v.1 + 1) % 3, v.2));
+        });
+    }
     // Au-dessus : vitesse vraie et consigne
     rrect(Rect::new(t.x, t.y - 34.0, t.w, 32.0), 5.0, BLOCK);
     txt(&format!("TAS {:.0}", ac.tas / KT), t.x + 2.0, t.y - 20.0, 13.0, WHITE);
     match ac.ap.spd_keas.filter(|_| ac.ap.at_on) {
         Some(k) => txt(&format!("SEL {k:.0}"), t.x + 2.0, t.y - 6.0, 13.0, MAGENTA_S),
         None if ac.ap.at_on => txt(&format!("SEL M{:.2}", ac.ap.mach_tgt), t.x + 2.0, t.y - 6.0, 13.0, MAGENTA_S),
-        None => txt(if ac.air_data_ovrd { "INS" } else { "KEAS" }, t.x + 2.0, t.y - 6.0, 12.0, label_c()),
+        None => txt(if ac.air_data_ovrd { "INS" } else if mach_mode { "MACH" } else { "KEAS" }, t.x + 2.0, t.y - 6.0, 12.0, label_c()),
+    }
+    // Bouton d'unité KT / M
+    let ub = Rect::new(t.x + t.w - 26.0, t.y - 31.0, 24.0, 16.0);
+    rrect(ub, 3.0, if hovered(ub) { Color::new(0.25, 0.27, 0.3, 1.0) } else { Color::new(0.15, 0.16, 0.18, 1.0) });
+    txt_c(if mach_mode { "M" } else { "KT" }, ub.x + ub.w / 2.0, ub.y + 12.0, 10.0, WHITE);
+    if clicked(ub) {
+        set_speed_unit(!mach_mode);
     }
     // En dessous : Mach, vitesse sol, incidence, facteur de charge
     // Style Darkstar : bloc logé dans la colonne noire de gauche
@@ -1415,17 +1485,29 @@ fn draw_altitude(ac: &Aircraft, g: &Geo, da_ft: Option<f64>) {
     let lx = t.x;
     let cy = t.y + t.h / 2.0;
     let alt = (ac.alt / FT) as f32;
-    let ppf = t.h / 1000.0;
+    let ai = (TAPE.with(|c| c.get()).2 as usize).min(3);
+    let aspan = ALT_SPAN[ai];
+    let ppf = t.h / aspan;
     scissor_push(t);
-    let base = (alt / 100.0).floor() as i32 * 100;
-    for k in -7..=7 {
-        let a = base + k * 100;
+    let (astep, alab) = [(100i32, 200i32), (200, 500), (500, 1000), (1000, 2000)][ai];
+    let base = (alt / astep as f32).floor() as i32 * astep;
+    let n = (aspan / astep as f32 * 0.6).ceil() as i32;
+    for k in -n..=n {
+        let a = base + k * astep;
         let y = cy - (a as f32 - alt) * ppf;
-        let l = if a % 200 == 0 { 9.0 } else { 5.0 };
+        let l = if a % alab == 0 { 9.0 } else { 5.0 };
         draw_line(lx, y, lx + l, y, 1.5, line());
-        if a % 200 == 0 {
+        if a % alab == 0 {
             txt(&format!("{a}"), lx + 14.0, y + 5.0, 15.0, label_c());
         }
+    }
+    // Échelle affichée ; clic sur la bande : échelle suivante
+    txt_r(&format!("+/-{:.0}", aspan / 2.0), t.x + t.w - 14.0, t.y + t.h - 4.0, 10.0, label_c());
+    if clicked(t) {
+        TAPE.with(|c| {
+            let v = c.get();
+            c.set((v.0, v.1, (v.2 + 1) % 4));
+        });
     }
     // Sol : hachures jaunes et noires sous l'élévation du terrain (bord droit)
     let yg = cy - ((d.elev / FT) as f32 - alt) * ppf;
