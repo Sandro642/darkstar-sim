@@ -1044,3 +1044,7 @@ Le SR-72 est un avion de reconnaissance : sa charge utile est simulée.
   fenêtre, radio, manette / train, pannes ; écran : horizon, HSI, COMMANDES PILOTE AUTO, train,
   carburant). Menu DISPOSITION > PRESET… ou instruction PRESET DEPART / VOL / ARRIVEE ; PRESET AUTO :
   changement automatique selon la phase de vol (sol / montée initiale, croisière, approche).
+- v1.81.1 : préréglages DEPART / VOL / ARRIVEE refaits pour un écran 14 pouces — fenêtre ECRAN au
+  centre (60 % x 78 %), horizon sur les trois quarts de l'écran, trois cases utiles en dessous ;
+  colonnes latérales (moteurs, manette, panneau droit / élec / pannes / ND) et bandeau bas
+  (messages, batterie, scram, radio, MASTER) sans recouvrement.
