@@ -1095,3 +1095,10 @@ Le SR-72 est un avion de reconnaissance : sa charge utile est simulée.
   0.15 en TWS) : plots isolés (petite croix, « PLOT » dans la liste), jamais confirmés, effacés
   après 8 s ; confirmation des pistes à 2 détections ; LOCK auto ne choisit que des pistes
   confirmées ; verrouillage forcé sur un plot = « LOCK PERDU — PAS DE RETOUR RADAR ».
+- v1.87.0 : télémétrie passive en poursuite sur brouilleur (TMA, relèvements seuls) : relèvements
+  HOJ à 2 Hz sur 90 s, cible supposée à vitesse constante, recherche de la distance le long de la
+  visée (décalage latéral et vitesse cible par moindres carrés pondérés, a priori de vitesse),
+  incertitude 1 sigma par le coût angulaire. En ligne droite la distance est inobservable
+  (« ZIGZAG +/-45 POUR TMA ») ; après un zigzag, distance et piste estimées (essai : 71.5 +/-4.2 NM
+  pour 68.6 NM réels). Page LOCK : segment +/-1 sigma et losange sur le strobe (vert quand
+  l'incertitude < 25 %), fiche « DIST xx NM +/-yy TMA ».

@@ -121,6 +121,12 @@ pub struct Target {
     /// Poursuite sur brouilleur (STT angle seul), site mesuré du brouilleur (deg)
     pub hoj: bool,
     pub strobe_el: f64,
+    /// Télémétrie passive en HOJ (relèvements seuls + manœuvre de l'avion) : mesures
+    /// (t, est m, nord m, relèvement rad) dans un repère local, estimation (distance m, écart-type m)
+    tma_pts: Vec<(f64, f64, f64, f64)>,
+    tma_ref: (f64, f64),
+    tma_dt: f64,
+    pub tma: Option<(f64, f64)>,
     /// Détections cumulées de la piste (confirmation 2 sur N), fausse alarme (bruit thermique)
     pub det_n: u32,
     false_alarm: bool,
@@ -342,6 +348,122 @@ pub struct Traffic {
     pub auto_spawn: bool,
     /// Fausses alarmes radar (franchissements du seuil CFAR par le bruit)
     pub false_alarms: bool,
+    /// Horloge des capteurs (s)
+    clock: f64,
+}
+
+/// Télémétrie passive : fenêtre (s), bruit d'angle HOJ (deg), précision requise (fraction de la
+/// distance, 1 sigma) pour valider l'estimation
+pub const TMA_WIN: f64 = 90.0;
+pub const TMA_SIGMA_DEG: f64 = 0.3;
+pub const TMA_OK: f64 = 0.25;
+
+/// Estimation de trajectoire par relèvements seuls (TMA), cible à vitesse constante : pour chaque
+/// distance candidate le long du dernier relèvement, vitesse de la cible par moindres carrés,
+/// puis coût en écarts angulaires normalisés. Distance retenue = minimum ; incertitude = zone où
+/// le coût reste à moins de 1 du minimum (1 sigma). En ligne droite à vitesse constante, le coût
+/// est plat : distance inobservable tant que l'avion ne manœuvre pas.
+pub struct TmaFix {
+    pub x: f64,
+    pub y: f64,
+    pub vx: f64,
+    pub vy: f64,
+    pub range: f64,
+    pub sigma: f64,
+}
+
+fn solve3(mut m: [[f64; 3]; 3], mut b: [f64; 3]) -> Option<[f64; 3]> {
+    let scale = m.iter().flatten().fold(0.0f64, |a, v| a.max(v.abs()));
+    for c in 0..3 {
+        let p = (c..3).max_by(|&i, &j| m[i][c].abs().total_cmp(&m[j][c].abs()))?;
+        if m[p][c].abs() <= scale * 1e-14 {
+            return None;
+        }
+        m.swap(c, p);
+        b.swap(c, p);
+        for r in c + 1..3 {
+            let f = m[r][c] / m[c][c];
+            for k in c..3 {
+                m[r][k] -= f * m[c][k];
+            }
+            b[r] -= f * b[c];
+        }
+    }
+    let mut x = [0.0; 3];
+    for c in (0..3).rev() {
+        let mut v = b[c];
+        for k in c + 1..3 {
+            v -= m[c][k] * x[k];
+        }
+        x[c] = v / m[c][c];
+    }
+    Some(x)
+}
+
+/// Écart-type de l'a priori de vitesse cible (m/s)
+const TMA_VPRIOR: f64 = 300.0;
+
+pub fn tma_solve(pts: &[(f64, f64, f64, f64)], now: f64, sigma_deg: f64) -> Option<TmaFix> {
+    if pts.len() < 20 || now - pts[0].0 < 15.0 {
+        return None;
+    }
+    let sa = sigma_deg.to_radians();
+    let &(_, pxn, pyn, bn) = pts.last()?;
+    let u = (bn.sin(), bn.cos());
+    let n = 140;
+    let (r_lo, r_hi) = (1.0 * NM, 200.0 * NM);
+    let mut grid = Vec::with_capacity(n);
+    for k in 0..n {
+        let r = r_lo * (r_hi / r_lo).powf(k as f64 / (n - 1) as f64);
+        let (x0, y0) = (pxn + r * u.0, pyn + r * u.1);
+        // Décalage latéral c (le dernier relèvement est bruité) et vitesse : moindres carrés
+        // pondérés sur les pseudo-mesures n_i . (X0 + c u_perp + v tau - p_i) = 0
+        let up = (u.1, -u.0);
+        let mut m = [[0.0; 3]; 3];
+        let mut v = [0.0; 3];
+        for &(t, px, py, b) in pts {
+            let tau = t - now;
+            let (cb, sb) = (b.cos(), b.sin());
+            let ri = (x0 - px).hypot(y0 - py).max(100.0);
+            let w = 1.0 / (ri * sa).powi(2);
+            let g = [cb * up.0 - sb * up.1, cb * tau, -sb * tau];
+            let h = -(cb * (x0 - px) - sb * (y0 - py));
+            for i in 0..3 {
+                v[i] += w * g[i] * h;
+                for j in 0..3 {
+                    m[i][j] += w * g[i] * g[j];
+                }
+            }
+        }
+        // A priori sur la vitesse (cible subsonique à supersonique) : régularise la composante
+        // radiale, mal observée par les seuls relèvements
+        m[1][1] += 1.0 / (TMA_VPRIOR * TMA_VPRIOR);
+        m[2][2] += 1.0 / (TMA_VPRIOR * TMA_VPRIOR);
+        let Some([c, vx, vy]) = solve3(m, v) else { continue };
+        let (x, y) = (x0 + c * up.0, y0 + c * up.1);
+        // Coût : écarts angulaires réels / bruit + a priori de vitesse
+        let mut j = (vx * vx + vy * vy) / (TMA_VPRIOR * TMA_VPRIOR);
+        for &(t, px, py, b) in pts {
+            let tau = t - now;
+            let (dx, dy) = (x + vx * tau - px, y + vy * tau - py);
+            let e = wrap180((b - dx.atan2(dy)).to_degrees()).to_radians() / sa;
+            j += e * e;
+        }
+        grid.push((r, j, x, y, vx, vy));
+    }
+    let best = grid.iter().cloned().min_by(|a, b| a.1.total_cmp(&b.1))?;
+    // Seuil 1 sigma, élargi si l'ajustement est mauvais (cible qui manœuvre : khi2 réduit > 1)
+    let dof = (pts.len() as f64 - 3.0).max(1.0);
+    let thr = (best.1 / dof).max(1.0);
+    let inside: Vec<f64> = grid.iter().filter(|g| g.1 <= best.1 + thr).map(|g| g.0).collect();
+    let lo = inside.iter().cloned().fold(f64::MAX, f64::min);
+    let hi = inside.iter().cloned().fold(0.0, f64::max);
+    // Bornes de la grille atteintes : distance non contrainte de ce côté
+    let step = (r_hi / r_lo).powf(1.0 / (n - 1) as f64);
+    let lo = if lo <= r_lo * 1.001 { 0.0 } else { lo };
+    let hi = if hi >= r_hi * 0.999 { 1e9 } else { hi };
+    let sigma = ((hi - lo) / 2.0).max(best.0 * (step - 1.0) / 2.0);
+    Some(TmaFix { x: best.2, y: best.3, vx: best.4, vy: best.5, range: (best.2 - pxn).hypot(best.3 - pyn), sigma })
 }
 
 /// Fausses alarmes par cadre de balayage (Pfa x nombre de cellules distance-Doppler du volume)
@@ -363,7 +485,7 @@ thread_local! {
 
 impl Traffic {
     pub fn new() -> Self {
-        Traffic { list: Vec::new(), lock: None, aa: false, rng: 0x9E37_79B9_7F4A_7C15, next_id: 1, scan_t: 0.0, lock_loss_t: 0.0, events: Vec::new(), mode: RadarMode::Rws, auto_spawn: true, false_alarms: true }
+        Traffic { list: Vec::new(), lock: None, aa: false, rng: 0x9E37_79B9_7F4A_7C15, next_id: 1, scan_t: 0.0, lock_loss_t: 0.0, events: Vec::new(), mode: RadarMode::Rws, auto_spawn: true, false_alarms: true, clock: 0.0 }
     }
 
     fn rand(&mut self) -> f64 {
@@ -509,6 +631,8 @@ impl Traffic {
         }
         // ---- Capteurs : radar, IFF, ADS-B, Link 16 ; fusion en pistes ----
         let mode = self.mode;
+        self.clock += dt;
+        let clock = self.clock;
         let (az_lim, frame_s) = mode.volume();
         self.scan_t += dt;
         let frame = self.scan_t >= frame_s;
@@ -566,7 +690,7 @@ impl Traffic {
             t.rcs_eff = st.rcs_eff;
             t.strobe = st.why == Some(JAM_WHY);
             // Angle du brouilleur : précis en poursuite HOJ, grossier en balayage
-            let sj = if stt && t.hoj { 0.3 } else { 1.0 };
+            let sj = if stt && t.hoj { TMA_SIGMA_DEG } else { 1.0 };
             t.strobe_brg = rel.brg + gauss(2) * sj;
             t.strobe_el = rel.el + gauss(4) * sj;
             t.radar_age += dt;
@@ -594,13 +718,44 @@ impl Traffic {
                 let pd = if x < 0.7 { 0.95 } else { 0.95 - (x - 0.7) / 0.3 * 0.65 };
                 hit = rn[6] < pd;
             }
+            // Télémétrie passive en HOJ : relèvements à 2 Hz pendant que l'avion manœuvre
+            let mut tma_good = false;
+            if stt && t.hoj {
+                if t.tma_pts.is_empty() {
+                    t.tma_ref = (ac.lat, ac.lon);
+                }
+                t.tma_dt += dt;
+                if t.tma_dt >= 0.5 {
+                    t.tma_dt = 0.0;
+                    let (px, py) = enu_offset(t.tma_ref.0, t.tma_ref.1, ac.lat, ac.lon);
+                    t.tma_pts.push((clock, px, py, t.strobe_brg.to_radians()));
+                    t.tma_pts.retain(|p| clock - p.0 <= TMA_WIN);
+                    let fix = tma_solve(&t.tma_pts, clock, TMA_SIGMA_DEG);
+                    t.tma = fix.as_ref().map(|f| (f.range, f.sigma));
+                    if let Some(f) = fix.filter(|f| f.sigma < TMA_OK * f.range) {
+                        (t.tr_lat, t.tr_lon) = from_enu(t.tma_ref.0, t.tma_ref.1, f.x, f.y);
+                        t.tr_alt = ac.alt + f.range * t.strobe_el.to_radians().tan();
+                        t.tr_hdg = wrap360(f.vx.atan2(f.vy).to_degrees());
+                        t.tr_tas = f.vx.hypot(f.vy);
+                    }
+                }
+                tma_good = t.tma.is_some_and(|(r, sg)| sg < TMA_OK * r);
+            } else {
+                t.tma_pts.clear();
+                t.tma = None;
+                t.tma_dt = 0.0;
+            }
             // Hostile sous STT (alerte RWR) : mise en travers, descente (visée basse = creux
             // Doppler), paillettes toutes les 2.5 s
             if t.hostile && stt {
-                t.evade_t = 15.0;
                 let to_own = wrap360(rel.brg + 180.0);
                 let (b1, b2) = (wrap360(to_own + 90.0), wrap360(to_own - 90.0));
-                t.hdg_tgt = if wrap180(b1 - t.hdg).abs() < wrap180(b2 - t.hdg).abs() { b1 } else { b2 };
+                let beam = if wrap180(b1 - t.hdg).abs() < wrap180(b2 - t.hdg).abs() { b1 } else { b2 };
+                // Cap de travers choisi à l'alerte, repris si la menace a bougé de plus de 30°
+                if t.evade_t <= 0.0 || wrap180(beam - t.hdg_tgt).abs() > 30.0 {
+                    t.hdg_tgt = beam;
+                }
+                t.evade_t = 15.0;
                 if ac.alt > 3_000.0 {
                     t.alt_tgt = t.alt_tgt.min(1_500.0);
                 }
@@ -683,13 +838,13 @@ impl Traffic {
             } else if t.dl && !t.adsb && t.dl_t >= 4.0 {
                 t.dl_t = 0.0;
                 (t.tr_lat, t.tr_lon, t.tr_alt, t.tr_hdg, t.tr_tas, t.tr_vs) = (t.lat, t.lon, t.alt, t.hdg, t.tas, t.vs);
-            } else if t.vel_ok {
+            } else if t.vel_ok && !tma_good {
                 let (la, lo) = destination(t.tr_lat, t.tr_lon, t.tr_hdg, t.tr_tas * dt);
                 t.tr_lat = la;
                 t.tr_lon = lo;
                 t.tr_alt += t.tr_vs * dt;
             }
-            t.vel_ok = t.adsb || t.dl || t.hits >= 2;
+            t.vel_ok = t.adsb || t.dl || t.hits >= 2 || tma_good;
         }
         self.events.extend(msgs);
         // Fausses alarmes : position aléatoire dans le volume de balayage
@@ -1012,7 +1167,11 @@ pub fn target_lines(ac: &Aircraft, t: &Target) -> Vec<(String, String, Color)> {
         ("ALT".into(), if t.squawk_known { format!("FL{:03.0}  MODE C  {:+.0} FPM", t.alt / FT / 100.0, t.vs / FT * 60.0) } else { format!("FL{:03.0}  SITE RADAR +/-{:.0} FT", t.alt / FT / 100.0, r.range * 0.5f64.to_radians() / FT) }, WHITE),
         ("VITESSE".into(), if t.vel_ok { format!("{:.0} KT  M{mach:.2}  CAP {:03.0}", t.tas / KT, t.hdg) } else { "-- (PISTE SANS VITESSE)".into() }, if t.vel_ok { WHITE } else { DIM }),
         if t.hoj {
-            ("DIST".into(), format!("-- HOJ ANGLE SEUL  REL {:03.0}  SITE {:+.1}", wrap360(t.strobe_brg), t.strobe_el), AMBER)
+            match t.tma {
+                Some((r, sg)) if sg < TMA_OK * r => ("DIST".into(), format!("{:.0} NM +/-{:.0} TMA  REL {:03.0}", r / NM, sg / NM, wrap360(t.strobe_brg)), GREEN_S),
+                Some((r, sg)) if sg < r => ("DIST".into(), format!("~{:.0} +/-{:.0} NM - MANOEUVRER", r / NM, sg / NM), AMBER),
+                _ => ("DIST".into(), format!("-- HOJ : ZIGZAG +/-45 POUR TMA  REL {:03.0}", wrap360(t.strobe_brg)), AMBER),
+            }
         } else {
             ("DIST".into(), format!("{:.1} NM  REL {:03.0}  {:+.0} FT", r.range / NM, r.brg, r.dalt_ft), WHITE)
         },
@@ -1108,9 +1267,19 @@ pub fn draw_tsd(ac: &Aircraft, r: Rect, time: f64) {
         let d = vec2(a.sin(), -a.cos());
         let locked = Some(t.id) == lock;
         if locked {
-            // Poursuite sur brouilleur : strobe plein
+            // Poursuite sur brouilleur : strobe plein ; télémétrie passive : segment +/-1 sigma
             let q = own + d * edge;
             draw_line(own.x, own.y, q.x, q.y, 2.5, AMBER);
+            if let Some((r, sg)) = t.tma.filter(|(r, sg)| *sg < *r) {
+                let ok = sg < TMA_OK * r;
+                let c = if ok { GREEN_S } else { Color::new(1.0, 0.72, 0.0, 0.6) };
+                let (a0, a1) = (((r - sg).max(0.0) / NM) as f32 * ppn, (((r + sg) / NM) as f32 * ppn).min(edge));
+                let (p0, p1) = (own + d * a0, own + d * a1);
+                draw_line(p0.x, p0.y, p1.x, p1.y, 6.0, Color::new(c.r, c.g, c.b, 0.45));
+                let pm = own + d * (((r / NM) as f32 * ppn).min(edge));
+                draw_poly_lines(pm.x, pm.y, 4, 7.0, 45.0, 1.8, c);
+                txt(&format!("{:.0} NM{}", r / NM, if ok { " TMA" } else { " ?" }), pm.x + 10.0, pm.y + 4.0, 10.0, c);
+            }
         } else {
             let mut x = 20.0;
             while x < edge {
@@ -1459,5 +1628,51 @@ mod tests {
         }
         println!("{:?}", tr.events);
         assert!(tr.lock.is_none() && tr.events.iter().any(|e| e.contains("PAS DE RETOUR")));
+    }
+
+    /// Télémétrie passive : en ligne droite, distance du brouilleur inobservable ; après un
+    /// zigzag de +/-45°, estimation à mieux que 25 % (1 sigma) et erreur réelle < 20 %.
+    #[test]
+    fn hoj_passive_ranging_needs_maneuver() {
+        let mut ac = own();
+        let mut tr = Traffic::new();
+        tr.next_id = 100;
+        tr.auto_spawn = false;
+        tr.false_alarms = false;
+        let hdg0 = ac.hdg_deg();
+        let mut t = tgt(&ac, "SU27", 80.0, 20.0, 30_000.0, wrap360(hdg0 + 20.0 + 180.0 + 90.0));
+        // SER réduite (petit brouilleur) : burn-through au-delà de la zone d'essai
+        (t.hostile, t.in_vol, t.rcs) = (true, true, 3.0);
+        tr.list.push(t);
+        tr.update(&ac, 0.1);
+        assert!(tr.try_lock(1).is_ok() && tr.list[0].hoj);
+        let gs = 250.0;
+        let mut step = |ac: &mut Aircraft, tr: &mut Traffic, secs: f64, rate_deg: f64| {
+            let mut tt = 0.0;
+            while tt < secs {
+                ac.psi = (ac.hdg_deg() + rate_deg * 0.1).to_radians();
+                let (la, lo) = destination(ac.lat, ac.lon, ac.hdg_deg(), gs * 0.1);
+                (ac.lat, ac.lon) = (la, lo);
+                tr.update(ac, 0.1);
+                tt += 0.1;
+            }
+        };
+        step(&mut ac, &mut tr, 30.0, 0.0);
+        let st = tr.list[0].tma;
+        println!("ligne droite 30 s : {:?}", st.map(|(r, s)| (r / NM, s / NM)));
+        assert!(tr.list[0].hoj, "toujours en HOJ");
+        assert!(st.is_none_or(|(r, s)| s > TMA_OK * r), "pas de telemetrie sans manoeuvre");
+        // Virage de 45° à 3°/s (la cible reste dans les +/-70° de l'antenne) puis ligne droite
+        step(&mut ac, &mut tr, 15.0, 3.0);
+        step(&mut ac, &mut tr, 25.0, 0.0);
+        // Deuxième branche du zigzag
+        step(&mut ac, &mut tr, 15.0, -3.0);
+        step(&mut ac, &mut tr, 15.0, 0.0);
+        println!("lock {:?} hoj {} az {:.0}", tr.lock, tr.list[0].hoj, Traffic::rel(&ac, &tr.list[0]).az);
+        let t = &tr.list[0];
+        let truth = Traffic::rel(&ac, t).range;
+        let (r, sg) = t.tma.expect("estimation");
+        println!("apres manoeuvre : estime {:.1} NM +/-{:.1}, vrai {:.1} NM, cap estime {:.0} vrai {:.0}", r / NM, sg / NM, truth / NM, t.tr_hdg, t.hdg);
+        assert!(t.hoj && sg < TMA_OK * r && (r - truth).abs() < 0.2 * truth);
     }
 }
