@@ -206,47 +206,52 @@ impl Preset {
 /// batterie, moteurs), VOL (croisière : moteurs, élec, scram, pannes), ARRIVEE (approche : ND,
 /// manette / train, radio).
 fn preset_wins(p: Preset) -> Vec<Win> {
-    // Horizon avant tout : ECRAN au centre sur ~66 % x 85 %, colonnes fines, bandeau bas étroit
+    // ECRAN large à gauche (74 % x 86 %), une colonne à droite et un bandeau bas : seulement les
+    // commandes utiles à la phase (le reste est dans les pages de l'écran)
     let w = |kind, x, y, ww, h, open| Win { kind, r: [x, y, ww, h], open };
-    let (sx, cw, ch) = (0.165, 0.67, 0.85);
-    let rx = sx + cw + 0.005;
+    let (cw, ch) = (0.74, 0.86);
+    let rx = cw + 0.005;
     let rw = 1.0 - rx;
+    let half = (rw - 0.005) / 2.0;
     let by = ch + 0.005;
     let bh = 1.0 - by;
-    let mut v = vec![w(WinKind::Ecran, sx, 0.0, cw, ch, true)];
+    let mut v = vec![w(WinKind::Ecran, 0.0, 0.0, cw, ch, true)];
     match p {
         Preset::Depart => v.extend([
-            w(WinKind::Moteurs, 0.0, 0.0, sx - 0.005, 0.5, true),
-            w(WinKind::Manette, 0.0, 0.505, sx - 0.005, 0.495, true),
-            w(WinKind::PanneauDroit, rx, 0.0, rw, 1.0, true),
-            w(WinKind::Messages, sx, by, 0.4, bh, true),
-            w(WinKind::Batterie, sx + 0.405, by, 0.08, bh, true),
-            w(WinKind::Master, sx + 0.49, by, cw - 0.49, bh, true),
+            w(WinKind::PanneauDroit, rx, 0.0, rw, 0.62, true),
+            w(WinKind::Batterie, rx, 0.625, half, 0.375, true),
+            w(WinKind::Manette, rx + half + 0.005, 0.625, half, 0.375, true),
+            w(WinKind::Messages, 0.0, by, cw * 0.8, bh, true),
+            w(WinKind::Master, cw * 0.8 + 0.005, by, cw * 0.2 - 0.005, bh, true),
         ]),
         Preset::Vol => v.extend([
-            w(WinKind::Moteurs, 0.0, 0.0, sx - 0.005, 0.5, true),
-            w(WinKind::Manette, 0.0, 0.505, sx - 0.005, 0.495, true),
-            w(WinKind::Elec, rx, 0.0, rw, 0.5, true),
-            w(WinKind::Pannes, rx, 0.505, rw, 0.495, true),
-            w(WinKind::Messages, sx, by, 0.4, bh, true),
-            w(WinKind::Scram, sx + 0.405, by, 0.08, bh, true),
-            w(WinKind::Master, sx + 0.49, by, cw - 0.49, bh, true),
+            w(WinKind::Pannes, rx, 0.0, rw, 0.5, true),
+            w(WinKind::Manette, rx, 0.505, half, 0.495, true),
+            w(WinKind::Scram, rx + half + 0.005, 0.505, half, 0.245, true),
+            w(WinKind::Master, rx + half + 0.005, 0.755, half, 0.245, true),
+            w(WinKind::Messages, 0.0, by, cw, bh, true),
         ]),
         Preset::Arrivee => v.extend([
-            w(WinKind::Manette, 0.0, 0.0, sx - 0.005, 0.5, true),
-            w(WinKind::Moteurs, 0.0, 0.505, sx - 0.005, 0.495, true),
-            w(WinKind::Nd, rx, 0.0, rw, 0.6, true),
-            w(WinKind::Pannes, rx, 0.605, rw, 0.395, true),
-            w(WinKind::Messages, sx, by, 0.48, bh, true),
-            w(WinKind::Master, sx + 0.49, by, cw - 0.49, bh, true),
+            w(WinKind::Nd, rx, 0.0, rw, 0.5, true),
+            w(WinKind::Manette, rx, 0.505, half, 0.495, true),
+            w(WinKind::Master, rx + half + 0.005, 0.505, half, 0.495, true),
+            w(WinKind::Radio, 0.0, by, cw * 0.55, bh, true),
+            w(WinKind::Messages, cw * 0.55 + 0.005, by, cw * 0.45 - 0.005, bh, true),
         ]),
     }
     v
 }
 
-/// Page 1 (écran) d'un préréglage : horizon sur tout l'écran.
-fn preset_widgets(_p: Preset) -> Vec<Widget> {
-    vec![Widget { elem: Elem::Horizon, r: [0.0, 0.0, 1.0, 1.0] }]
+/// Page 1 (écran) d'un préréglage : horizon en haut, trois grandes cases utiles en dessous.
+fn preset_widgets(p: Preset) -> Vec<Widget> {
+    let w = |elem, x, y, ww, h| Widget { elem, r: [x, y, ww, h] };
+    let (a, b, c) = match p {
+        Preset::Depart => (Elem::CmdMoteurs, Elem::Nd, Elem::Carburant),
+        Preset::Vol => (Elem::Systemes, Elem::Nd, Elem::Carburant),
+        Preset::Arrivee => (Elem::Hsi, Elem::CmdPilote, Elem::Train),
+    };
+    let (hy, hh) = (0.64, 0.36);
+    vec![w(Elem::Horizon, 0.0, 0.0, 1.0, hy), w(a, 0.0, hy, 0.38, hh), w(b, 0.38, hy, 0.32, hh), w(c, 0.70, hy, 0.30, hh)]
 }
 
 pub const BAR_H: f32 = 30.0;

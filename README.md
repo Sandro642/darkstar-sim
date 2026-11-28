@@ -1054,3 +1054,8 @@ Le SR-72 est un avion de reconnaissance : sa charge utile est simulée.
   portance incliné : sur le dos le nez est à l'intérieur de la boucle) pour l'horizon, l'échelle
   d'assiette et la vision synthétique. Test : looping complet en 27 s, retour au cap initial.
   Préréglages dev : horizon sur tout l'écran central (~66 % x 85 %), colonnes fines, bandeau bas.
+- v1.82.1 : préréglages dev — ECRAN large à gauche (74 % x 86 %), horizon sur 64 % de l'écran et
+  trois grandes cases en dessous ; fenêtres redondantes retirées (MOTEURS, ELEC : dans les pages de
+  l'écran) ; une colonne à droite et un bandeau bas avec seulement l'utile : DEPART (panneau droit,
+  batterie, manette, messages, MASTER), VOL (pannes, manette, scram, MASTER, messages), ARRIVEE
+  (ND, manette, MASTER, radio, messages).
