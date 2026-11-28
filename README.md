@@ -1088,3 +1088,10 @@ Le SR-72 est un avion de reconnaissance : sa charge utile est simulée.
   mesure distance / angle, altitude par site radar ou Mode C, extrapolation, fusion ADS-B (1 Hz),
   radar, Link 16 (4 s). Modes RWS (+/-60°, 2 s, détections brutes sans vitesse) et TWS (+/-30°,
   1 s, 10 pistes avec cap et vitesse, cible non alertée).
+- v1.86.0 : poursuite sur brouilleur (HOJ) : LOCK ou clic sur le strobe « J » = verrouillage angle
+  seul (cadre barré HOJ sur l'horizon, strobe plein, fiche « DIST -- HOJ ANGLE SEUL » avec
+  relèvement et site), passage automatique en STT au burn-through (distance mesurée), insensible
+  aux paillettes. Fausses alarmes radar (seuil CFAR franchi par le bruit : ~0.25 par cadre en RWS,
+  0.15 en TWS) : plots isolés (petite croix, « PLOT » dans la liste), jamais confirmés, effacés
+  après 8 s ; confirmation des pistes à 2 détections ; LOCK auto ne choisit que des pistes
+  confirmées ; verrouillage forcé sur un plot = « LOCK PERDU — PAS DE RETOUR RADAR ».
