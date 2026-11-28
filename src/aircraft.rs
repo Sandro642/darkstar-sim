@@ -115,6 +115,18 @@ pub struct Autopilot {
     /// Vitesse verticale commandée (m/s), lissée : varie linéairement (pas de cabré à chaque
     /// changement de consigne d'altitude)
     pub vs_f: f64,
+    /// Vol en formation : consignes calculées à chaque image par le calculateur de formation
+    pub form: Option<Form>,
+}
+
+/// Consignes du mode FORMATION : pente (rad), route sol (deg), vitesse vraie (m/s), inclinaison
+/// imposée (balancement des ailes, signal d'interception).
+#[derive(Clone, Copy, Debug)]
+pub struct Form {
+    pub gamma: f64,
+    pub trk: f64,
+    pub tas: f64,
+    pub bank: Option<f64>,
 }
 
 #[derive(Clone)]
@@ -386,7 +398,7 @@ pub fn cross_track(tla: f64, tlo: f64, hdg: f64, lat: f64, lon: f64) -> f64 {
     e * h.cos() - n * h.sin()
 }
 
-fn cl_alpha(m: f64) -> f64 {
+pub fn cl_alpha(m: f64) -> f64 {
     if m < 0.8 {
         2.8
     } else if m < 1.1 {
@@ -577,6 +589,7 @@ impl Aircraft {
                 gs_armed: false,
                 max_perf: false,
                 vs_f: 0.0,
+                form: None,
             },
             d: Derived { elev: a.elev, oat: 15.0, ..Default::default() },
             crashed: None,
@@ -629,6 +642,14 @@ impl Aircraft {
     pub fn calm_rates(&mut self) {
         self.rates = [0.0; 4];
         self.gust = [0.0; 3];
+    }
+
+    /// Vitesse vraie minimale de manœuvre (m/s) : incidence 11° à 1.15 g (marge sur la
+    /// protection d'incidence de l'AP à 13°).
+    pub fn v_min_maneuver(&self) -> f64 {
+        let rho = crate::atmosphere::isa(self.alt).rho;
+        let cla = cl_alpha(self.d.mach.max(0.2));
+        (2.0 * 1.15 * self.mass() * G0 / (rho * S_WING * cla * 11f64.to_radians())).sqrt()
     }
 
     pub fn mass(&self) -> f64 {
@@ -1250,8 +1271,12 @@ impl Aircraft {
         if !(self.ap.on && !self.on_ground && self.ap.vert == VertMode::Alt) {
             self.ap.vs_f = self.d.vs;
         }
+        if !self.ap.on || self.on_ground {
+            self.ap.form = None;
+        }
+        let form = self.ap.form;
         if self.ap.on && !self.on_ground {
-            let gamma_cmd = match self.ap.vert {
+            let gamma_cmd = if let Some(f) = form { f.gamma } else { match self.ap.vert {
                 VertMode::Alt => {
                     let vs_max = if perf { (0.35 * v).clamp(5.0, 300.0) } else { (0.2 * v).clamp(5.0, 120.0) };
                     // Profil de capture à décélération constante : la vitesse verticale reste au palier
@@ -1285,7 +1310,7 @@ impl Aircraft {
                     // q trop faible : on descend ; q trop forte : on remonte (couloir de pression dynamique)
                     (-(self.ap.q_tgt - q) / self.ap.q_tgt * 0.35).clamp(-0.10, 0.06)
                 }
-            };
+            } };
             // Protection basse vitesse : on rend de l'altitude si l'incidence approche la butée
             let a_deg = alpha.to_degrees();
             let gamma_cmd = if a_deg > 13.0 { gamma_cmd.min(-0.04 - (a_deg - 13.0).to_radians() * 2.0) } else { gamma_cmd };
@@ -1314,7 +1339,7 @@ impl Aircraft {
             pitch_rate = pr;
             self.gamma_hold = None;
 
-            let hdg_cmd = match self.ap.lat {
+            let hdg_cmd = if let Some(f) = form { f.trk } else { match self.ap.lat {
                 LatMode::Hdg | LatMode::Nav => self.ap.hdg_tgt,
                 LatMode::Loc => {
                     if let Some((_, tla, tlo, h, _)) = self.approach {
@@ -1326,17 +1351,22 @@ impl Aircraft {
                         self.ap.hdg_tgt
                     }
                 }
-            };
-            // HDG tient le cap ; NAV et LOC tiennent la route sol (compensation du vent)
-            let cur = if self.ap.lat == LatMode::Hdg { self.hdg_deg() } else { self.track_deg() };
+            } };
+            // HDG tient le cap ; NAV, LOC et FORMATION tiennent la route sol (compensation du vent)
+            let cur = if self.ap.lat == LatMode::Hdg && form.is_none() { self.hdg_deg() } else { self.track_deg() };
             let err = wrap180(hdg_cmd - cur);
             // AP MAX : inclinaison du virage en palier au facteur de charge maximal de la loi
             // Plané sans moteur : virages à 45° (spirale serrée de gestion d'énergie)
             let dead_stick = self.autoland.as_ref().is_some_and(|a| a.dead_stick);
             let bank_lim = if perf { (1.0 / (nz_law * 0.95)).acos().to_degrees().min(67.0) } else if dead_stick { 45.0 } else if mach > 3.0 { 35.0 } else { 30.0 };
-            let gain = if perf { 3.0 } else { 2.0 };
-            let phi_cmd = (err * gain).clamp(-bank_lim, bank_lim).to_radians();
-            let rr = if perf { 1.0 } else { 0.5 };
+            // Formation : boucle de route plus raide (tenue de poste latérale)
+            let gain = if form.is_some() { 7.0 } else if perf { 3.0 } else { 2.0 };
+            let bank_lim = if form.is_some() { bank_lim.max(45.0) } else { bank_lim };
+            let phi_cmd = match form.and_then(|f| f.bank) {
+                Some(b) => b,
+                None => (err * gain).clamp(-bank_lim, bank_lim).to_radians(),
+            };
+            let rr = if perf || form.is_some() { 1.0 } else { 0.5 };
             roll_rate = (1.5 * wrap_pi(phi_cmd - self.phi)).clamp(-pmax * rr, pmax * rr);
 
             if self.ap.vert == VertMode::QHold && mach < 0.95 && self.alt < 35_000.0 * FT {
@@ -1678,13 +1708,24 @@ impl Aircraft {
             }
         }
         if self.ap.at_on {
-            let tas_tgt = match self.ap.spd_keas {
-                Some(k) => k * KT / (air.rho / RHO0).sqrt(),
-                None => self.ap.mach_tgt * air.a,
+            let tas_tgt = match (form, self.ap.spd_keas) {
+                (Some(f), _) => f.tas,
+                (None, Some(k)) => k * KT / (air.rho / RHO0).sqrt(),
+                (None, None) => self.ap.mach_tgt * air.a,
             };
             let err_kt = (tas_tgt - v) / KT;
-            let rate = (0.006 * err_kt - 0.08 * self.d.accel).clamp(-0.3, 0.3);
+            // Formation : auto-manette vive et aérofreins automatiques (tenue de poste)
+            let rate = if form.is_some() { (0.03 * err_kt - 0.25 * self.d.accel).clamp(-0.8, 0.8) } else { (0.006 * err_kt - 0.08 * self.d.accel).clamp(-0.3, 0.3) };
             self.throttle = (self.throttle + rate * dt).clamp(0.0, self.thr_max());
+            if form.is_some() && !self.on_ground {
+                if err_kt < -12.0 && self.throttle < 0.05 && !self.speedbrake {
+                    self.speedbrake = true;
+                    self.ap.at_speedbrake = true;
+                } else if self.ap.at_speedbrake && err_kt > -3.0 {
+                    self.speedbrake = false;
+                    self.ap.at_speedbrake = false;
+                }
+            }
         }
 
         // FCS perdus : plus aucune commande (manche, AP, récupérations) — vrille divergente

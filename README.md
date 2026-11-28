@@ -1121,3 +1121,11 @@ Le SR-72 est un avion de reconnaissance : sa charge utile est simulée.
   empennage en T, KC-135, E-3 à radôme, C-17 aile haute, U-2, RQ-4 en V, F-16, F-35, F-22, F/A-18,
   Flanker). Instruction TRAFIC <TYPE> [NM] (essais). Page PANNES : injection retirée, état des
   systèmes en lecture seule. Correctif v1.87.1 inclus (tangage supersonique).
+- v1.89.0 : AP FORMATION (ailier de la cible verrouillée, police du ciel) : FORMATION
+  POLICE|GAUCHE|DROITE|TRAIL|OFF (COMMANDES > TRAFIC / AIR-AIR). Postes : POLICE (à gauche du poste
+  de pilotage, légèrement devant et au-dessus, procédure OACI), échelon gauche / droite, trail 1 NM.
+  Ralliement, jonction, en position (bandeau AV / LAT / VERT), anticipation des virages du leader,
+  auto-manette vive et aérofreins, suivi optique EO/IR à moins de 1 NM (lock gardé), dégagement
+  automatique si séparation insuffisante, « LEADER TROP LENT » sous notre vitesse minimale de
+  manœuvre. Identification visuelle à 0.6 NM. SIGNAL : balancement des ailes, l'avion civil répond
+  et suit nos consignes (ESCORTE CAP n / ESCORTE ALT n | FL n) ; un hostile ne répond pas.

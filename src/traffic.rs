@@ -5,6 +5,7 @@
 //! sur le ND et sur l'horizon (mode A/A : losanges, cadre de désignation, repère de direction).
 
 use crate::aircraft::*;
+use crate::aircraft::Form;
 use crate::geo::*;
 use crate::ui::*;
 use macroquad::prelude::*;
@@ -142,6 +143,9 @@ pub struct Target {
     pub bank: f64,
     /// Menace sur notre avion (radar de bord hostile) : 0 rien, 1 veille, 3 accrochage
     pub threat: u8,
+    /// Identification visuelle faite ; avion intercepté qui suit nos consignes (escorte)
+    pub vid: bool,
+    pub escorted: bool,
     evade_t: f64,
     chaff_t: f64,
     adsb_t: f64,
@@ -339,7 +343,7 @@ const MILITARY: [Kind; 10] = [
     ("C17", "C-17A GLOBEMASTER III", "USAF", "TRANSPORT MILITAIRE", true, 0.76, 320.0, Iff::Ami),
     ("U2", "U-2S DRAGON LADY", "USAF", "RECONNAISSANCE HAUTE ALTITUDE", true, 0.62, 700.0, Iff::Ami),
     ("Q4", "RQ-4B GLOBAL HAWK", "USAF", "DRONE DE RECONNAISSANCE", true, 0.55, 600.0, Iff::Ami),
-    ("SU27", "TYPE NON IDENTIFIE", "INCONNU", "INCONNUE", true, 0.95, 330.0, Iff::Inconnu),
+    ("SU27", "SU-27 FLANKER", "INCONNU", "INCONNUE", true, 0.95, 330.0, Iff::Inconnu),
 ];
 const AIRLINES: [&str; 10] = ["AFR", "DAL", "UAL", "AAL", "SWA", "BAW", "DLH", "KLM", "QFA", "JAL"];
 const MIL_CALLS: [&str; 10] = ["VIPER", "RAPTOR", "DOOM", "HAWK", "SHELL", "SENTRY", "REACH", "DRAGON", "BLUE", "BOGEY"];
@@ -364,7 +368,55 @@ pub struct Traffic {
     clock: f64,
     /// Modes de combat rapproché (acquisition automatique à moins de 10 NM)
     pub acm: Acm,
+    /// Vol en formation sur la cible verrouillée (mission de police du ciel)
+    pub form: Option<Formation>,
+    /// Consignes données à l'avion escorté : cap (deg), altitude (ft)
+    pub escort: Option<(f64, f64)>,
+    /// Dégagement demandé (cap à prendre, deg) après une séparation insuffisante
+    pub breakaway: Option<f64>,
 }
+
+/// Postes de formation : POLICE (procédure d'interception OACI : à gauche, légèrement devant le
+/// poste de pilotage et au-dessus, visible du commandant de bord), échelon GAUCHE / DROITE, TRAIL
+/// (1 NM derrière, sous la trajectoire, hors turbulence de sillage).
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub enum FormPos {
+    Police,
+    Gauche,
+    Droite,
+    Trail,
+}
+
+impl FormPos {
+    pub fn label(self) -> &'static str {
+        match self {
+            FormPos::Police => "POLICE",
+            FormPos::Gauche => "GAUCHE",
+            FormPos::Droite => "DROITE",
+            FormPos::Trail => "TRAIL",
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct Formation {
+    pub lead: u32,
+    pub pos: FormPos,
+    /// 0 ralliement, 1 jonction, 2 en position
+    pub phase: u8,
+    /// Écarts au poste (m) : avant, droite, haut
+    pub err: (f64, f64, f64),
+    pub rock_t: f64,
+    /// Cap, vitesse et vario du leader filtrés ; taux de virage du leader (deg/s)
+    lead_f: Option<(f64, f64, f64)>,
+    lead_w: f64,
+    ec_dot: f64,
+    /// Leader plus lent que notre vitesse minimale de manœuvre : poste impossible
+    pub slow: bool,
+}
+
+/// Demi-envergure du Darkstar (m)
+const OWN_HALF_SPAN: f64 = 10.0;
 
 /// Modes ACM : axe (cercle de 3° dans l'axe du nez) et balayage vertical (bande de 4° de large,
 /// de -2 à +40° au-dessus du nez) ; verrouillage automatique de la première cible détectée.
@@ -532,7 +584,7 @@ thread_local! {
 
 impl Traffic {
     pub fn new() -> Self {
-        Traffic { list: Vec::new(), lock: None, aa: false, rng: 0x9E37_79B9_7F4A_7C15, next_id: 1, scan_t: 0.0, lock_loss_t: 0.0, events: Vec::new(), mode: RadarMode::Rws, auto_spawn: true, false_alarms: true, clock: 0.0, acm: Acm::Off }
+        Traffic { list: Vec::new(), lock: None, aa: false, rng: 0x9E37_79B9_7F4A_7C15, next_id: 1, scan_t: 0.0, lock_loss_t: 0.0, events: Vec::new(), mode: RadarMode::Rws, auto_spawn: true, false_alarms: true, clock: 0.0, acm: Acm::Off, form: None, escort: None, breakaway: None }
     }
 
     fn rand(&mut self) -> f64 {
@@ -632,7 +684,9 @@ impl Traffic {
         (t.icao, t.name, t.operator, t.mission, t.iff, t.rcs, t.hostile) = (icao_s, name, operator, mission, iff, rcs_of(icao_s), icao_s == "SU27");
         (t.lat, t.lon, t.alt, t.alt_tgt, t.hdg, t.hdg_tgt) = (lat, lon, alt, alt, ac.hdg_deg(), ac.hdg_deg());
         (t.tr_lat, t.tr_lon, t.tr_alt, t.tr_hdg) = (lat, lon, alt, ac.hdg_deg());
-        t.tas = (mach * crate::atmosphere::isa(alt).a).min(ac.tas * 0.9).max(80.0);
+        // Vitesse réaliste : 250 kt sous le FL100 (règle de l'air), sinon Mach de croisière
+        // (militaires : 350 kt, hors limitation de vitesse en mission)
+        t.tas = if alt < 10_000.0 * FT { (if kind.4 { 350.0 } else { 250.0 }) * KT } else { mach * crate::atmosphere::isa(alt).a };
         t.tr_tas = t.tas;
         t.behave = Behave::Route;
         t.turn_t = 120.0;
@@ -658,6 +712,7 @@ impl Traffic {
             self.lock = None;
         }
         let r = self.rand();
+        let escort = self.escort;
         for t in self.list.iter_mut() {
             t.turn_t -= dt;
             t.evade_t -= dt;
@@ -688,6 +743,14 @@ impl Traffic {
                 }
             }
             }
+            // Avion intercepté qui a accepté de suivre : consignes d'escorte (cap, altitude)
+            if t.escorted {
+                if let Some((h, a)) = escort {
+                    t.hdg_tgt = h;
+                    t.alt_tgt = a * FT;
+                }
+                t.turn_t = 1e9;
+            }
             // Hostile qui nous accroche (radar de bord) : poursuite vers nous, à notre altitude
             if t.hostile && t.threat >= 3 && t.evade_t <= 0.0 {
                 let (_, b) = dist_brg(t.lat, t.lon, ac.lat, ac.lon);
@@ -703,7 +766,8 @@ impl Traffic {
             let bank_tgt = (t.tas * (turn / dt).to_radians() / 9.80665).atan();
             t.bank += (bank_tgt - t.bank) * (2.0 * dt).min(1.0);
             let dz = t.alt_tgt - t.alt;
-            t.vs = if t.evade_t > 0.0 { (dz * 0.3).clamp(-60.0, 40.0) } else { dz.clamp(-12.0, 12.0) * 0.3 };
+            // Vario : ~2000 ft/min en croisière (avions de ligne), plus vif en esquive
+            t.vs = if t.evade_t > 0.0 { (dz * 0.3).clamp(-60.0, 40.0) } else { (dz * 0.05).clamp(-10.0, 10.0) };
             t.alt += t.vs * dt;
             let (la, lo) = destination(t.lat, t.lon, t.hdg, t.tas * dt);
             t.lat = la;
@@ -722,6 +786,8 @@ impl Traffic {
         let awacs: Vec<(f64, f64)> = self.list.iter().filter(|t| t.icao == "E3TF").map(|t| (t.lat, t.lon)).collect();
         let lock = self.lock;
         let mut lock_why = None;
+        // Leader de formation : poursuite optique (EO/IR) à moins de 1 NM, même hors antenne
+        let form_lead = self.form.as_ref().map(|f| f.lead);
         let mut chaff_break = None;
         let mut msgs = Vec::new();
         // Fichiers de piste TWS : les plus proches parmi les pistes vivantes
@@ -768,6 +834,15 @@ impl Traffic {
                 sea_t = t.gnd <= 0.0;
             }
             let rel = Traffic::rel(ac, t);
+            // Identification visuelle à moins de 0.6 NM (type, immatriculation / indicatif peint)
+            if !t.vid && rel.range < 0.6 * NM {
+                t.vid = true;
+                t.type_known = true;
+                if !t.hostile {
+                    t.ident_call = true;
+                }
+                msgs.push(format!("VID : {} — {} ({})", disp_call(t), t.name, t.operator));
+            }
             // Multitrajet : cible basse dont l'image (sous la surface) tombe dans le même lobe
             let h_t = (t.alt - t.gnd).max(1.0);
             let h_r = (ac.alt - own_gnd).max(1.0);
@@ -799,7 +874,10 @@ impl Traffic {
             t.strobe_el = rel.el + gauss(4) * sj;
             t.radar_age += dt;
             let mut hit = false;
-            if stt {
+            let eo = stt && form_lead == Some(t.id) && rel.range < 1.0 * NM;
+            if eo {
+                hit = true;
+            } else if stt {
                 if t.hoj {
                     // Poursuite sur brouilleur : angle seul tant que le brouillage domine ; au
                     // burn-through, passage en STT normal (distance mesurée)
@@ -1084,6 +1162,18 @@ impl Traffic {
         SNAP.with(|s| *s.borrow_mut() = (views, self.lock, self.aa));
         MODE.with(|m| m.set(self.mode));
         ACM.with(|m| m.set(self.acm));
+        let fi = self.form.as_ref().map(|f| {
+            let call = self.list.iter().find(|t| t.id == f.lead).map(disp_call).unwrap_or_default();
+            let ph = ["RALLIEMENT", "JONCTION", "EN POSITION"][f.phase as usize];
+            if f.slow {
+                format!("FORMATION {} {call} - LEADER TROP LENT (VMIN) - POSTE IMPOSSIBLE", f.pos.label())
+            } else if f.phase == 0 {
+                format!("FORMATION {} {call} - {ph} {:.1} NM", f.pos.label(), f.err.0.hypot(f.err.1) / NM)
+            } else {
+                format!("FORMATION {} {call} - {ph}  AV {:+.0} M  LAT {:+.0} M  VERT {:+.0} M", f.pos.label(), f.err.0, f.err.1, f.err.2)
+            }
+        });
+        FORM_INFO.with(|f| *f.borrow_mut() = fi);
         // Avions réels (vus à l'œil) pour le rendu 3D : position vraie, cap, pente, inclinaison
         VIS.with(|v| {
             *v.borrow_mut() = self
@@ -1116,6 +1206,151 @@ impl Traffic {
             v.dest.clear();
         }
         v
+    }
+
+    /// Engage la formation sur la cible verrouillée.
+    pub fn form_on(&mut self, pos: FormPos) -> Result<String, String> {
+        let id = self.lock.ok_or("FORMATION : AUCUNE CIBLE VERROUILLEE (LOCK)")?;
+        let t = self.list.iter().find(|t| t.id == id).ok_or("FORMATION : CIBLE PERDUE")?;
+        if t.hoj {
+            return Err("FORMATION : CIBLE EN HOJ (PAS DE DISTANCE)".into());
+        }
+        let call = disp_call(t);
+        self.form = Some(Formation { lead: id, pos, phase: 0, err: (0.0, 0.0, 0.0), rock_t: 0.0, lead_f: None, lead_w: 0.0, ec_dot: 0.0, slow: false });
+        Ok(format!("FORMATION {} SUR {call} — RALLIEMENT", pos.label()))
+    }
+
+    /// Signal d'interception (balancement des ailes) : l'avion civil répond et suit nos consignes.
+    pub fn signal(&mut self) -> Result<String, String> {
+        let f = self.form.as_mut().ok_or("SIGNAL : PAS EN FORMATION")?;
+        if f.phase < 2 {
+            return Err("SIGNAL : REJOINDRE LE POSTE D'ABORD".into());
+        }
+        f.rock_t = 6.0;
+        Ok("SIGNAL D'INTERCEPTION : BALANCEMENT DES AILES — SUIVEZ-MOI".into())
+    }
+
+    /// Une étape du calculateur de formation : consignes pour l'AP (pente, route, vitesse).
+    pub fn formation_step(&mut self, ac: &Aircraft, dt: f64) -> Option<Form> {
+        let f = self.form.as_mut()?;
+        let Some(lt) = self.list.iter().find(|t| t.id == f.lead) else {
+            self.form = None;
+            self.events.push("FORMATION : LEADER PERDU — AP CAP / ALT".into());
+            return None;
+        };
+        let (d_true, _) = dist_brg(ac.lat, ac.lon, lt.lat, lt.lon);
+        // Leader : suivi optique (EO/IR) à moins de 1 NM, sinon piste (radar STT, ADS-B, Link 16)
+        let visual = d_true < 1.0 * NM;
+        let (la, lo, al, lh, ltas, lvs) = if visual {
+            (lt.lat, lt.lon, lt.alt, lt.hdg, lt.tas, lt.vs)
+        } else if Traffic::known(lt) && lt.vel_ok && !lt.hoj {
+            (lt.tr_lat, lt.tr_lon, lt.tr_alt, lt.tr_hdg, lt.tr_tas, lt.tr_vs)
+        } else {
+            self.form = None;
+            self.events.push("FORMATION : PISTE DU LEADER PERDUE — AP CAP / ALT".into());
+            return None;
+        };
+        let k = (dt / 2.0).min(1.0);
+        let (fh, ft, fv) = f.lead_f.unwrap_or((lh, ltas, lvs));
+        let lf = (wrap360(fh + wrap180(lh - fh) * k), ft + (ltas - ft) * k, fv + (lvs - fv) * k);
+        // Taux de virage du leader (deg/s), filtré : anticipation du virage
+        let w_raw = if dt > 0.0 { wrap180(lf.0 - fh) / dt } else { 0.0 };
+        f.lead_w += (w_raw - f.lead_w) * (dt / 0.7).min(1.0);
+        f.lead_f = Some(lf);
+        let (lh, ltas, lvs) = lf;
+        let lw = f.lead_w;
+        let sh = shape_of(lt.icao);
+        let half = sh.span as f64 * 0.5;
+        let len = sh.len as f64;
+        let (x, y, z) = match f.pos {
+            FormPos::Police => (0.40 * len, -(half + OWN_HALF_SPAN + 45.0), 15.0),
+            FormPos::Gauche => (-0.30 * len, -(half + OWN_HALF_SPAN + 25.0), 0.0),
+            FormPos::Droite => (-0.30 * len, half + OWN_HALF_SPAN + 25.0, 0.0),
+            FormPos::Trail => (-1.0 * NM, 0.0, -60.0),
+        };
+        // Leader trop lent (on le dépasse forcément) : écartement latéral doublé
+        let y = if f.slow { y * 2.0 } else { y };
+        let h = lh.to_radians();
+        let (fw, rt) = ((h.sin(), h.cos()), (h.cos(), -h.sin()));
+        let (lx, ly) = enu_offset(ac.lat, ac.lon, la, lo);
+        let (px, py) = (lx + fw.0 * x + rt.0 * y, ly + fw.1 * x + rt.1 * y);
+        let pz = al + z - ac.alt;
+        let ea = px * fw.0 + py * fw.1;
+        let ec = px * rt.0 + py * rt.1;
+        // Vitesse de rapprochement latéral (filtrée) : amortissement de la tenue de poste
+        if dt > 0.0 {
+            let r = (ec - f.err.1) / dt;
+            f.ec_dot += (r.clamp(-80.0, 80.0) - f.ec_dot) * (dt / 0.5).min(1.0);
+        }
+        f.err = (ea, ec, pz);
+        let dist = px.hypot(py);
+        // Séparation minimale avec le leader (hors trail) : dégagement
+        let sep = (lx.hypot(ly)).hypot(al - ac.alt);
+
+        if f.pos != FormPos::Trail && sep < half + OWN_HALF_SPAN + 12.0 {
+            let away = wrap360(lh + if ec > 0.0 { -60.0 } else { 60.0 } * if f.pos == FormPos::Droite { -1.0 } else { 1.0 });
+            self.form = None;
+            self.breakaway = Some(away);
+            self.events.push(format!("FORMATION : SEPARATION {:.0} M — DEGAGEMENT CAP {:03.0}", sep, away));
+            return None;
+        }
+        // Phases avec hystérésis (pas d'alternance des annonces aux limites)
+        let d3 = dist.hypot(pz);
+        let phase = match f.phase {
+            0 => if d3 < 2_000.0 { 1 } else { 0 },
+            1 => if d3 > 3_000.0 { 0 } else if d3 < 40.0 { 2 } else { 1 },
+            _ => if d3 > 3_000.0 { 0 } else if d3 > 150.0 { 1 } else { 2 },
+        };
+        if phase != f.phase {
+            let call = disp_call(lt);
+            let lbl = ["RALLIEMENT", "JONCTION", "EN POSITION"][phase as usize];
+            self.events.push(format!("FORMATION {} {call} : {lbl}", f.pos.label()));
+            f.phase = phase;
+        }
+        // Vitesse : leader + vitesse en virage selon le côté (extérieur plus rapide : V + omega x
+        // décalage) + rattrapage à décélération maîtrisée (1.2 m/s²)
+        let v_turn = ltas - lw.to_radians() * y;
+        let sgn = ea.signum();
+        let corr = (2.0 * 1.2 * ea.abs()).sqrt().min(0.08 * ea.abs()).min(if sgn > 0.0 { 130.0 } else { 70.0 });
+        let vmin = ac.v_min_maneuver();
+        f.slow = ltas < vmin;
+        let tas = (v_turn + sgn * corr).clamp((ltas * 0.75).max(vmin), (ltas + 150.0).max(vmin + 20.0));
+        // Route : loin, poursuite anticipée du poste ; près, cap du leader + correction latérale
+        let trk = if dist > 4_000.0 {
+            let tgo = (dist / ac.tas.max(50.0)).min(120.0);
+            let (ax, ay) = (px + fw.0 * ltas * tgo, py + fw.1 * ltas * tgo);
+            wrap360(ax.atan2(ay).to_degrees())
+        } else {
+            // Près du leader, angle de rapprochement latéral limité (pas de coupe vers lui)
+            let lim = if sep < 300.0 { 10.0 } else { 35.0 };
+            let ec_p = ec + 4.0 * f.ec_dot;
+            wrap360(lh + lw * 3.0 + ec_p.atan2((ac.tas * 4.0).max(150.0)).to_degrees().clamp(-lim, lim))
+        };
+        let vs = lvs + if dist > 4_000.0 { (pz * 0.05).clamp(-60.0, 60.0) } else { (pz * 0.12).clamp(-40.0, 40.0) };
+        let gamma = (vs / ac.tas.max(50.0)).clamp(-0.35, 0.35).asin();
+        // Balancement des ailes (signal) ; l'avion civil répond et suit nos consignes
+        let bank = if f.rock_t > 0.0 {
+            f.rock_t -= dt;
+            if f.rock_t <= 0.0 {
+                let lead = f.lead;
+                if let Some(t) = self.list.iter_mut().find(|t| t.id == lead) {
+                    let call = disp_call(t);
+                    if t.hostile {
+                        self.events.push(format!("{call} : AUCUNE REPONSE AU SIGNAL"));
+                    } else {
+                        t.escorted = true;
+                        self.escort.get_or_insert((t.hdg, (t.alt / FT / 100.0).round() * 100.0));
+                        self.events.push(format!("{call} : BALANCEMENT DES AILES — COMPRIS, NOUS VOUS SUIVONS"));
+                    }
+                }
+                None
+            } else {
+                Some((15f64.to_radians()) * (std::f64::consts::TAU * f.rock_t / 2.5).sin())
+            }
+        } else {
+            None
+        };
+        Some(Form { gamma, trk, tas, bank })
     }
 
     /// Menaces aériennes pour le RWR (radars de bord hostiles qui nous éclairent).
@@ -1363,6 +1598,11 @@ pub fn draw_hud(ac: &Aircraft, v: &crate::svs::View, s: Rect, time: f64) {
         _ => mode.label().to_string(),
     };
     txt(&format!("A/A  {sub}"), s.x + 10.0, s.y + s.h - 12.0, 16.0, CYAN_S);
+    if let Some(fs) = FORM_INFO.with(|f| f.borrow().clone()) {
+        let w = txt_w(&fs, 13.0) + 16.0;
+        draw_rectangle(s.x + 6.0, s.y + s.h - 50.0, w, 20.0, Color::new(0.0, 0.0, 0.0, 0.6));
+        txt(&fs, s.x + 14.0, s.y + s.h - 35.0, 13.0, CYAN_S);
+    }
     // Volumes ACM
     if acm != Acm::Off && lock.is_none() {
         let col = Color::new(0.3, 1.0, 0.45, 0.9);
@@ -1547,6 +1787,8 @@ pub fn target_lines(ac: &Aircraft, t: &Target) -> Vec<(String, String, Color)> {
 }
 
 thread_local! {
+    /// Bandeau de formation (poste, phase, écarts)
+    static FORM_INFO: std::cell::RefCell<Option<String>> = const { std::cell::RefCell::new(None) };
     /// Mode ACM courant, avions vus (type, lat, lon, alt, cap, pente, inclinaison, militaire)
     static ACM: std::cell::Cell<Acm> = const { std::cell::Cell::new(Acm::Off) };
     static VIS: std::cell::RefCell<Vec<(&'static str, f64, f64, f64, f64, f64, f64, bool)>> = const { std::cell::RefCell::new(Vec::new()) };
@@ -2036,6 +2278,168 @@ mod tests {
         assert!((tt - 30.0 * NM / closing).abs() < 10.0);
         assert!(dist_brg(ac.lat, ac.lon, la, lo).0 > 0.0);
         assert!(lock_ticker(&ac, &t).len() >= 5);
+    }
+
+    /// Formation POLICE : jonction depuis 5 NM derrière un A320 au FL300, poste tenu à quelques
+    /// mètres, y compris pendant un virage du leader ; identification visuelle faite.
+    #[test]
+    fn formation_police_join_and_hold() {
+        let mut ac = Aircraft::new_on_runway(0);
+        ac.on_ground = false;
+        ac.gear_down = false;
+        ac.gear_pos = 0.0;
+        ac.brakes = false;
+        ac.alt = 30_000.0 * FT;
+        ac.tas = 240.0;
+        ac.set_turbines(TurbState::Running, 0.7);
+        ac.throttle = 0.7;
+        ac.gcas_on = false;
+        ac.ap.on = true;
+        ac.ap.at_on = true;
+        ac.ap.max_perf = true;
+        ac.ap.hdg_tgt = ac.hdg_deg();
+        ac.ap.alt_tgt_ft = 30_000.0;
+        let mut tr = Traffic::new();
+        tr.next_id = 100;
+        tr.auto_spawn = false;
+        tr.false_alarms = false;
+        let mut t = tgt(&ac, "A320", 5.0, 0.0, 30_500.0, ac.hdg_deg());
+        (t.mil, t.iff, t.squawk, t.tas, t.tr_tas, t.radar_age, t.call, t.adsb_out) = (false, Iff::Neutre, 4521, 230.0, 230.0, 0.0, "AFR123".into(), true);
+        tr.list.push(t);
+        tr.update(&ac, 0.1);
+        assert!(tr.try_lock(1).is_ok());
+        assert!(tr.form_on(FormPos::Police).is_ok());
+        let dt = 1.0 / 60.0;
+        let mut t_pos = None;
+        let mut worst_turn: f64 = 0.0;
+        let mut tt = 0.0;
+        while tt < 420.0 {
+            tr.update(&ac, dt);
+            ac.ap.form = tr.formation_step(&ac, dt);
+            ac.step(dt, 0.0, 0.0);
+            tt += dt;
+            if ac.crashed.is_some() || tr.form.is_none() {
+                break;
+            }
+            let f = tr.form.as_ref().unwrap();
+            if t_pos.is_none() && f.phase == 2 {
+                t_pos = Some(tt);
+            }
+            // Virage du leader de 60° après la jonction
+            if t_pos.is_some_and(|p| tt > p + 30.0) && tr.list[0].hdg_tgt == tr.list[0].hdg && tt < 400.0 && worst_turn == 0.0 {
+                tr.list[0].hdg_tgt = wrap360(tr.list[0].hdg + 60.0);
+                tr.list[0].turn_t = 1e9;
+                worst_turn = 1e-9;
+            }
+            if worst_turn > 0.0 {
+                let e = f.err;
+                worst_turn = worst_turn.max(e.0.hypot(e.1).hypot(e.2));
+            }
+        }
+        let f = tr.form.as_ref().expect("formation tenue");
+        let e = f.err;
+        println!("jonction en {:?} s ; pire ecart en virage {worst_turn:.0} m ; final AV {:+.0} LAT {:+.0} VERT {:+.0} m ; {:?}", t_pos.map(|x| x.round()), e.0, e.1, e.2, tr.events);
+        assert!(ac.crashed.is_none());
+        assert!(t_pos.is_some_and(|x| x < 300.0), "jonction trop lente");
+        assert!(e.0.hypot(e.1).hypot(e.2) < 40.0, "poste non tenu");
+        assert!(worst_turn < 250.0);
+        assert!(tr.list[0].vid);
+    }
+
+    /// Formation POLICE à basse vitesse (270 kt, proche de notre vitesse minimale) en turbulence modérée : poste tenu sans
+    /// dégagement intempestif.
+    #[test]
+    fn formation_low_speed_turbulence() {
+        let mut ac = Aircraft::new_on_runway(0);
+        ac.on_ground = false;
+        ac.gear_down = false;
+        ac.gear_pos = 0.0;
+        ac.brakes = false;
+        ac.alt = 6_000.0 * FT;
+        ac.tas = 150.0;
+        ac.set_turbines(TurbState::Running, 0.5);
+        ac.throttle = 0.5;
+        ac.gcas_on = false;
+        ac.turb = 0.45;
+        ac.ap.on = true;
+        ac.ap.at_on = true;
+        ac.ap.max_perf = true;
+        ac.ap.hdg_tgt = ac.hdg_deg();
+        ac.ap.alt_tgt_ft = 6_000.0;
+        let mut tr = Traffic::new();
+        tr.next_id = 100;
+        tr.auto_spawn = false;
+        tr.false_alarms = false;
+        let mut t = tgt(&ac, "A320", 1.0, 0.0, 6_500.0, ac.hdg_deg());
+        (t.mil, t.iff, t.squawk, t.tas, t.tr_tas, t.radar_age, t.adsb_out) = (false, Iff::Neutre, 4521, 140.0, 140.0, 0.0, true);
+        tr.list.push(t);
+        tr.update(&ac, 0.1);
+        assert!(tr.try_lock(1).is_ok());
+        assert!(tr.form_on(FormPos::Police).is_ok());
+        let dt = 1.0 / 60.0;
+        let (mut tt, mut worst, mut in_pos) = (0.0, 0.0f64, false);
+        let mut min_sep = f64::MAX;
+        while tt < 240.0 {
+            tr.update(&ac, dt);
+            ac.ap.form = tr.formation_step(&ac, dt);
+            ac.step(dt, 0.0, 0.0);
+            tt += dt;
+            let Some(f) = tr.form.as_ref() else { break };
+            in_pos |= f.phase == 2;
+            if in_pos {
+                worst = worst.max(f.err.0.hypot(f.err.1).hypot(f.err.2));
+            }
+            let l = &tr.list[0];
+            let (d, _) = dist_brg(ac.lat, ac.lon, l.lat, l.lon);
+            min_sep = min_sep.min(d.hypot(l.alt - ac.alt));
+        }
+        println!("basse vitesse + turbulence : formation {} ; en poste {in_pos} ; pire ecart {worst:.0} m ; separation min {min_sep:.0} m ; {:?}", tr.form.is_some(), tr.events);
+        assert!(tr.form.is_some() && in_pos && ac.crashed.is_none());
+        assert!(worst < 60.0 && min_sep > 45.0);
+        // Leader trop lent pour nous (160 kt) : signalé
+        tr.list[0].tas = 82.0;
+        for _ in 0..120 {
+            tr.update(&ac, 0.1);
+            ac.ap.form = tr.formation_step(&ac, 0.1);
+        }
+        assert!(tr.form.as_ref().is_some_and(|f| f.slow));
+    }
+
+    /// Signal d'interception : après le balancement des ailes, l'avion civil suit nos consignes
+    /// (cap donné) ; un hostile ne répond pas.
+    #[test]
+    fn intercept_signal_escort() {
+        let mut ac = own();
+        ac.tas = 230.0;
+        for hostile in [false, true] {
+            let mut tr = Traffic::new();
+            tr.next_id = 100;
+            tr.auto_spawn = false;
+            tr.false_alarms = false;
+            let mut t = tgt(&ac, if hostile { "SU27" } else { "A320" }, 0.05, -90.0, 30_000.0, ac.hdg_deg());
+            (t.hostile, t.radar_age, t.vel_ok) = (hostile, 0.0, true);
+            tr.list.push(t);
+            tr.lock = Some(1);
+            tr.form = Some(Formation { lead: 1, pos: FormPos::Police, phase: 2, err: (0.0, 0.0, 0.0), rock_t: 0.0, lead_f: None, lead_w: 0.0, ec_dot: 0.0, slow: false });
+            assert!(tr.signal().is_ok());
+            let mut rocked = false;
+            for _ in 0..70 {
+                let f = tr.formation_step(&ac, 0.1);
+                rocked |= f.and_then(|f| f.bank).is_some_and(|b| b.abs() > 0.1);
+                tr.update(&ac, 0.1);
+            }
+            println!("hostile {hostile} : {:?}", tr.events);
+            assert!(rocked);
+            assert_eq!(tr.list[0].escorted, !hostile);
+            if !hostile {
+                tr.escort = Some((wrap360(ac.hdg_deg() + 90.0), 25_000.0));
+                for _ in 0..600 {
+                    tr.update(&ac, 0.1);
+                }
+                assert!(wrap180(tr.list[0].hdg - wrap360(ac.hdg_deg() + 90.0)).abs() < 2.0);
+                assert!(tr.list[0].alt < 29_000.0 * FT);
+            }
+        }
     }
 
     /// Poursuite sur brouilleur : verrouillage angle seul au-delà du burn-through, puis STT normal

@@ -1457,6 +1457,26 @@ impl Game {
         escort::set_render(&self.escort.wings);
         self.map.traffic = self.escort.traffic();
         self.traffic.update(&self.ac, sim_dt);
+        // Formation : consignes de l'AP calculées sur le leader ; le pilote qui reprend la main
+        // (AP déconnecté) met fin à la formation
+        if self.traffic.form.is_some() && !self.ac.ap.on {
+            self.traffic.form = None;
+            self.push(Level::Caution, "FORMATION OFF — AP DECONNECTE".to_string());
+        }
+        let had_form = self.traffic.form.is_some();
+        self.ac.ap.form = self.traffic.formation_step(&self.ac, sim_dt);
+        if had_form && self.traffic.form.is_none() {
+            let ac = &mut self.ac;
+            ac.ap.hdg_tgt = self.traffic.breakaway.take().unwrap_or_else(|| ac.hdg_deg().round());
+            ac.ap.lat = LatMode::Hdg;
+            ac.ap.vert = VertMode::Alt;
+            ac.ap.alt_tgt_ft = (ac.alt / FT / 100.0).round() * 100.0;
+            ac.ap.spd_keas = Some(ac.d.keas.round());
+            if ac.ap.at_speedbrake {
+                ac.speedbrake = false;
+                ac.ap.at_speedbrake = false;
+            }
+        }
         match self.traffic.take_click() {
             Some(Ok(c)) => self.push(Level::Info, format!("A/A : CIBLE VERROUILLEE {c} (STT)")),
             Some(Err(e)) => self.push(Level::Caution, format!("A/A : {e}")),
@@ -2153,6 +2173,58 @@ impl Game {
                     traffic::Acm::Vs => "ACM VS — BANDE VERTICALE -2/+40 DEG, LOCK AUTO < 10 NM".into(),
                     traffic::Acm::Off => "ACM OFF".into(),
                 });
+            }
+            // Formation sur la cible verrouillée : FORMATION [POLICE|GAUCHE|DROITE|TRAIL|OFF]
+            "FORMATION" | "FORM" | "AILIER" => {
+                let a = w.get(1).copied().unwrap_or("POLICE");
+                if a == "OFF" {
+                    self.traffic.form = None;
+                    ac.ap.form = None;
+                    ac.ap.hdg_tgt = ac.hdg_deg().round();
+                    ac.ap.alt_tgt_ft = (ac.alt / FT / 100.0).round() * 100.0;
+                    ac.ap.vert = VertMode::Alt;
+                    ac.ap.lat = LatMode::Hdg;
+                    ac.ap.spd_keas = Some(ac.d.keas.round());
+                    reply = Ok("FORMATION OFF — AP CAP / ALT / VITESSE ACTUELS".into());
+                } else if !airborne {
+                    reply = Err("FORMATION : AU SOL".into());
+                } else {
+                    let pos = match a {
+                        "GAUCHE" | "LEFT" => traffic::FormPos::Gauche,
+                        "DROITE" | "RIGHT" => traffic::FormPos::Droite,
+                        "TRAIL" | "ARRIERE" => traffic::FormPos::Trail,
+                        _ => traffic::FormPos::Police,
+                    };
+                    reply = self.traffic.form_on(pos);
+                    if reply.is_ok() {
+                        engage_ap(ac);
+                        ac.ap.at_on = true;
+                        ac.ap.spd_managed = false;
+                        ac.ap.max_perf = true;
+                    }
+                }
+            }
+            "SIGNAL" | "INTERCEPTION" => {
+                reply = self.traffic.signal();
+            }
+            // Consignes à l'avion escorté (après le signal) : ESCORTE CAP 270 | ESCORTE ALT 15000
+            "ESCORTE" if w.len() > 2 => {
+                let v = w[2].parse::<f64>().map_err(|_| "VALEUR INVALIDE".to_string());
+                let cur = self.traffic.escort;
+                reply = match (w[1], v, cur) {
+                    (_, Err(e), _) => Err(e),
+                    (_, _, None) => Err("ESCORTE : AUCUN AVION NE NOUS SUIT (SIGNAL D'ABORD)".into()),
+                    ("CAP" | "HDG", Ok(h), Some((_, a))) => {
+                        self.traffic.escort = Some((wrap360(h), a));
+                        Ok(format!("ESCORTE : CAP {:03.0} DONNE A L'AVION INTERCEPTE", wrap360(h)))
+                    }
+                    ("ALT" | "FL", Ok(x), Some((h, _))) => {
+                        let ft = if w[1] == "FL" { x * 100.0 } else { x };
+                        self.traffic.escort = Some((h, ft.clamp(2_000.0, 45_000.0)));
+                        Ok(format!("ESCORTE : ALTITUDE {:.0} FT DONNEE A L'AVION INTERCEPTE", ft.clamp(2_000.0, 45_000.0)))
+                    }
+                    _ => Err("ESCORTE CAP <DEG> | ESCORTE ALT <FT> | ESCORTE FL <NIV>".into()),
+                };
             }
             "TRAFIC" | "TRAFFIC" if w.len() > 1 => {
                 let d = w.get(2).and_then(|x| x.parse::<f64>().ok()).unwrap_or(3.0);
@@ -3888,6 +3960,7 @@ fn draw_commandes_only(g: &mut Game, cr: Rect, only: Option<usize>) {
         aa: g.traffic.aa,
         lock: g.traffic.locked_call(),
         tws: g.traffic.mode == traffic::RadarMode::Tws,
+        form: g.traffic.form.as_ref().map(|f| f.pos.label()),
         acm: match g.traffic.acm {
             traffic::Acm::Off => "OFF",
             traffic::Acm::Bore => "BORE",
