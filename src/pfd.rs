@@ -1399,10 +1399,20 @@ fn draw_speed(ac: &Aircraft, g: &Geo, time: f64) {
         draw_triangle(vec2(lx - 9.0, y), vec2(lx, y - 6.0), vec2(lx, y + 6.0), MAGENTA_S);
     }
     let trend = if mach_mode { (d.accel * 10.0 / air.a) as f32 } else { (d.accel * 10.0 / KT * (air.rho / 1.225).sqrt()) as f32 };
+    // Tendance : vitesse prévue dans 10 s (flèche verte, ambre en surrégime ENG OVRD)
+    let tend_c = if ac.ovr_engine && ac.throttle > 1.0 { AMBER } else { GREEN_S };
     if trend.abs() > tick * 0.2 {
-        draw_line(lx - 3.0, cy, lx - 3.0, cy - trend * ppk, 2.0, GREEN_S);
+        let ye = cy - trend * ppk;
+        draw_line(lx - 4.0, cy, lx - 4.0, ye, 3.0, tend_c);
+        let dirn = if trend > 0.0 { -1.0 } else { 1.0 };
+        draw_triangle(vec2(lx - 4.0, ye + dirn * 2.0), vec2(lx - 9.0, ye - dirn * 6.0), vec2(lx + 1.0, ye - dirn * 6.0), tend_c);
     }
     scissor_pop();
+    if trend.abs() > tick * 0.2 {
+        let pv = spd + trend;
+        let s10 = if mach_mode { format!("{pv:.2}") } else { format!("{pv:.0}") };
+        txt_r(&format!("+10s {s10}"), lx - 2.0, t.y + 14.0, 10.0, tend_c);
+    }
     // Fenêtre de lecture en flèche vers l'échelle
     let bw = t.w - 16.0;
     let bx = t.x + 3.0;

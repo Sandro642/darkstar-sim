@@ -7,17 +7,20 @@ use crate::systems::{self, Fail};
 
 pub const S_WING: f64 = 200.0;
 pub const M_EMPTY: f64 = 28_000.0;
-/// Masse maximale (structure dimensionnée à 5,5 g à cette masse).
+/// Masse maximale.
 pub const M_MAX: f64 = M_EMPTY + FUEL_MAX + H2_MAX;
+/// Masse de dimensionnement : la structure supporte 8 g jusqu'à cette masse (au-delà, charge
+/// admissible inversement proportionnelle à la masse).
+pub const M_DESIGN: f64 = 60_000.0;
 /// Part de la rupture visée par les récupérations automatiques.
 pub const RECOVERY_MARGIN: f64 = 0.90;
 
 /// Facteur de charge de rupture (positif, négatif) pour une masse (kg) et une température de
 /// structure (°C) : courbes de l'enveloppe structurale (voir `Aircraft::n_break`).
 pub fn n_break_at(mass: f64, skin_c: f64) -> (f64, f64) {
-    let k_mass = (M_MAX / mass.max(1.0)).min(7.0 / 5.5);
+    let k_mass = (M_DESIGN / mass.max(1.0)).min(1.0);
     let k_temp = 1.0 - 0.4 * ((skin_c - 500.0) / 900.0).clamp(0.0, 1.0);
-    let pos = 5.5 * k_mass * k_temp;
+    let pos = 8.0 * k_mass * k_temp;
     (pos, -0.45 * pos)
 }
 pub const FUEL_MAX: f64 = 38_000.0; // JP-7 (turbines, statoréacteur)
@@ -904,8 +907,8 @@ impl Aircraft {
     }
 
     /// Facteur de charge de rupture (positif, négatif) calculé d'après l'enveloppe structurale :
-    /// - masse : la structure est dimensionnée pour 5,5 g à la masse maximale (82 t) ; plus légère,
-    ///   la charge admissible croît comme M_MAX / m (plafond 7 g, limite des attaches) ;
+    /// - masse : 8 g jusqu'à la masse de dimensionnement (60 t), puis M_DESIGN / m au-delà
+    ///   (≈ 5,9 g à la masse maximale de 82 t) ;
     /// - température de structure : résistance du titane / composites pleine jusqu'à 500 °C, puis
     ///   réduite linéairement jusqu'à 60 % à 1400 °C ;
     /// - négatif : 45 % du positif.
@@ -2923,6 +2926,44 @@ mod tests {
         assert!(ac.crashed.as_deref().is_some_and(|c| c.contains("INCONTROLABLE")));
     }
 
+    /// ENGINE OVERRIDE : manette au-delà de 100 % -> plus de poussée et d'accélération.
+    #[test]
+    fn override_more_thrust() {
+        for (mach, alt) in [(0.7, 15_000.0), (3.0, 60_000.0), (6.0, 95_000.0)] {
+            let mut out = Vec::new();
+            let mut acc: Vec<f64> = Vec::new();
+            for (ovr, thr) in [(false, 1.0), (true, 1.0), (true, 1.3), (true, 1.6)] {
+                let mut ac = Aircraft::new_on_runway(0);
+                ac.on_ground = false;
+                ac.gear_down = false;
+                ac.gear_pos = 0.0;
+                ac.brakes = false;
+                ac.alt = alt * FT;
+                ac.tas = mach * isa(ac.alt).a;
+                ac.theta = 2f64.to_radians();
+                if mach < 2.5 {
+                    ac.set_turbines(TurbState::Running, 1.0);
+                } else {
+                    ac.set_turbines(TurbState::Off, 0.0);
+                    ac.eng.inlet_open = false;
+                    ac.eng.doors = 1.0;
+                    if mach < 4.8 { ac.eng.ram = RamState::Lit; } else { ac.eng.scram = ScramState::Lit; }
+                }
+                if ovr {
+                    ac.cmd_override_engine(true);
+                }
+                ac.throttle = thr;
+                for _ in 0..(3 * 120) {
+                    ac.step(1.0 / 120.0, 0.0, 0.0);
+                }
+                out.push(format!("ovr={ovr} thr={thr:.1} poussee {:.0} kN accel {:+.2} m/s2 th_eff {:.2}", ac.d.thrust / 1000.0, ac.d.accel, ac.eng.th_eff));
+                acc.push(ac.d.accel);
+            }
+            println!("M{mach} : {}", out.join(" | "));
+            assert!(acc[2] > acc[1] + 0.2 && acc[3] > acc[2], "M{mach} : surrégime sans gain {acc:?}");
+        }
+    }
+
     /// Pilote qui se dégage lui-même d'un piqué (ailes à plat, ressource franche) : l'Auto-GCAS ne
     /// doit pas prendre la main tant que la récupération du pilote passe.
     #[test]
@@ -2997,7 +3038,7 @@ mod tests {
         let (light, _) = n_break_at(M_EMPTY + 2_000.0, 20.0);
         let (hot, _) = n_break_at(M_MAX, 1_100.0);
         println!("rupture : lourd {heavy:.2} g, leger {light:.2} g, lourd chaud {hot:.2} g");
-        assert!((heavy - 5.5).abs() < 0.01 && light > heavy && hot < heavy);
+        assert!((light - 8.0).abs() < 0.01 && heavy < light && hot < heavy);
         for fuel in [FUEL_MAX, 2_000.0] {
             let mut ac = Aircraft::new_on_runway(0);
             let elev = ground_elev(ac.lat, ac.lon);

@@ -1033,3 +1033,8 @@ Le SR-72 est un avion de reconnaissance : sa charge utile est simulée.
   vitesse +/-75, 150, 300 kt (Mach +/-0,5, 1, 2 ; ECHELLE VITESSE 150/300/600), altitude +/-500,
   1000, 2500, 5000 ft (ECHELLE ALT 1000/2000/5000/10000) ; graduations adaptées, repères (limite q,
   VLE, basse vitesse, VAPP, consigne A/THR, tendance) convertis dans l'unité choisie.
+- v1.80.1 : structure — 8 g supportés jusqu'à 60 t (masse de dimensionnement), puis
+  proportionnellement moins (≈ 5,9 g à 82 t), réduction thermique inchangée ; recovery et dernière
+  limite à 90-95 % (jusqu'à 7,2-7,6 g léger). Horizon : tendance de vitesse en flèche épaisse avec
+  la valeur prévue à +10 s, ambre en surrégime ENG OVRD (la poussée sature à ~131 % au-delà de
+  ~160 % de manette : la tendance croît de 12 à 50 % selon le régime).
