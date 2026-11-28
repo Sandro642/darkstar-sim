@@ -1108,3 +1108,16 @@ Le SR-72 est un avion de reconnaissance : sa charge utile est simulée.
   (au plus -12°, -4° statoréacteur allumé) au lieu de -5° ; tenue de trajectoire manche au neutre :
   la consigne intègre l'ordre du manche (impulsions clavier efficaces) et n'est plus mémorisée
   pendant une récupération Auto-GCAS ni sous AP.
+- v1.88.0 : A/A complété. Cible verrouillée : plus de fenêtre sur l'horizon, infos qui défilent
+  une à une au-dessus du cadre LOCK (indicatif / IFF, type, distance et VC, niveau, vitesse / Mach /
+  cap, aspect, source et état radar) avec points de progression ; échelle de distance avec repère
+  et VC, point d'interception (cap de collision) et TTI, portée visuelle, alerte COLLISION - BREAK,
+  angle hors nez (ATA) hors champ. Modes ACM (F5 / ACM BORE|VS|OFF) : cercle de 3° dans l'axe ou
+  bande verticale -2/+40°, verrouillage automatique < 10 NM. Menaces aériennes au RWR : radar de
+  bord hostile en veille (45 NM) et accrochage (25 NM, poursuite vers nous). Échos parasites à
+  basse altitude : multitrajet (F = |1 + rho e^(i phi)|, évanouissements, altitude radar entachée),
+  véhicules au sol passant le filtre Doppler classés GMT et exclus du LOCK auto. Modèles 3D du
+  trafic aux dimensions réelles (A320, 737, E175, 777, A350, 787, 747 à bosse, Citation à
+  empennage en T, KC-135, E-3 à radôme, C-17 aile haute, U-2, RQ-4 en V, F-16, F-35, F-22, F/A-18,
+  Flanker). Instruction TRAFIC <TYPE> [NM] (essais). Page PANNES : injection retirée, état des
+  systèmes en lecture seule. Correctif v1.87.1 inclus (tangage supersonique).

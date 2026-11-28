@@ -199,6 +199,7 @@ fn pfd_info<'a>(g: &Game, alerts: &'a [(Level, String)], ln: &'a str, _lat: f64,
         (!t.done()).then(|| pfd_plus::Cue { lat: t.lat, lon: t.lon, elev: 0.0, label: format!("CIBLE {}", t.code), color: Color::new(1.0, 0.85, 0.2, 1.0) })
     };
     let mut threats = g.recon.threat_cues(&g.ac);
+    threats.extend(g.traffic.threat_cues(&g.ac));
     for c in threats.iter_mut() {
         if let Some(m) = g.combat.missiles.iter().filter(|m| m.site == c.site).min_by(|a, b| a.range.total_cmp(&b.range)) {
             let (la, lo, al) = m.latlon();
@@ -1069,6 +1070,9 @@ impl Game {
             }
             if is_key_pressed(KeyCode::F4) {
                 self.exec_command("IFF");
+            }
+            if is_key_pressed(KeyCode::F5) {
+                self.exec_command("ACM");
             }
         }
         let ac = &mut self.ac;
@@ -2126,6 +2130,33 @@ impl Game {
             "LOCK" | "VERROUILLER" => {
                 let r = if w.len() > 1 { self.traffic.lock_call(&w[1..].join("")) } else { self.traffic.lock_next(&self.ac).ok_or_else(|| "AUCUNE PISTE RADAR DANS LE VOLUME DE BALAYAGE".to_string()) };
                 reply = r.map(|c| format!("CIBLE VERROUILLEE {c} (STT)"));
+            }
+            // Modes de combat rapproché : ACM BORE | VS | OFF (acquisition auto < 10 NM)
+            "ACM" => {
+                let m = w.get(1).copied().unwrap_or("");
+                self.traffic.acm = match m {
+                    "BORE" | "AXE" | "BST" => traffic::Acm::Bore,
+                    "VS" | "VERT" | "VERTICAL" => traffic::Acm::Vs,
+                    "OFF" => traffic::Acm::Off,
+                    _ => match self.traffic.acm {
+                        traffic::Acm::Off => traffic::Acm::Bore,
+                        traffic::Acm::Bore => traffic::Acm::Vs,
+                        traffic::Acm::Vs => traffic::Acm::Off,
+                    },
+                };
+                if self.traffic.acm != traffic::Acm::Off {
+                    self.traffic.lock = None;
+                    self.traffic.aa = true;
+                }
+                reply = Ok(match self.traffic.acm {
+                    traffic::Acm::Bore => "ACM BORE — CERCLE 3 DEG DANS L'AXE, LOCK AUTO < 10 NM".into(),
+                    traffic::Acm::Vs => "ACM VS — BANDE VERTICALE -2/+40 DEG, LOCK AUTO < 10 NM".into(),
+                    traffic::Acm::Off => "ACM OFF".into(),
+                });
+            }
+            "TRAFIC" | "TRAFFIC" if w.len() > 1 => {
+                let d = w.get(2).and_then(|x| x.parse::<f64>().ok()).unwrap_or(3.0);
+                reply = self.traffic.spawn_near(&self.ac, w[1], d);
             }
             "IFF" | "INTERROGER" => {
                 reply = self.traffic.interrogate(&self.ac);
@@ -3219,7 +3250,8 @@ async fn main() {
         // Voix d'alerte : chargement des phrases générées ; RWR (niveau de menace, nouvel émetteur)
         sfx.voice.poll().await;
         {
-            let cues = g.recon.threat_cues(&g.ac);
+            let mut cues = g.recon.threat_cues(&g.ac);
+            cues.extend(g.traffic.threat_cues(&g.ac));
             let lvl = cues.iter().map(|c| c.state).max().unwrap_or(0).max(if g.combat.missiles.is_empty() { 0 } else { 4 });
             let heard = cues.len();
             sfx.threat(lvl, heard > snd_threats);
@@ -3565,18 +3597,7 @@ fn draw_tab_page(g: &mut Game, tab: gcs::Tab, cr: Rect, alerts: &[(Level, String
                 g.exec_command(&cmd);
             }
         }
-        gcs::Tab::Alarmes => match alarms::draw_alarms(&g.ac, &alerts, cr, time, g.mishap.as_ref().map(|m| m.lights()).or(g.tree)) {
-            Some(alarms::AlarmAction::Toggle(f)) => {
-                let on = !g.ac.fails.has(f);
-                g.ac.set_failure(f, on);
-                g.cues.push(audio::Cue::Ack);
-            }
-            Some(alarms::AlarmAction::RepairAll) => {
-                g.tree = None;
-                g.exec_command("PANNES OFF");
-            }
-            None => {}
-        },
+        gcs::Tab::Alarmes => alarms::draw_alarms(&g.ac, &alerts, cr, time, g.mishap.as_ref().map(|m| m.lights()).or(g.tree)),
         gcs::Tab::Limites => limits::draw_limits(&g.ac, cr),
         gcs::Tab::Elec => {
             if let Some(a) = elec::draw_elec(&g.ac, cr, time) {
@@ -3867,6 +3888,11 @@ fn draw_commandes_only(g: &mut Game, cr: Rect, only: Option<usize>) {
         aa: g.traffic.aa,
         lock: g.traffic.locked_call(),
         tws: g.traffic.mode == traffic::RadarMode::Tws,
+        acm: match g.traffic.acm {
+            traffic::Acm::Off => "OFF",
+            traffic::Acm::Bore => "BORE",
+            traffic::Acm::Vs => "VS",
+        },
     };
     match fcu::draw(&g.ac, &cx, cr, only) {
         Some(fcu::Act::Key(k)) => {

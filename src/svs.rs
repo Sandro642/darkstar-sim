@@ -658,6 +658,8 @@ pub fn draw_svs(world: &World, tiles: &mut Tiles, wx: &crate::weather::Weather, 
     crate::refuel::draw_tanker(rf, ac, &mut mb);
     // Escorte de chasse
     crate::escort::draw_3d(ac, &mut mb);
+    // Trafic aérien (modèles aux dimensions réelles, à portée visuelle)
+    crate::traffic::draw_3d(ac, &mut mb);
     mb.flush();
 
     // --- Nuages volumétriques (masqués par le relief) ---

@@ -36,6 +36,7 @@ pub struct Ctx<'a> {
     pub aa: bool,
     pub lock: Option<String>,
     pub tws: bool,
+    pub acm: &'static str,
 }
 
 thread_local! {
@@ -369,6 +370,7 @@ fn sections(tab: usize, ac: &Aircraft, cx: &Ctx) -> Vec<(&'static str, Vec<Card>
                     c("VERROUILLER", cx.lock.clone().unwrap_or_default(), "Cible suivante devant l'avion (F2)", cx.lock.is_some().then_some(AMBER), None, cmd("LOCK")),
                     c("DEVERROUILLER", "", "Libere la cible (F3)", None, None, cmd("UNLOCK")),
                     c("IFF", "", "Interroge les pistes radar (F4)", None, None, cmd("IFF")),
+                    c("ACM", cx.acm, "Combat rapproche BORE / VS, lock auto (F5)", on(cx.acm != "OFF"), Some(cx.acm != "OFF"), cmd("ACM")),
                     c("RADAR", if cx.tws { "TWS" } else { "RWS" }, "RWS large / TWS pistes avec vitesse", None, Some(cx.tws), cmd(if cx.tws { "RWS" } else { "TWS" })),
                 ]),
             ]

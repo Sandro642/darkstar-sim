@@ -6,10 +6,6 @@ use crate::systems::{self, Fail};
 use crate::ui::*;
 use macroquad::prelude::*;
 
-pub enum AlarmAction {
-    Toggle(Fail),
-    RepairAll,
-}
 
 type Light = (&'static str, fn(&Aircraft, &[(Level, String)]) -> u8);
 
@@ -63,8 +59,7 @@ pub fn lit_count(ac: &Aircraft, alerts: &[(Level, String)]) -> usize {
     LIGHTS.iter().filter(|(_, f)| f(ac, alerts) > 0).count()
 }
 
-pub fn draw_alarms(ac: &Aircraft, alerts: &[(Level, String)], r: Rect, time: f64, force: Option<[u8; 32]>) -> Option<AlarmAction> {
-    let mut out = None;
+pub fn draw_alarms(ac: &Aircraft, alerts: &[(Level, String)], r: Rect, time: f64, force: Option<[u8; 32]>) {
     panel(r, "ALARMES / PANNES");
     // Panneau d'annonciateurs (platine vissée, 4 colonnes x 8 lignes)
     let ph = (r.h * 0.56).min(330.0);
@@ -103,15 +98,11 @@ pub fn draw_alarms(ac: &Aircraft, alerts: &[(Level, String)], r: Rect, time: f64
         txt_c(label, cell.x + cell.w / 2.0, cell.y + cell.h / 2.0 + 4.0, 11.0, fg);
     }
 
-    // Injection de pannes
+    // État des systèmes surveillés (lecture seule : aucune injection depuis cette page)
     let y0 = plate.y + plate.h + 14.0;
-    txt("INJECTION DE PANNES (ESSAI)", r.x + 14.0, y0 + 10.0, 13.0, ACCENT);
-    let rep = Rect::new(r.x + r.w - 130.0, y0 - 4.0, 116.0, 20.0);
-    rrect(rep, 5.0, Color::new(0.08, 0.2, 0.12, 1.0));
-    txt_c("TOUT REPARER", rep.x + rep.w / 2.0, rep.y + 14.0, 12.0, GREEN_S);
-    if clicked(rep) {
-        out = Some(AlarmAction::RepairAll);
-    }
+    let n_fail = systems::FAILS.iter().filter(|(f, _, _)| ac.fails.has(*f)).count();
+    txt("ETAT DES SYSTEMES (SURVEILLANCE)", r.x + 14.0, y0 + 10.0, 13.0, ACCENT);
+    txt_r(&if n_fail == 0 { "TOUS SYSTEMES OK".to_string() } else { format!("{n_fail} EN PANNE") }, r.x + r.w - 14.0, y0 + 10.0, 12.0, if n_fail == 0 { GREEN_S } else { RED });
     let bw = (r.w - 24.0 - 2.0 * 6.0) / 3.0;
     let avail = r.y + r.h - (y0 + 24.0) - 8.0;
     let bh = (avail / 4.0 - 6.0).clamp(18.0, 34.0);
@@ -121,14 +112,11 @@ pub fn draw_alarms(ac: &Aircraft, alerts: &[(Level, String)], r: Rect, time: f64
         let on = ac.fails.has(*fail);
         // Dégât réel d'un incident : affiché à part (ce n'est pas une panne injectée)
         let dmg = on && ac.damage.has(*fail);
-        let bg = if dmg { Color::new(0.30, 0.17, 0.02, 1.0) } else if on { Color::new(0.4, 0.05, 0.05, 1.0) } else if hovered(b) { Color::new(0.11, 0.13, 0.16, 1.0) } else { Color::new(0.08, 0.09, 0.11, 1.0) };
+        let bg = if dmg { Color::new(0.30, 0.17, 0.02, 1.0) } else if on { Color::new(0.4, 0.05, 0.05, 1.0) } else { Color::new(0.08, 0.09, 0.11, 1.0) };
         rrect(b, 5.0, bg);
         rrect_lines(b, 5.0, 1.0, if dmg { AMBER } else if on { RED } else { PANEL_BORDER });
         txt(label, b.x + 8.0, b.y + bh * 0.5 + 4.0, 11.0, if on { WHITE } else { DIM });
-        txt_r(if dmg { "DEGAT" } else if on { "ACTIVE" } else { code }, b.x + b.w - 6.0, b.y + bh * 0.5 + 4.0, 10.0, if dmg { AMBER } else if on { RED } else { Color::new(0.4, 0.43, 0.46, 1.0) });
-        if clicked(b) && !dmg {
-            out = Some(AlarmAction::Toggle(*fail));
-        }
+        txt_r(if dmg { "DEGAT" } else if on { "PANNE" } else { "OK" }, b.x + b.w - 6.0, b.y + bh * 0.5 + 4.0, 10.0, if dmg { AMBER } else if on { RED } else { Color::new(0.35, 0.6, 0.4, 1.0) });
+        let _ = code;
     }
-    out
 }
