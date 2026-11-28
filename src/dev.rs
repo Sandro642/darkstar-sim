@@ -75,9 +75,10 @@ pub enum Elem {
     CmdUrgence,
     CmdSimu,
     Override,
+    Lock,
 }
 
-pub const ELEMS: [(Elem, &str); 24] = [
+pub const ELEMS: [(Elem, &str); 25] = [
     (Elem::Horizon, "HORIZON"),
     (Elem::DonneesMoteur, "DONNEES MOTEUR"),
     (Elem::Systemes, "SYSTEMES"),
@@ -102,6 +103,7 @@ pub const ELEMS: [(Elem, &str); 24] = [
     (Elem::CmdUrgence, "CMD URGENCE"),
     (Elem::CmdSimu, "CMD SIMULATION"),
     (Elem::Override, "OVERRIDE"),
+    (Elem::Lock, "LOCK"),
 ];
 
 pub fn elem_name(e: Elem) -> &'static str {
@@ -123,9 +125,10 @@ pub enum Page {
     DonneesMoteur,
     Commandes,
     Override,
+    Lock,
 }
 
-const PAGES: [(Page, &str); 10] = [
+const PAGES: [(Page, &str); 11] = [
     (Page::Horizon, "1 HORIZON"),
     (Page::Fcs, "2 FCS"),
     (Page::Thermique, "3 THERMIQUE"),
@@ -135,6 +138,7 @@ const PAGES: [(Page, &str); 10] = [
     (Page::Mcdu, "7 MCDU"),
     (Page::Commandes, "8 COMMANDES"),
     (Page::Override, "9 OVERRIDE"),
+    (Page::Lock, "LOCK"),
     (Page::Config, "CONFIG"),
 ];
 
@@ -538,6 +542,7 @@ impl DevUi {
             "7" | "MCDU" => Page::Mcdu,
             "8" | "COMMANDES" => Page::Commandes,
             "9" | "OVERRIDE" => Page::Override,
+            "LOCK" | "TSD" => Page::Lock,
             "CONFIG" => Page::Config,
             "ARMEMENT" => Page::Armement,
             "MOTEUR" | "MOTEURS" => Page::DonneesMoteur,

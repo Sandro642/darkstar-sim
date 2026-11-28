@@ -1069,3 +1069,12 @@ Le SR-72 est un avion de reconnaissance : sa charge utile est simulée.
   distance, relèvement, altitude relative, rapprochement, aspect HOT / FLANC / COLD, route).
   Commandes de vol : en loi normale, manche au neutre, la pente de trajectoire est tenue
   (compensation de la gravité et de la charge en virage).
+- v1.84.0 : page LOCK (onglet LOCK, page écran LOCK, élément CONFIG) — situation tactique façon
+  datalink vue de dessus (portée 10/20/40/80 NM, cercles, contacts par IFF avec vecteur vitesse
+  1 min, indicatif, niveau), liste des contacts par distance, fiche de la cible ; verrouillage au
+  clic (souris = doigt) sur la page ou sur l'horizon. Radar réaliste : équation radar (portée en
+  SER^1/4 : F-22 ~10 NM, F-35 ~15 NM, F-16 ~59 NM, 777 ~158 NM), volume +/-60° x +/-30°, balayage
+  RWS 2 s avec probabilité de détection, creux Doppler en visée basse (vitesse radiale sol
+  < 60 kt), mémoire de piste 8 s, STT (verrouillage) seulement sur piste radar, rupture après 2 s
+  hors antenne (+/-70°), hors portée ou en creux Doppler (« LOCK PERDU — NOTCH ») ; contacts ADS-B
+  (civils) et Link 16 (amis, pistes AWACS) affichés pâles, non verrouillables.

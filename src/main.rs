@@ -1450,8 +1450,13 @@ impl Game {
         escort::set_render(&self.escort.wings);
         self.map.traffic = self.escort.traffic();
         self.traffic.update(&self.ac, sim_dt);
-        if let Some(c) = self.traffic.take_click() {
-            self.push(Level::Info, format!("A/A : CIBLE VERROUILLEE {c}"));
+        match self.traffic.take_click() {
+            Some(Ok(c)) => self.push(Level::Info, format!("A/A : CIBLE VERROUILLEE {c} (STT)")),
+            Some(Err(e)) => self.push(Level::Caution, format!("A/A : {e}")),
+            None => {}
+        }
+        for e in std::mem::take(&mut self.traffic.events) {
+            self.push(Level::Caution, format!("A/A : {e}"));
         }
         self.map.ai = self.traffic.nd_items();
         // Procédure d'urgence : décisions et instructions automatiques
@@ -2116,11 +2121,8 @@ impl Game {
                 reply = Ok(format!("MODE A/A {}", if self.traffic.aa { "ON — TRAFIC SUR L'HORIZON, LOCK POUR VERROUILLER" } else { "OFF" }));
             }
             "LOCK" | "VERROUILLER" => {
-                let r = if w.len() > 1 { self.traffic.lock_call(&w[1..].join("")) } else { self.traffic.lock_next(&self.ac) };
-                reply = match r {
-                    Some(c) => Ok(format!("CIBLE VERROUILLEE {c}")),
-                    None => Err("AUCUNE CIBLE".into()),
-                };
+                let r = if w.len() > 1 { self.traffic.lock_call(&w[1..].join("")) } else { self.traffic.lock_next(&self.ac).ok_or_else(|| "AUCUNE PISTE RADAR DANS LE VOLUME DE BALAYAGE".to_string()) };
+                reply = r.map(|c| format!("CIBLE VERROUILLEE {c} (STT)"));
             }
             "UNLOCK" | "DEVERROUILLER" => {
                 self.traffic.lock = None;
@@ -3583,6 +3585,8 @@ fn draw_tab_page(g: &mut Game, tab: gcs::Tab, cr: Rect, alerts: &[(Level, String
         }
         gcs::Tab::Essais => panels::draw_card(&g.ac, &g.mission, cr),
         gcs::Tab::Domaine => panels::draw_envelope(&g.ac, cr, &g.history),
+        // Situation tactique (datalink) : clic sur un contact = verrouillage
+        gcs::Tab::Lock => crate::traffic::draw_tsd(&g.ac, cr, time),
         gcs::Tab::Override => {
             if let Some(sw) = gcs::draw_overrides(&g.ac, &g.chambers, cr) {
                 g.apply_switch(sw);
@@ -3766,6 +3770,7 @@ fn draw_screen(g: &mut Game, d: &mut dev::DevUi, cr: Rect, world: &world::World,
         dev::Page::Armement => Some(gcs::Tab::Armement),
         dev::Page::DonneesMoteur => Some(gcs::Tab::Moteurs),
         dev::Page::Override => Some(gcs::Tab::Override),
+        dev::Page::Lock => Some(gcs::Tab::Lock),
         _ => None,
     };
     let mut horizon = None;
@@ -3947,6 +3952,7 @@ fn draw_elem(g: &mut Game, e: dev::Elem, r: Rect, world: &world::World, tiles: &
         dev::Elem::Incendie => tab(gcs::Tab::Incendie),
         dev::Elem::Limites => tab(gcs::Tab::Limites),
         dev::Elem::Override => tab(gcs::Tab::Override),
+        dev::Elem::Lock => tab(gcs::Tab::Lock),
         dev::Elem::Commandes => {
             draw_commandes(g, r);
             None
