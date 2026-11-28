@@ -170,6 +170,40 @@ impl Combat {
         self.events.push((Level::Warning, format!("MISSILE LAUNCH — {} ({}) — {:.0} NM", em.name, if ir { "IR" } else { "RADAR" }, tp.length() / NM)));
     }
 
+    /// Tir d'un missile air-air depuis un avion hostile (site = 10 000 + identifiant) :
+    /// R-77 (radar actif, Mach 4, 30 g) ou R-73 (infrarouge, Mach 2.5, 40 g), lancé dans l'axe
+    /// du tireur avec sa vitesse.
+    pub fn launch_air(&mut self, site: usize, name: &'static str, ir: bool, lat: f64, lon: f64, alt: f64, hdg: f64, tas: f64, ac: &Aircraft) {
+        let o = (lat, lon);
+        let (tp, _) = ac_pos(o, ac);
+        let h = hdg.to_radians();
+        let dir = dvec3(h.sin(), h.cos(), 0.0);
+        let a = isa(alt.max(0.0)).a;
+        let vmax = if ir { 2.5 } else { 4.0 } * a + tas;
+        let burn = if ir { 3.0 } else { 6.0 };
+        let range = (tp - dvec3(0.0, 0.0, alt)).length();
+        self.missiles.push(Missile {
+            site,
+            name,
+            seeker: if ir { Seeker::Ir } else { Seeker::Radar },
+            o,
+            p: dvec3(0.0, 0.0, alt),
+            v: dir * tas.max(150.0),
+            t: 0.0,
+            burn,
+            accel: (vmax - tas) / burn,
+            vmax,
+            gmax: if ir { 40.0 } else { 30.0 },
+            max_t: if ir { 22.0 } else { 60.0 },
+            ceiling: 25_000.0,
+            decoy: None,
+            best_r: f64::MAX,
+            range,
+            tti: 0.0,
+        });
+        self.events.push((Level::Warning, format!("MISSILE LAUNCH — {name} ({}) AIR-AIR — {:.0} NM", if ir { "IR" } else { "RADAR" }, range / NM)));
+    }
+
     /// Largage manuel ou automatique de leurres.
     pub fn dispense(&mut self, kind: Seeker, ac: &Aircraft) -> Result<String, String> {
         let left = match kind {
@@ -307,6 +341,17 @@ impl Combat {
                     tp + tv * tgo + dvec3(noise.0 * jam, noise.1 * jam, 0.0)
                 }
             };
+            // Autodirecteur radar Doppler : l'avion en travers (vitesse radiale faible) vu en
+            // visée basse se perd dans le fouillis de sol (notch) ; probabilité par seconde
+            if m.seeker == Seeker::Radar && m.decoy.is_none() && m.t > m.burn * 0.5 {
+                let los = (tp - m.p).normalize_or_zero();
+                let vr = dvec3(tv.x, tv.y, 0.0).dot(dvec3(los.x, los.y, 0.0).normalize_or_zero()).abs();
+                let look_down = m.p.z > tp.z + 300.0;
+                if look_down && vr < 45.0 && (noise.0 + 0.5) < 0.7 * h {
+                    m.decoy = Some(tp);
+                    self.events.push((Level::Info, format!("MISSILE {} : CIBLE PERDUE EN NOTCH", m.name)));
+                }
+            }
             let want = (aim - m.p).normalize_or_zero();
             let dir = m.v.normalize_or_zero();
             // Facteur de charge disponible : chute avec la densité de l'air
@@ -333,7 +378,7 @@ impl Combat {
             m.best_r = m.best_r.min(dist);
             let mut end: Option<(Level, String)> = None;
             if m.decoy.is_none() && dist < LETHAL_M && ac.crashed.is_none() {
-                ac.crash(&format!("ABATTU PAR MISSILE SOL-AIR ({})", m.name));
+                ac.crash(&format!("ABATTU PAR MISSILE {} ({})", if m.site >= 10_000 { "AIR-AIR" } else { "SOL-AIR" }, m.name));
                 end = Some((Level::Warning, format!("IMPACT MISSILE {}", m.name)));
             } else if m.decoy.is_some() && m.t > 4.0 && closing < 0.0 {
                 end = Some((Level::Info, format!("MISSILE {} LEURRE — PASSE A {:.0} m", m.name, m.best_r)));
@@ -599,5 +644,58 @@ mod tests {
         }
         println!("survie avec ECM + CMDS auto : {survived}/20");
         assert!((6..=17).contains(&survived), "equilibrage : {survived}/20");
+    }
+}
+
+#[cfg(test)]
+mod air_tests {
+    use super::*;
+
+    /// R-77 tiré à 15 NM d'au-dessus : en notch (travers, en dessous) le missile perd la cible ;
+    /// en ligne droite vers le tireur il touche.
+    #[test]
+    fn notch_defeats_radar_missile() {
+        let run = |notch: bool| {
+            let mut ac = Aircraft::new_on_runway(0);
+            ac.on_ground = false;
+            ac.gear_down = false;
+            ac.gear_pos = 0.0;
+            ac.brakes = false;
+            ac.alt = 8_000.0 * FT;
+            ac.tas = 240.0;
+            ac.set_turbines(TurbState::Running, 0.8);
+            ac.throttle = 0.8;
+            ac.gcas_on = false;
+            ac.ap.on = true;
+            ac.ap.at_on = true;
+            ac.ap.mach_tgt = 0.75;
+            ac.ap.alt_tgt_ft = 8_000.0;
+            ac.ap.max_perf = true;
+            let h0 = ac.hdg_deg();
+            ac.ap.hdg_tgt = if notch { wrap360(h0 + 90.0) } else { h0 };
+            let (la, lo) = destination(ac.lat, ac.lon, h0, 15.0 * NM);
+            let mut cb = Combat::new();
+            cb.cmds_auto = false;
+            cb.launch_air(10_001, "R-77 (AA-12)", false, la, lo, 30_000.0 * FT, wrap360(h0 + 180.0), 260.0, &ac);
+            for _ in 0..(90 * 60) {
+                // Notch : missile maintenu à 3 h (cap = relèvement du missile + 90°)
+                if notch {
+                    if let Some(m) = cb.missiles.first() {
+                        let (mla, mlo, _) = m.latlon();
+                        ac.ap.hdg_tgt = wrap360(dist_brg(ac.lat, ac.lon, mla, mlo).1 + 90.0);
+                    }
+                }
+                ac.step(1.0 / 60.0, 0.0, 0.0);
+                cb.update(1.0 / 60.0, &mut ac);
+                if ac.crashed.is_some() || cb.missiles.is_empty() {
+                    break;
+                }
+            }
+            let ev: Vec<String> = cb.events.iter().map(|e| e.1.clone()).collect();
+            println!("notch={notch} : crash {:?} ; {:?}", ac.crashed, ev);
+            ac.crashed.is_none()
+        };
+        assert!(!run(false), "sans manoeuvre le R-77 touche");
+        assert!(run(true), "le notch fait perdre la cible");
     }
 }

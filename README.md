@@ -1129,3 +1129,18 @@ Le SR-72 est un avion de reconnaissance : sa charge utile est simulée.
   automatique si séparation insuffisante, « LEADER TROP LENT » sous notre vitesse minimale de
   manœuvre. Identification visuelle à 0.6 NM. SIGNAL : balancement des ailes, l'avion civil répond
   et suit nos consignes (ESCORTE CAP n / ESCORTE ALT n | FL n) ; un hostile ne répond pas.
+- v1.90.0 : verrouillage corrigé et complété. Piste radar fraîche sur la durée d'un balayage
+  (2.6 s au lieu de 1 s : la moitié des avions passaient « en mémoire » et n'étaient pas
+  verrouillables). LOCK sur tout contact connu (ADS-B, Link 16, mémoire, plot) : antenne pointée,
+  accrochage si la cible est détectable, sinon raison (antenne, portée, notch, masque, pas de
+  retour) ; LOCK auto essaie chaque contact. Le lock ne donne que l'IFF (répond / ne répond pas) :
+  le type n'est plus révélé par l'ADS-B ni le Mode S. Caméra EO/IR (page LOCK, vue en direct de la
+  cible) et PHOTO (F6 / bouton) : identification du type à 24 px sur la dimension critique
+  (critère de Johnson, A320 vers 16 NM), immatriculation / indicatif à 120 px, sinon distance de
+  rapprochement indiquée. Hostiles : tirs R-77 (radar, 4-20 NM) et R-73 (IR, < 4 NM) quand ils
+  nous accrochent ; autodirecteur radar leurré par le notch (vitesse radiale < 45 m/s en visée
+  basse) ; RWR « AIR LOCK » avec conduite à tenir (notch au cap calculé, menace à 3H/9H,
+  descendre, paillettes ; IR : leurres et virage serré ; loin : fuite dos à la menace). Rejointe :
+  cap d'interception vers un point de retard derrière le poste, surcroît de vitesse jusqu'à
+  +390 kt, rejointe aussi depuis l'avant du leader, bandeau CAP / VITESSE / TTI. VID corrigée
+  (plus d'identification des échos de sol).

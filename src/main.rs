@@ -205,6 +205,10 @@ fn pfd_info<'a>(g: &Game, alerts: &'a [(Level, String)], ln: &'a str, _lat: f64,
             let (la, lo, al) = m.latlon();
             c.missile = Some((la, lo, al, m.tti.max(0.0)));
             c.state = 4;
+            // Menace aérienne : conduite à tenir selon l'autodirecteur et le temps avant impact
+            if c.site >= 10_000 {
+                c.escape = traffic::escape_advice(&g.ac, la, lo, Some((m.seeker == combat::Seeker::Ir, m.tti.max(0.0))));
+            }
         }
     }
     let mishap = g.mishap.as_ref().map(|m| (m.decay(), m.elapsed() - m.t_los));
@@ -1074,6 +1078,9 @@ impl Game {
             if is_key_pressed(KeyCode::F5) {
                 self.exec_command("ACM");
             }
+            if is_key_pressed(KeyCode::F6) {
+                self.exec_command("PHOTO");
+            }
         }
         let ac = &mut self.ac;
 
@@ -1476,6 +1483,13 @@ impl Game {
                 ac.speedbrake = false;
                 ac.ap.at_speedbrake = false;
             }
+        }
+        // Tirs air-air hostiles : missiles transmis au calculateur de combat
+        for l in std::mem::take(&mut self.traffic.launches) {
+            self.combat.launch_air(l.site, l.name, l.ir, l.lat, l.lon, l.alt, l.hdg, l.tas, &self.ac);
+        }
+        if traffic::Traffic::take_photo_req() {
+            self.exec_command("PHOTO");
         }
         match self.traffic.take_click() {
             Some(Ok(c)) => self.push(Level::Info, format!("A/A : CIBLE VERROUILLEE {c} (STT)")),
@@ -1965,6 +1979,10 @@ impl Game {
             "DIRECT" | "DCT" | "DIR" if arg(1) == "CIBLE" => {
                 reply = self.recon.command(&w, ac, self.mission.elapsed);
             }
+            // Photo EO/IR de la cible verrouillée (identification du type)
+            "PHOTO" if self.traffic.lock.is_some() => {
+                reply = self.traffic.photo(ac);
+            }
             "CAMERA" | "CAM" | "ZOOM" | "SAR" | "RADAR" | "ELINT" | "CIBLE" | "TARGET" | "PHOTO" | "MENACES" | "THREATS" => {
                 reply = self.recon.command(&w, ac, self.mission.elapsed);
             }
@@ -2148,7 +2166,7 @@ impl Game {
                 reply = Ok(format!("MODE A/A {}", if self.traffic.aa { "ON — TRAFIC SUR L'HORIZON, LOCK POUR VERROUILLER" } else { "OFF" }));
             }
             "LOCK" | "VERROUILLER" => {
-                let r = if w.len() > 1 { self.traffic.lock_call(&w[1..].join("")) } else { self.traffic.lock_next(&self.ac).ok_or_else(|| "AUCUNE PISTE RADAR DANS LE VOLUME DE BALAYAGE".to_string()) };
+                let r = if w.len() > 1 { self.traffic.lock_call(&w[1..].join("")) } else { self.traffic.lock_next_r(&self.ac) };
                 reply = r.map(|c| format!("CIBLE VERROUILLEE {c} (STT)"));
             }
             // Modes de combat rapproché : ACM BORE | VS | OFF (acquisition auto < 10 NM)

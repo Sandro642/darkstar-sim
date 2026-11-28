@@ -143,6 +143,9 @@ pub struct Target {
     pub bank: f64,
     /// Menace sur notre avion (radar de bord hostile) : 0 rien, 1 veille, 3 accrochage
     pub threat: u8,
+    /// Missiles air-air restants (radar, infrarouge) et délai avant un nouveau tir (s)
+    pub aam: (u8, u8),
+    pub fire_t: f64,
     /// Identification visuelle faite ; avion intercepté qui suit nos consignes (escorte)
     pub vid: bool,
     pub escorted: bool,
@@ -224,6 +227,25 @@ pub fn los_mask(ac: &Aircraft, t: &Target) -> Option<&'static str> {
     None
 }
 
+/// Conduite à tenir face à une menace aérienne : `missile` = Some(infrarouge, temps avant
+/// impact). Radar : notch (menace à 3 h ou 9 h, descente pour la visée basse, paillettes) ;
+/// infrarouge proche : leurres et virage serré vers le missile ; loin : fuite dos à la menace.
+pub fn escape_advice(ac: &Aircraft, lat: f64, lon: f64, missile: Option<(bool, f64)>) -> String {
+    let (d, b) = dist_brg(ac.lat, ac.lon, lat, lon);
+    let cur = ac.hdg_deg();
+    let (n1, n2) = (wrap360(b + 90.0), wrap360(b - 90.0));
+    let notch = if wrap180(n1 - cur).abs() < wrap180(n2 - cur).abs() { n1 } else { n2 };
+    let side = if wrap180(b - notch) > 0.0 { "3H" } else { "9H" };
+    let cold = wrap360(b + 180.0);
+    match missile {
+        Some((true, tti)) => format!("IR {tti:.0}S : LEURRES + VIRAGE SERRE VERS LE MISSILE, REDUIRE LA POUSSEE"),
+        Some((false, tti)) if tti < 8.0 => format!("RADAR {tti:.0}S : PAILLETTES + VIRAGE 9G CAP {notch:03.0} (NOTCH)"),
+        Some((false, tti)) => format!("RADAR {tti:.0}S : NOTCH CAP {notch:03.0} (MENACE A {side}), DESCENDRE, PAILLETTES"),
+        None if d > 15.0 * NM => format!("ACCROCHE {:.0} NM : FUITE CAP {cold:03.0}, ACCELERER (OU NOTCH CAP {notch:03.0})", d / NM),
+        None => format!("ACCROCHE {:.0} NM : NOTCH CAP {notch:03.0} (MENACE A {side}), DESCENDRE, ECM / PAILLETTES", d / NM),
+    }
+}
+
 /// Indicatif affiché : réel si identifié (ADS-B, Mode S, Link 16), sinon numéro de piste.
 pub fn disp_call(t: &Target) -> String {
     if t.ident_call { t.call.clone() } else { format!("TRK {:02}", t.id % 100) }
@@ -251,6 +273,8 @@ pub const NOTCH_KT: f64 = 60.0;
 pub const MEM_S: f64 = 8.0;
 pub const STT_BREAK_S: f64 = 2.0;
 pub const GIMBAL: f64 = 70.0;
+/// Piste radar fraîche : détectée au dernier balayage (cadre RWS 2 s + marge)
+pub const FRESH_S: f64 = 2.6;
 
 fn rcs_of(icao: &str) -> f64 {
     match icao {
@@ -364,6 +388,12 @@ pub struct Traffic {
     pub auto_spawn: bool,
     /// Fausses alarmes radar (franchissements du seuil CFAR par le bruit)
     pub false_alarms: bool,
+    /// Notre avion à la dernière mise à jour (géométrie des acquisitions)
+    own: Option<Aircraft>,
+    /// Tirs de missiles air-air hostiles à transmettre au calculateur de combat
+    pub launches: Vec<AirLaunch>,
+    /// Photos EO/IR prises (la dernière est affichée sur la page LOCK)
+    pub photos: Vec<Photo>,
     /// Horloge des capteurs (s)
     clock: f64,
     /// Modes de combat rapproché (acquisition automatique à moins de 10 NM)
@@ -413,7 +443,57 @@ pub struct Formation {
     ec_dot: f64,
     /// Leader plus lent que notre vitesse minimale de manœuvre : poste impossible
     pub slow: bool,
+    /// Rejointe en cours : route (deg), vitesse (m/s), temps d'interception (s)
+    pub rejoin: Option<(f64, f64, f64)>,
 }
+
+/// Tir d'un missile air-air par un hostile : site (10 000 + identifiant), nom, autodirecteur
+/// infrarouge ou radar, position et vecteur vitesse du tireur.
+#[derive(Clone, Debug)]
+pub struct AirLaunch {
+    pub site: usize,
+    pub name: &'static str,
+    pub ir: bool,
+    pub lat: f64,
+    pub lon: f64,
+    pub alt: f64,
+    pub hdg: f64,
+    pub tas: f64,
+}
+
+/// Photo EO/IR d'une cible : géométrie de prise de vue (pour le rendu), qualité (pixels sur
+/// l'envergure) et résultat d'identification.
+#[derive(Clone, Debug)]
+#[allow(dead_code)]
+pub struct Photo {
+    pub n: u32,
+    pub id: u32,
+    pub icao: &'static str,
+    pub label: String,
+    pub range: f64,
+    /// Direction de visée dans le repère de la cible (vers la caméra) : est, haut, -nord (œil)
+    pub look: (f32, f32, f32),
+    pub hdg: f64,
+    pub pitch: f64,
+    pub bank: f64,
+    pub px: f64,
+    pub ident: bool,
+    pub time: f64,
+}
+
+/// Caméra EO/IR : pixels par radian (champ étroit 1° sur 1000 px), seuils de Johnson sur la
+/// dimension critique (~35 % de l'envergure) : identification du type à 24 px, lecture de
+/// l'immatriculation à 120 px
+pub const EO_PX_RAD: f64 = 57_300.0;
+
+/// Dimension critique d'un type pour la caméra (m).
+pub fn eo_size(icao: &str) -> f64 {
+    let sh = shape_of(icao);
+    (sh.span.min(sh.len)) as f64 * 0.35
+}
+pub const EO_ID_PX: f64 = 24.0;
+pub const EO_REG_PX: f64 = 120.0;
+pub const EO_MAX_NM: f64 = 40.0;
 
 /// Demi-envergure du Darkstar (m)
 const OWN_HALF_SPAN: f64 = 10.0;
@@ -584,7 +664,7 @@ thread_local! {
 
 impl Traffic {
     pub fn new() -> Self {
-        Traffic { list: Vec::new(), lock: None, aa: false, rng: 0x9E37_79B9_7F4A_7C15, next_id: 1, scan_t: 0.0, lock_loss_t: 0.0, events: Vec::new(), mode: RadarMode::Rws, auto_spawn: true, false_alarms: true, clock: 0.0, acm: Acm::Off, form: None, escort: None, breakaway: None }
+        Traffic { list: Vec::new(), lock: None, aa: false, rng: 0x9E37_79B9_7F4A_7C15, next_id: 1, scan_t: 0.0, lock_loss_t: 0.0, events: Vec::new(), mode: RadarMode::Rws, auto_spawn: true, false_alarms: true, clock: 0.0, acm: Acm::Off, form: None, escort: None, breakaway: None, own: None, launches: Vec::new(), photos: Vec::new() }
     }
 
     fn rand(&mut self) -> f64 {
@@ -657,6 +737,7 @@ impl Traffic {
             rcs: rcs_of(icao),
             radar_age: 1e9,
             hostile: icao == "SU27",
+            aam: if icao == "SU27" { (4, 2) } else { (0, 0) },
             adsb_out: !is_mil && adsb_r < 0.85,
             l16: iff == Iff::Ami && matches!(icao, "F16" | "F35" | "F22" | "FA18" | "E3TF" | "K35R"),
             tr_lat: lat,
@@ -682,6 +763,7 @@ impl Traffic {
         let (lat, lon) = destination(ac.lat, ac.lon, ac.hdg_deg(), dist_nm.clamp(0.2, 40.0) * NM);
         let alt = ac.alt + 500.0 * FT;
         (t.icao, t.name, t.operator, t.mission, t.iff, t.rcs, t.hostile) = (icao_s, name, operator, mission, iff, rcs_of(icao_s), icao_s == "SU27");
+        t.aam = if t.hostile { (4, 2) } else { (0, 0) };
         (t.lat, t.lon, t.alt, t.alt_tgt, t.hdg, t.hdg_tgt) = (lat, lon, alt, alt, ac.hdg_deg(), ac.hdg_deg());
         (t.tr_lat, t.tr_lon, t.tr_alt, t.tr_hdg) = (lat, lon, alt, ac.hdg_deg());
         // Vitesse réaliste : 250 kt sous le FL100 (règle de l'air), sinon Mach de croisière
@@ -698,6 +780,7 @@ impl Traffic {
         if dt <= 0.0 {
             return;
         }
+        self.own = Some(ac.clone());
         // Population : ~10 civils et ~4 militaires dans 80 NM
         self.list.retain(|t| dist_brg(ac.lat, ac.lon, t.lat, t.lon).0 < 95.0 * NM && !(t.false_alarm && t.radar_age > MEM_S) && !(t.clutter && t.life < 0.0 && Some(t.id) != self.lock));
         let civ = self.list.iter().filter(|t| !t.mil && !t.false_alarm && !t.clutter).count();
@@ -800,6 +883,7 @@ impl Traffic {
         };
         let rnd: Vec<[f64; 8]> = (0..self.list.len()).map(|_| std::array::from_fn(|_| self.rand())).collect();
         let own_gnd = ground_at(ac.lat, ac.lon).0;
+        let mut launches = Vec::new();
         for (k, t) in self.list.iter_mut().enumerate() {
             let rn = rnd[k];
             let gauss = |i: usize| (-2.0 * rn[i].max(1e-9).ln()).sqrt() * (std::f64::consts::TAU * rn[i + 1]).cos();
@@ -835,7 +919,7 @@ impl Traffic {
             }
             let rel = Traffic::rel(ac, t);
             // Identification visuelle à moins de 0.6 NM (type, immatriculation / indicatif peint)
-            if !t.vid && rel.range < 0.6 * NM {
+            if !t.vid && !t.clutter && rel.range < 0.6 * NM {
                 t.vid = true;
                 t.type_known = true;
                 if !t.hostile {
@@ -855,6 +939,25 @@ impl Traffic {
                 let off = wrap180(b_to_us - t.hdg).abs();
                 let prev = t.threat;
                 t.threat = if rel.range < 25.0 * NM && off < 60.0 { 3 } else if rel.range < 45.0 * NM && off < 60.0 { 1 } else { 0 };
+                // Tir : missile radar (R-77) entre 4 et 20 NM, nous dans son nez (+/-30°) ;
+                // infrarouge (R-73) à moins de 4 NM (+/-40°) ; 30 s entre deux tirs
+                t.fire_t -= dt;
+                let rng_nm = rel.range / NM;
+                if t.threat == 3 && t.fire_t <= 0.0 && t.masked.is_none() {
+                    let shot = if rng_nm < 4.0 && rng_nm > 0.4 && off < 40.0 && t.aam.1 > 0 {
+                        t.aam.1 -= 1;
+                        Some(("R-73 (AA-11)", true))
+                    } else if (4.0..20.0).contains(&rng_nm) && off < 30.0 && t.aam.0 > 0 {
+                        t.aam.0 -= 1;
+                        Some(("R-77 (AA-12)", false))
+                    } else {
+                        None
+                    };
+                    if let Some((name, ir)) = shot {
+                        t.fire_t = 30.0;
+                        launches.push(AirLaunch { site: 10_000 + t.id as usize, name, ir, lat: t.lat, lon: t.lon, alt: t.alt, hdg: t.hdg, tas: t.tas });
+                    }
+                }
                 if t.threat == 3 && prev < 3 {
                     let clock_h = ((wrap360(rel.brg - ac.hdg_deg()) / 30.0).round() as i32 + 11) % 12 + 1;
                     msgs.push(format!("RWR : ACCROCHAGE RADAR AIR — FLANKER {clock_h}H {:.0} NM", rel.range / NM));
@@ -961,10 +1064,10 @@ impl Traffic {
                     t.type_known = true;
                 }
             }
+            // ADS-B : indicatif et code diffusés, jamais le type (photo ou identification visuelle)
             if t.adsb {
                 t.ident = Iff::Neutre;
                 t.ident_call = true;
-                t.type_known = true;
                 t.squawk_known = true;
             }
             // Réponse IFF
@@ -982,7 +1085,6 @@ impl Traffic {
                         t.ident = Iff::Neutre;
                         t.squawk_known = true;
                         t.ident_call = true;
-                        t.type_known = true;
                         "MODE 3/C/S - NEUTRE"
                     };
                     msgs.push(format!("IFF {} : {r}", disp_call(t)));
@@ -1036,6 +1138,7 @@ impl Traffic {
             t.vel_ok = t.adsb || t.dl || t.hits >= 2 || tma_good;
         }
         self.events.extend(msgs);
+        self.launches.extend(launches);
         // Fausses alarmes : position aléatoire dans le volume de balayage
         if frame && self.false_alarms {
             let rate = if mode == RadarMode::Tws { FA_TWS } else { FA_RWS };
@@ -1122,7 +1225,7 @@ impl Traffic {
             let pitch = ac.pitch_att().to_degrees();
             let mut best: Option<(f64, u32)> = None;
             for t in &self.list {
-                if t.radar_age >= 1.0 || t.false_alarm {
+                if t.radar_age >= FRESH_S || t.false_alarm {
                     continue;
                 }
                 let r = Traffic::rel(ac, t);
@@ -1167,8 +1270,9 @@ impl Traffic {
             let ph = ["RALLIEMENT", "JONCTION", "EN POSITION"][f.phase as usize];
             if f.slow {
                 format!("FORMATION {} {call} - LEADER TROP LENT (VMIN) - POSTE IMPOSSIBLE", f.pos.label())
-            } else if f.phase == 0 {
-                format!("FORMATION {} {call} - {ph} {:.1} NM", f.pos.label(), f.err.0.hypot(f.err.1) / NM)
+            } else if let Some((trk, v, tt)) = f.rejoin {
+                let tti = if tt.is_finite() { format!("{:.0}:{:02.0}", (tt / 60.0).floor(), tt % 60.0) } else { "--".into() };
+                format!("FORMATION {} {call} - REJOINTE {:.1} NM  CAP {trk:03.0}  {:.0} KT  TTI {tti}", f.pos.label(), f.err.0.hypot(f.err.1) / NM, v / KT)
             } else {
                 format!("FORMATION {} {call} - {ph}  AV {:+.0} M  LAT {:+.0} M  VERT {:+.0} M", f.pos.label(), f.err.0, f.err.1, f.err.2)
             }
@@ -1180,9 +1284,10 @@ impl Traffic {
                 .list
                 .iter()
                 .filter(|t| !t.false_alarm && !t.clutter)
-                .map(|t| (t.icao, t.lat, t.lon, t.alt, t.hdg, (t.vs / t.tas.max(1.0)).atan(), t.bank, t.mil))
+                .map(|t| (t.icao, t.lat, t.lon, t.alt, t.hdg, (t.vs / t.tas.max(1.0)).atan(), t.bank, t.mil, t.id))
                 .collect()
         });
+        PHOTO.with(|p| *p.borrow_mut() = self.photos.last().cloned());
     }
 
     /// Vue affichée d'une cible : piste estimée et identité connue (jamais la vérité).
@@ -1216,8 +1321,61 @@ impl Traffic {
             return Err("FORMATION : CIBLE EN HOJ (PAS DE DISTANCE)".into());
         }
         let call = disp_call(t);
-        self.form = Some(Formation { lead: id, pos, phase: 0, err: (0.0, 0.0, 0.0), rock_t: 0.0, lead_f: None, lead_w: 0.0, ec_dot: 0.0, slow: false });
+        self.form = Some(Formation { lead: id, pos, phase: 0, err: (0.0, 0.0, 0.0), rock_t: 0.0, lead_f: None, lead_w: 0.0, ec_dot: 0.0, slow: false, rejoin: None });
         Ok(format!("FORMATION {} SUR {call} — RALLIEMENT", pos.label()))
+    }
+
+    /// Photo EO/IR de la cible verrouillée : identification si assez de pixels sur l'envergure
+    /// (type à 24 px, immatriculation / indicatif à 120 px), sinon rapprochement indiqué.
+    pub fn photo(&mut self, ac: &Aircraft) -> Result<String, String> {
+        let id = self.lock.ok_or("PHOTO : AUCUNE CIBLE VERROUILLEE")?;
+        let n = self.photos.last().map_or(1, |p| p.n + 1);
+        let t = self.list.iter_mut().find(|t| t.id == id).ok_or("PHOTO : CIBLE PERDUE")?;
+        if t.false_alarm || t.clutter {
+            return Err("PHOTO : RIEN DANS LE CHAMP (ECHO PARASITE)".into());
+        }
+        let r = Traffic::rel(ac, t);
+        if r.range > EO_MAX_NM * NM || los_mask(ac, t).is_some() {
+            return Err(format!("PHOTO : HORS PORTEE EO ({:.0} NM, MAX {EO_MAX_NM:.0})", r.range / NM));
+        }
+        let size = eo_size(t.icao);
+        let px = size / r.range * EO_PX_RAD;
+        let ident = px >= EO_ID_PX;
+        let before = disp_call(t);
+        if ident {
+            t.type_known = true;
+            if px >= EO_REG_PX && !t.hostile {
+                t.ident_call = true;
+            }
+        }
+        // Direction vers la caméra dans le repère de l'œil (est, haut, -nord)
+        let (e, nn) = enu_offset(t.lat, t.lon, ac.lat, ac.lon);
+        let up = ac.alt - t.alt;
+        let l = (e * e + nn * nn + up * up).sqrt().max(1.0);
+        let label = if ident { format!("{} {}", t.icao, t.name) } else { "NON IDENTIFIABLE".into() };
+        let msg = if ident {
+            format!("PHOTO {n:02} {before} : {} {} — {:.0} PX{}", t.icao, t.name, px, if px >= EO_REG_PX && !t.hostile { format!(" — {}", t.call) } else { String::new() })
+        } else {
+            format!("PHOTO {n:02} {before} : {:.0} PX — TROP LOIN POUR IDENTIFIER, RAPPROCHER A {:.1} NM", px, size * EO_PX_RAD / EO_ID_PX / NM)
+        };
+        self.photos.push(Photo {
+            n,
+            id,
+            icao: t.icao,
+            label,
+            range: r.range,
+            look: ((e / l) as f32, (up / l) as f32, (-nn / l) as f32),
+            hdg: t.hdg,
+            pitch: (t.vs / t.tas.max(1.0)).atan(),
+            bank: t.bank,
+            px,
+            ident,
+            time: self.clock,
+        });
+        if self.photos.len() > 12 {
+            self.photos.remove(0);
+        }
+        Ok(msg)
     }
 
     /// Signal d'interception (balancement des ailes) : l'avion civil répond et suit nos consignes.
@@ -1314,19 +1472,47 @@ impl Traffic {
         let corr = (2.0 * 1.2 * ea.abs()).sqrt().min(0.08 * ea.abs()).min(if sgn > 0.0 { 130.0 } else { 70.0 });
         let vmin = ac.v_min_maneuver();
         f.slow = ltas < vmin;
-        let tas = (v_turn + sgn * corr).clamp((ltas * 0.75).max(vmin), (ltas + 150.0).max(vmin + 20.0));
-        // Route : loin, poursuite anticipée du poste ; près, cap du leader + correction latérale
+        let mut tas = (v_turn + sgn * corr).clamp((ltas * 0.75).max(vmin), (ltas + 150.0).max(vmin + 20.0));
+        let mut t_rej = None;
+        // Route : loin, rejointe (cap d'interception à vitesse constante vers un point de retard
+        // derrière le poste : pas de dépassement ni de passage devant le leader) ; près, cap du
+        // leader + correction latérale
         let trk = if dist > 4_000.0 {
-            let tgo = (dist / ac.tas.max(50.0)).min(120.0);
-            let (ax, ay) = (px + fw.0 * ltas * tgo, py + fw.1 * ltas * tgo);
-            wrap360(ax.atan2(ay).to_degrees())
+            let lag = (0.15 * dist).min(1_500.0);
+            let (qx, qy) = (px - fw.0 * lag, py - fw.1 * lag);
+            let ahead = qx * fw.0 + qy * fw.1 > 0.0;
+            // Surcroît de vitesse : jusqu'à +390 kt au-delà de 20 km, réduit à l'approche ;
+            // poste derrière nous : on ralentit et le leader nous rattrape
+            let over = (2.0 * 1.2 * dist).sqrt().min(0.05 * dist).min(if dist > 20_000.0 { 200.0 } else { 130.0 });
+            let v_rej = if ahead { (ltas + over).max(vmin) } else { (ltas * 0.8).max(vmin) };
+            tas = v_rej;
+            let (vx, vy) = (fw.0 * ltas, fw.1 * ltas);
+            let a = vx * vx + vy * vy - v_rej * v_rej;
+            let b = 2.0 * (qx * vx + qy * vy);
+            let c = qx * qx + qy * qy;
+            let disc = b * b - 4.0 * a * c;
+            let tt = if a.abs() < 1e-6 {
+                (b < 0.0).then(|| -c / b)
+            } else if disc >= 0.0 {
+                [(-b - disc.sqrt()) / (2.0 * a), (-b + disc.sqrt()) / (2.0 * a)].into_iter().filter(|x| *x > 0.0).reduce(f64::min)
+            } else {
+                None
+            };
+            t_rej = tt;
+            match tt {
+                Some(t) if t < 3_600.0 => wrap360((qx + vx * t).atan2(qy + vy * t).to_degrees()),
+                // Pas de solution (leader trop rapide) : poursuite pure du point de retard
+                _ => wrap360(qx.atan2(qy).to_degrees()),
+            }
         } else {
             // Près du leader, angle de rapprochement latéral limité (pas de coupe vers lui)
             let lim = if sep < 300.0 { 10.0 } else { 35.0 };
             let ec_p = ec + 4.0 * f.ec_dot;
             wrap360(lh + lw * 3.0 + ec_p.atan2((ac.tas * 4.0).max(150.0)).to_degrees().clamp(-lim, lim))
         };
-        let vs = lvs + if dist > 4_000.0 { (pz * 0.05).clamp(-60.0, 60.0) } else { (pz * 0.12).clamp(-40.0, 40.0) };
+        // Vertical : en rejointe, niveau rejoint pour le temps d'interception
+        let vs = lvs + if dist > 4_000.0 { (pz / t_rej.unwrap_or(60.0).clamp(30.0, 300.0) * 1.5).clamp(-60.0, 60.0) } else { (pz * 0.12).clamp(-40.0, 40.0) };
+        f.rejoin = (dist > 4_000.0).then(|| (trk, tas, t_rej.unwrap_or(f64::NAN)));
         let gamma = (vs / ac.tas.max(50.0)).clamp(-0.35, 0.35).asin();
         // Balancement des ailes (signal) ; l'avion civil répond et suit nos consignes
         let bank = if f.rock_t > 0.0 {
@@ -1367,7 +1553,7 @@ impl Traffic {
                 state: t.threat,
                 dist: dist_brg(ac.lat, ac.lon, t.lat, t.lon).0,
                 missile: None,
-                escape: if t.threat >= 3 { "AIR : SE METTRE EN TRAVERS / ACCELERER".into() } else { String::new() },
+                escape: if t.threat >= 3 { escape_advice(ac, t.lat, t.lon, None) } else { String::new() },
             })
             .collect()
     }
@@ -1377,7 +1563,7 @@ impl Traffic {
         let mut n = 0;
         for t in self.list.iter_mut() {
             let r = Traffic::rel(ac, t);
-            if t.radar_age < 1.0 && r.az.abs() < AZ_LIM && r.range < IFF_NM * NM && t.iff_t <= 0.0 {
+            if t.radar_age < FRESH_S && r.az.abs() < AZ_LIM && r.range < IFF_NM * NM && t.iff_t <= 0.0 {
                 t.iff_t = IFF_S;
                 n += 1;
             }
@@ -1405,7 +1591,7 @@ impl Traffic {
 
     /// Source de la piste affichée.
     pub fn source(t: &Target) -> &'static str {
-        if t.radar_age < 1.0 {
+        if t.radar_age < FRESH_S {
             "RADAR"
         } else if t.radar_age < MEM_S {
             "MEMOIRE"
@@ -1440,25 +1626,33 @@ impl Traffic {
 
     /// Verrouille la cible suivante : devant l'avion (cône de 60°) par distance croissante, sinon
     /// la plus proche.
-    pub fn lock_next(&mut self, ac: &Aircraft) -> Option<String> {
-        let mut c: Vec<(f64, u32)> = self.list.iter().filter(|t| t.radar_age < 1.0 && Self::confirmed(t) && !Self::gmt(t)).map(|t| {
+    /// Verrouille le contact suivant (devant l'avion d'abord, par distance) : chaque contact
+    /// connu est essayé (accrochage direct si pas de piste radar) jusqu'au premier qui accroche.
+    pub fn lock_next_r(&mut self, ac: &Aircraft) -> Result<String, String> {
+        let mut c: Vec<(f64, u32)> = self.list.iter().filter(|t| Self::known(t) && Self::confirmed(t) && !Self::gmt(t)).map(|t| {
             let r = Self::rel(ac, t);
             let front = r.az.abs() < 60.0;
             ((if front { 0.0 } else { 1e9 }) + r.range, t.id)
         }).collect();
         c.sort_by(|a, b| a.0.total_cmp(&b.0));
         if c.is_empty() {
-            self.lock = None;
-            return None;
+            return Err("AUCUN CONTACT".into());
         }
-        let i = match self.lock.and_then(|id| c.iter().position(|x| x.1 == id)) {
-            Some(i) => (i + 1) % c.len(),
+        let start = match self.lock.and_then(|id| c.iter().position(|x| x.1 == id)) {
+            Some(i) => i + 1,
             None => 0,
         };
-        self.lock = Some(c[i].1);
-        let id = c[i].1;
-        self.try_lock(id).ok()
+        let mut last_err = String::new();
+        for k in 0..c.len() {
+            let id = c[(start + k) % c.len()].1;
+            match self.try_lock(id) {
+                Ok(call) => return Ok(call),
+                Err(e) => last_err = e,
+            }
+        }
+        Err(last_err)
     }
+
 
     pub fn lock_call(&mut self, call: &str) -> Result<String, String> {
         let t = self.list.iter().find(|t| disp_call(t).replace(' ', "") == call.replace(' ', "")).ok_or("CIBLE INCONNUE")?;
@@ -1468,13 +1662,29 @@ impl Traffic {
     /// Verrouillage (STT) : piste radar fraîche obligatoire.
     pub fn try_lock(&mut self, id: u32) -> Result<String, String> {
         let t = self.list.iter().find(|t| t.id == id).ok_or("CIBLE INCONNUE")?;
-        let hoj = t.radar_age >= 1.0 && t.strobe && t.in_vol;
-        if t.radar_age >= 1.0 && !hoj {
-            return Err(format!("{} : PAS DE PISTE RADAR ({}) — VERROUILLAGE IMPOSSIBLE", disp_call(t), Self::source(t)));
+        let hoj = t.radar_age >= FRESH_S && t.strobe && t.in_vol;
+        // Pas de piste radar fraîche (contact ADS-B, Link 16, mémoire, plot) : l'antenne est
+        // pointée sur la position connue et tente l'accrochage (poursuite directe)
+        // (vérification de la détectabilité au moment du lock, même sur une piste fraîche : une
+        // cible en notch ne se reverrouille pas)
+        let spot = !hoj;
+        if spot {
+            if t.false_alarm || (t.clutter && t.life < 0.0) {
+                return Err(format!("{} : ACQUISITION ECHOUEE — PAS DE RETOUR RADAR", disp_call(t)));
+            }
+            if let Some(own) = self.own.as_ref() {
+                if let Some(w) = radar_state(own, t, true, GIMBAL).why {
+                    return Err(format!("{} : ACQUISITION ECHOUEE — {w}", disp_call(t)));
+                }
+            }
         }
         let call = if hoj { format!("{} HOJ (ANGLE SEUL)", disp_call(t)) } else { disp_call(t) };
         if let Some(t) = self.list.iter_mut().find(|t| t.id == id) {
             t.hoj = hoj;
+            if spot {
+                t.radar_age = 0.0;
+                t.det_n = t.det_n.max(2);
+            }
         }
         self.lock = Some(id);
         self.lock_loss_t = 0.0;
@@ -1494,6 +1704,11 @@ impl Traffic {
     /// Indicatif de la cible verrouillée.
     pub fn locked_call(&self) -> Option<String> {
         self.locked().map(disp_call)
+    }
+
+    /// Bouton PHOTO de la page LOCK (demande à traiter).
+    pub fn take_photo_req() -> bool {
+        PHOTO_REQ.with(|p| p.replace(false))
     }
 
     /// Clic sur un symbole de l'horizon (demande à traiter).
@@ -1647,7 +1862,7 @@ pub fn draw_hud(ac: &Aircraft, v: &crate::svs::View, s: Rect, time: f64) {
             continue;
         }
         let p = v.project(eye.local(t.lat, t.lon, t.alt));
-        let fresh = t.radar_age < 1.0;
+        let fresh = t.radar_age < FRESH_S;
         let base = t.iff.color();
         let col = if fresh { base } else { Color::new(base.r, base.g, base.b, 0.45) };
         match p {
@@ -1780,8 +1995,8 @@ pub fn target_lines(ac: &Aircraft, t: &Target) -> Vec<(String, String, Color)> {
     }
     let age = if t.radar_age < 1e8 { format!(" ({:.0} s)", t.radar_age) } else { String::new() };
     let ser = if t.radar_age < MEM_S { if t.rcs_eff < 0.1 { format!("  SER EST {:.3} m2", t.rcs_eff) } else { format!("  SER EST {:.0} m2", t.rcs_eff) } } else { String::new() };
-    lines.push(("PISTE".into(), format!("{}{age}{ser}", Traffic::source(t)), if t.radar_age < 1.0 { GREEN_S } else { DIM }));
-    let etat = if !Traffic::confirmed(t) && t.radar_age < MEM_S { "PLOT NON CONFIRME (1 DETECTION)".to_string() } else if Traffic::gmt(t) { "MOBILE AU SOL ? (GMT)".to_string() } else if t.multipath { format!("MULTITRAJET  F {:.2}{}", t.mp_f, if t.mp_f < 0.7 { " EVANOUIS." } else { "" }) } else if let Some(m) = t.masked { m.to_string() } else if t.strobe { "BROUILLAGE - ANGLE SEUL".into() } else if t.jam { "BROUILLEUR ACTIF (BURN-THROUGH)".into() } else if t.radar_age < 1.0 { format!("VR {:+.0} KT{}", t.vr_kt, if t.notch { "  NOTCH" } else { "" }) } else { "--".into() };
+    lines.push(("PISTE".into(), format!("{}{age}{ser}", Traffic::source(t)), if t.radar_age < FRESH_S { GREEN_S } else { DIM }));
+    let etat = if !Traffic::confirmed(t) && t.radar_age < MEM_S { "PLOT NON CONFIRME (1 DETECTION)".to_string() } else if Traffic::gmt(t) { "MOBILE AU SOL ? (GMT)".to_string() } else if t.multipath { format!("MULTITRAJET  F {:.2}{}", t.mp_f, if t.mp_f < 0.7 { " EVANOUIS." } else { "" }) } else if let Some(m) = t.masked { m.to_string() } else if t.strobe { "BROUILLAGE - ANGLE SEUL".into() } else if t.jam { "BROUILLEUR ACTIF (BURN-THROUGH)".into() } else if t.radar_age < FRESH_S { format!("VR {:+.0} KT{}", t.vr_kt, if t.notch { "  NOTCH" } else { "" }) } else { "--".into() };
     lines.push(("RADAR".into(), etat, if t.masked.is_some() || t.strobe || t.jam || t.notch { AMBER } else { WHITE }));
     lines
 }
@@ -1791,7 +2006,11 @@ thread_local! {
     static FORM_INFO: std::cell::RefCell<Option<String>> = const { std::cell::RefCell::new(None) };
     /// Mode ACM courant, avions vus (type, lat, lon, alt, cap, pente, inclinaison, militaire)
     static ACM: std::cell::Cell<Acm> = const { std::cell::Cell::new(Acm::Off) };
-    static VIS: std::cell::RefCell<Vec<(&'static str, f64, f64, f64, f64, f64, f64, bool)>> = const { std::cell::RefCell::new(Vec::new()) };
+    static VIS: std::cell::RefCell<Vec<(&'static str, f64, f64, f64, f64, f64, f64, bool, u32)>> = const { std::cell::RefCell::new(Vec::new()) };
+    /// Demande de photo depuis la page LOCK
+    static PHOTO_REQ: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    /// Dernière photo (affichée sur la page LOCK)
+    static PHOTO: std::cell::RefCell<Option<Photo>> = const { std::cell::RefCell::new(None) };
     /// Mode radar courant (affichage)
     static MODE: std::cell::Cell<RadarMode> = const { std::cell::Cell::new(RadarMode::Rws) };
     /// Portée de la page LOCK (NM)
@@ -1914,7 +2133,7 @@ pub fn draw_tsd(ac: &Aircraft, r: Rect, time: f64) {
             }
             continue;
         }
-        let fresh = t.radar_age < 1.0;
+        let fresh = t.radar_age < FRESH_S;
         let c0 = if locked { AMBER } else { t.iff.color() };
         let c = if fresh || locked { c0 } else { Color::new(c0.r, c0.g, c0.b, 0.45) };
         // Vecteur vitesse : position dans 1 min
@@ -1945,6 +2164,39 @@ pub fn draw_tsd(ac: &Aircraft, r: Rect, time: f64) {
             clicked_id = Some(t.id);
         }
     }
+    // Caméra EO/IR : vue en direct de la cible verrouillée, sinon dernière photo ; bouton PHOTO
+    {
+        let er = Rect::new(sc.x + sc.w - 252.0, sc.y + 22.0, 240.0, 160.0);
+        let vis = VIS.with(|v| v.borrow().clone());
+        let live = lock.and_then(|id| vis.iter().find(|v| v.8 == id).cloned());
+        let mut shown = false;
+        if let Some((icao, la, lo, al, hd, pi, bk, _, _)) = live {
+            let (e, nn) = enu_offset(la, lo, ac.lat, ac.lon);
+            let up = ac.alt - al;
+            let d = (e * e + nn * nn + up * up).sqrt().max(1.0);
+            if d < EO_MAX_NM * NM {
+                let px = eo_size(icao) / d * EO_PX_RAD;
+                let look = ((e / d) as f32, (up / d) as f32, (-nn / d) as f32);
+                draw_eo(er, icao, look, hd, pi, bk, px, &format!("EO LIVE  {:.1} NM", d / NM), &format!("{:.0} PX  {}", px, if px >= EO_ID_PX { "IDENTIFIABLE" } else { "TROP LOIN" }));
+                shown = true;
+            }
+        }
+        if !shown {
+            if let Some(ph) = PHOTO.with(|p| p.borrow().clone()) {
+                draw_eo(er, ph.icao, ph.look, ph.hdg, ph.pitch, ph.bank, ph.px, &format!("PHOTO {:02}  {:.1} NM", ph.n, ph.range / NM), &ph.label);
+            } else {
+                draw_rectangle(er.x, er.y, er.w, er.h, Color::new(0.08, 0.09, 0.1, 1.0));
+                draw_rectangle_lines(er.x, er.y, er.w, er.h, 1.0, PANEL_BORDER);
+                txt_c("EO/IR : VERROUILLER UNE CIBLE", er.x + er.w / 2.0, er.y + er.h / 2.0, 10.0, DIM);
+            }
+        }
+        let b = Rect::new(er.x, er.y + er.h + 4.0, er.w, 22.0);
+        rrect(b, 4.0, if hovered(b) { Color::new(0.2, 0.21, 0.235, 1.0) } else { Color::new(0.13, 0.14, 0.15, 1.0) });
+        txt_c("PHOTO (F6)", b.x + b.w / 2.0, b.y + 15.0, 11.0, if lock.is_some() { WHITE } else { DIM });
+        if clicked(b) {
+            PHOTO_REQ.with(|p| p.set(true));
+        }
+    }
     scissor(Some(r));
     // Liste des contacts par distance
     let lx = sc.x + sc.w + 10.0;
@@ -1966,7 +2218,7 @@ pub fn draw_tsd(ac: &Aircraft, r: Rect, time: f64) {
         let c = if locked { AMBER } else { t.iff.color() };
         txt(&t.call, b.x + 6.0, b.y + 14.0, 11.0, c);
         let src = if t.hoj { "HOJ" } else if !Traffic::confirmed(t) && t.radar_age < MEM_S { "PLOT" } else { match Traffic::source(t) { "RADAR" => "RDR", "MEMOIRE" => "MEM", "LINK 16" => "L16", "ADS-B" => "ADS", _ => "--" } };
-        txt(&format!("{} {src}", t.icao), b.x + lw * 0.36, b.y + 14.0, 10.0, if t.radar_age < 1.0 { GREEN_S } else { DIM });
+        txt(&format!("{} {src}", t.icao), b.x + lw * 0.36, b.y + 14.0, 10.0, if t.radar_age < FRESH_S { GREEN_S } else { DIM });
         txt_r(&format!("{:.0}NM  FL{:03.0}", rel.range / NM, t.alt / FT / 100.0), b.x + b.w - 6.0, b.y + 14.0, 10.0, WHITE);
         if clicked(b) {
             clicked_id = Some(t.id);
@@ -2221,7 +2473,7 @@ mod tests {
         t.alt = 30.0;
         tr.list.push(t);
         assert!(Traffic::gmt(&tr.list[0]));
-        assert!(tr.lock_next(&ac).is_none());
+        assert!(tr.lock_next_r(&ac).is_err());
     }
 
     /// ACM BORE : cible dans le cercle de 3° à moins de 10 NM verrouillée automatiquement.
@@ -2405,6 +2657,131 @@ mod tests {
         assert!(tr.form.as_ref().is_some_and(|f| f.slow));
     }
 
+    /// Lock sur un contact sans piste radar (ADS-B seul) : l'antenne pointée accroche s'il est
+    /// détectable ; hors antenne, échec motivé. Le lock ne donne pas le type (IFF seulement).
+    #[test]
+    fn lock_any_contact_iff_only() {
+        let ac = own();
+        let mut tr = Traffic::new();
+        tr.next_id = 100;
+        tr.auto_spawn = false;
+        tr.false_alarms = false;
+        let mut a = tgt(&ac, "A320", 25.0, 10.0, 31_000.0, wrap360(ac.hdg_deg() + 180.0));
+        (a.mil, a.iff, a.squawk, a.adsb_out, a.call) = (false, Iff::Neutre, 2211, true, "AFR77".into());
+        let mut b = tgt(&ac, "B738", 25.0, 120.0, 31_000.0, 0.0);
+        (b.id, b.mil, b.iff, b.squawk, b.adsb_out) = (2, false, Iff::Neutre, 3311, true);
+        tr.list.push(a);
+        tr.list.push(b);
+        tr.update(&ac, 0.1);
+        tr.list[0].radar_age = 1e9;
+        let r = tr.try_lock(1);
+        println!("contact ADS-B devant : {r:?}");
+        assert!(r.is_ok());
+        let r2 = tr.try_lock(2);
+        println!("contact ADS-B a 120 deg : {r2:?}");
+        assert!(r2.is_err_and(|e| e.contains("ANTENNE")));
+        tr.lock = Some(1);
+        for _ in 0..30 {
+            tr.update(&ac, 0.1);
+        }
+        let v = Traffic::view(&tr.list[0]);
+        println!("apres IFF : {} {} {}", v.call, v.iff.label(), v.icao);
+        assert!(v.iff == Iff::Neutre && v.icao == "----" && !tr.list[0].type_known);
+    }
+
+    /// Photo EO/IR : A320 non identifiable à 30 NM, identifié à 5 NM, immatriculation à 1 NM.
+    #[test]
+    fn eo_photo_thresholds() {
+        let ac = own();
+        for (nm, ident, reg) in [(30.0, false, false), (5.0, true, false), (1.0, true, true)] {
+            let mut tr = Traffic::new();
+            tr.next_id = 100;
+            tr.auto_spawn = false;
+            tr.false_alarms = false;
+            let mut t = tgt(&ac, "A320", nm, 0.0, 30_000.0, ac.hdg_deg());
+            (t.mil, t.iff, t.radar_age) = (false, Iff::Neutre, 0.0);
+            tr.list.push(t);
+            tr.lock = Some(1);
+            let r = tr.photo(&ac);
+            println!("{nm} NM : {r:?}");
+            assert!(r.is_ok());
+            assert_eq!(tr.list[0].type_known, ident);
+            assert_eq!(tr.list[0].ident_call, reg);
+        }
+    }
+
+    /// Hostile qui nous accroche à 15 NM, nous dans son nez : tir d'un R-77.
+    #[test]
+    fn hostile_fires_radar_missile() {
+        let ac = own();
+        let mut tr = Traffic::new();
+        tr.next_id = 100;
+        tr.auto_spawn = false;
+        tr.false_alarms = false;
+        let mut t = tgt(&ac, "SU27", 15.0, 0.0, 30_000.0, wrap360(ac.hdg_deg() + 180.0));
+        (t.hostile, t.aam) = (true, (4, 2));
+        tr.list.push(t);
+        for _ in 0..20 {
+            tr.update(&ac, 0.1);
+        }
+        println!("{:?}", tr.launches);
+        assert!(tr.launches.iter().any(|l| !l.ir && l.name.starts_with("R-77")));
+        assert_eq!(tr.list[0].aam.0, 3);
+        let adv = escape_advice(&ac, tr.list[0].lat, tr.list[0].lon, Some((false, 20.0)));
+        println!("{adv}");
+        assert!(adv.contains("NOTCH"));
+    }
+
+    /// Rejointe depuis 12 NM devant le leader et décalé : le poste est rejoint sans passage
+    /// dangereux.
+    #[test]
+    fn rejoin_from_ahead() {
+        let mut ac = Aircraft::new_on_runway(0);
+        ac.on_ground = false;
+        ac.gear_down = false;
+        ac.gear_pos = 0.0;
+        ac.brakes = false;
+        ac.alt = 25_000.0 * FT;
+        ac.tas = 250.0;
+        ac.set_turbines(TurbState::Running, 0.7);
+        ac.throttle = 0.7;
+        ac.gcas_on = false;
+        ac.ap.on = true;
+        ac.ap.at_on = true;
+        ac.ap.max_perf = true;
+        let mut tr = Traffic::new();
+        tr.next_id = 100;
+        tr.auto_spawn = false;
+        tr.false_alarms = false;
+        // Leader 12 NM derrière nous et 3 NM à droite, même cap, 4000 ft plus haut
+        let (la, lo) = destination(ac.lat, ac.lon, wrap360(ac.hdg_deg() + 166.0), 12.4 * NM);
+        let mut t = tgt(&ac, "B738", 1.0, 0.0, 29_000.0, ac.hdg_deg());
+        (t.lat, t.lon, t.tr_lat, t.tr_lon) = (la, lo, la, lo);
+        (t.mil, t.iff, t.tas, t.tr_tas, t.radar_age, t.adsb_out, t.squawk) = (false, Iff::Neutre, 230.0, 230.0, 0.0, true, 1200);
+        tr.list.push(t);
+        tr.update(&ac, 0.1);
+        tr.lock = Some(1);
+        assert!(tr.form_on(FormPos::Police).is_ok());
+        let dt = 1.0 / 60.0;
+        let (mut tt, mut join, mut min_sep) = (0.0, None, f64::MAX);
+        while tt < 900.0 && join.is_none() {
+            tr.update(&ac, dt);
+            ac.ap.form = tr.formation_step(&ac, dt);
+            ac.step(dt, 0.0, 0.0);
+            tt += dt;
+            let l = &tr.list[0];
+            min_sep = min_sep.min(dist_brg(ac.lat, ac.lon, l.lat, l.lon).0.hypot(l.alt - ac.alt));
+            if tr.form.as_ref().is_some_and(|f| f.phase == 2) {
+                join = Some(tt);
+            }
+            if tr.form.is_none() || ac.crashed.is_some() {
+                break;
+            }
+        }
+        println!("rejointe depuis l'avant : en poste apres {join:?} s, separation min {min_sep:.0} m, {:?}", tr.events);
+        assert!(join.is_some_and(|t| t < 600.0) && min_sep > 45.0);
+    }
+
     /// Signal d'interception : après le balancement des ailes, l'avion civil suit nos consignes
     /// (cap donné) ; un hostile ne répond pas.
     #[test]
@@ -2420,7 +2797,7 @@ mod tests {
             (t.hostile, t.radar_age, t.vel_ok) = (hostile, 0.0, true);
             tr.list.push(t);
             tr.lock = Some(1);
-            tr.form = Some(Formation { lead: 1, pos: FormPos::Police, phase: 2, err: (0.0, 0.0, 0.0), rock_t: 0.0, lead_f: None, lead_w: 0.0, ec_dot: 0.0, slow: false });
+            tr.form = Some(Formation { lead: 1, pos: FormPos::Police, phase: 2, err: (0.0, 0.0, 0.0), rock_t: 0.0, lead_f: None, lead_w: 0.0, ec_dot: 0.0, slow: false, rejoin: None });
             assert!(tr.signal().is_ok());
             let mut rocked = false;
             for _ in 0..70 {
@@ -2482,7 +2859,7 @@ mod tests {
         }
         println!("fausses alarmes simultanees max {seen}, en cours {}", tr.list.len());
         assert!(seen >= 1);
-        assert!(tr.lock_next(&ac).is_none(), "pas de LOCK auto sur un plot");
+        assert!(tr.lock_next_r(&ac).is_err(), "pas de LOCK auto sur un plot");
         // Verrouillage forcé sur une fausse alarme fraîche
         let fa = loop {
             tr.update(&ac, 0.1);
@@ -2490,13 +2867,10 @@ mod tests {
                 break t.id;
             }
         };
-        assert!(tr.try_lock(fa).is_ok());
-        tr.false_alarms = false;
-        for _ in 0..30 {
-            tr.update(&ac, 0.1);
-        }
-        println!("{:?}", tr.events);
-        assert!(tr.lock.is_none() && tr.events.iter().any(|e| e.contains("PAS DE RETOUR")));
+        // Le radar pointé ne trouve rien : acquisition refusée tout de suite
+        let r = tr.try_lock(fa);
+        println!("{r:?}");
+        assert!(r.is_err_and(|e| e.contains("PAS DE RETOUR")) && tr.lock.is_none());
     }
 
     /// Télémétrie passive : en ligne droite, distance du brouilleur inobservable ; après un
@@ -2629,7 +3003,7 @@ pub fn draw_3d(ac: &Aircraft, mb: &mut crate::svs::MeshBuilder) {
         return;
     }
     let eye = crate::terrain::EyeFrame::new(ac);
-    for (icao, lat, lon, alt, hdg, pitch, bank, _mil) in vis {
+    for (icao, lat, lon, alt, hdg, pitch, bank, _mil, _id) in vis {
         let (d, _) = dist_brg(ac.lat, ac.lon, lat, lon);
         if d > 25_000.0 || (alt - ac.alt).abs() > 25_000.0 {
             continue;
@@ -2652,7 +3026,25 @@ pub fn draw_3d(ac: &Aircraft, mb: &mut crate::svs::MeshBuilder) {
     }
 }
 
-fn build(sh: &Shape, p: &dyn Fn(f32, f32, f32) -> Vec3, mb: &mut crate::svs::MeshBuilder) {
+/// Destination des faces d'un modèle : maillage 3D de la vue, ou liste pour le rendu logiciel
+/// de la caméra EO/IR.
+pub trait QuadSink {
+    fn quad(&mut self, p: [Vec3; 4], c: [u8; 4]);
+}
+
+impl QuadSink for crate::svs::MeshBuilder {
+    fn quad(&mut self, p: [Vec3; 4], c: [u8; 4]) {
+        crate::svs::MeshBuilder::quad(self, p, c);
+    }
+}
+
+impl QuadSink for Vec<([Vec3; 4], [u8; 4])> {
+    fn quad(&mut self, p: [Vec3; 4], c: [u8; 4]) {
+        self.push((p, c));
+    }
+}
+
+fn build(sh: &Shape, p: &dyn Fn(f32, f32, f32) -> Vec3, mb: &mut dyn QuadSink) {
     let [top, side, under] = sh.paint;
     let (l, r) = (sh.len, sh.r);
     // Fuselage : octogone, nez effilé (12 % de la longueur), cône arrière relevé (22 %)
@@ -2706,7 +3098,7 @@ fn build(sh: &Shape, p: &dyn Fn(f32, f32, f32) -> Vec3, mb: &mut crate::svs::Mes
     // Empennages
     let x_t = l * 0.80;
     let c_fin = (l * 0.13).max(1.5);
-    let fin = |y: f32, z0: f32, h: f32, cant: f32, mb: &mut crate::svs::MeshBuilder| {
+    let fin = |y: f32, z0: f32, h: f32, cant: f32, mb: &mut dyn QuadSink| {
         let (cy, cz) = (cant.to_radians().sin(), cant.to_radians().cos());
         let tip_x = x_t + h * 0.9;
         let e = c_fin * 0.04;
@@ -2717,7 +3109,7 @@ fn build(sh: &Shape, p: &dyn Fn(f32, f32, f32) -> Vec3, mb: &mut crate::svs::Mes
             if o < 0.0 { mb.quad(q, side) } else { mb.quad([q[3], q[2], q[1], q[0]], side) }
         }
     };
-    let ht = |z: f32, mb: &mut crate::svs::MeshBuilder| {
+    let ht = |z: f32, mb: &mut dyn QuadSink| {
         for sg in [-1.0f32, 1.0] {
             let hs = sh.ht_span * 0.5;
             let e = c_fin * 0.03;
@@ -2783,4 +3175,66 @@ fn build(sh: &Shape, p: &dyn Fn(f32, f32, f32) -> Vec3, mb: &mut crate::svs::Mes
         }
         mb.quad([p(xc - 1.0, -0.3, r * 0.9), p(xc - 1.0, -0.3, zc), p(xc + 1.0, -0.3, zc), p(xc + 1.0, -0.3, r * 0.9)], side);
     }
+}
+
+
+/// Rendu logiciel d'un modèle vu depuis la caméra EO/IR (orthographique, faces triées) dans un
+/// rectangle : niveaux de gris, flou si peu de pixels sur la cible.
+pub fn draw_eo(r: Rect, icao: &str, look: (f32, f32, f32), hdg: f64, pitch: f64, bank: f64, px: f64, title: &str, sub: &str) {
+    draw_rectangle(r.x, r.y, r.w, r.h, Color::new(0.10, 0.11, 0.12, 1.0));
+    // Ciel dégradé façon capteur TV
+    for k in 0..8 {
+        let y = r.y + r.h * k as f32 / 8.0;
+        let g = 0.22 + 0.03 * k as f32;
+        draw_rectangle(r.x, y, r.w, r.h / 8.0 + 1.0, Color::new(g, g, g * 1.04, 1.0));
+    }
+    let sh = shape_of(icao);
+    let h = hdg.to_radians();
+    let (sp, cp) = (pitch.sin() as f32, pitch.cos() as f32);
+    let (shh, chh) = (h.sin() as f32, h.cos() as f32);
+    let fwd = vec3(shh * cp, sp, -chh * cp);
+    let right0 = vec3(chh, 0.0, shh);
+    let up0 = vec3(-shh * sp, cp, chh * sp);
+    let (sb, cb) = (bank.sin() as f32, bank.cos() as f32);
+    let right = right0 * cb - up0 * sb;
+    let up = up0 * cb + right0 * sb;
+    let l = sh.len;
+    let p = |x: f32, y: f32, z: f32| fwd * (l * 0.5 - x) + right * y + up * z;
+    let mut quads: Vec<([Vec3; 4], [u8; 4])> = Vec::new();
+    build(&sh, &p, &mut quads);
+    // Caméra : regarde la cible depuis `look`
+    let f = -vec3(look.0, look.1, look.2).normalize_or_zero();
+    let wup = if f.y.abs() > 0.95 { vec3(0.0, 0.0, -1.0) } else { vec3(0.0, 1.0, 0.0) };
+    let cr = f.cross(wup).normalize_or_zero();
+    let cu = cr.cross(f).normalize_or_zero();
+    let size = sh.span.max(sh.len);
+    let k = r.w.min(r.h) * 0.8 / size;
+    let c = vec2(r.x + r.w / 2.0, r.y + r.h / 2.0);
+    let proj = |q: Vec3| c + vec2(q.dot(cr), -q.dot(cu)) * k;
+    quads.sort_by(|a, b| {
+        let da: f32 = a.0.iter().map(|q| q.dot(f)).sum();
+        let db: f32 = b.0.iter().map(|q| q.dot(f)).sum();
+        db.total_cmp(&da)
+    });
+    let light = vec3(0.3, 0.9, 0.2).normalize();
+    // Flou : en dessous du seuil d'identification la silhouette se dilue
+    let sharp = (px / EO_ID_PX).clamp(0.15, 1.0) as f32;
+    for (q, col) in &quads {
+        let n = (q[1] - q[0]).cross(q[2] - q[0]).normalize_or_zero();
+        let lum = (0.299 * col[0] as f32 + 0.587 * col[1] as f32 + 0.114 * col[2] as f32) / 255.0;
+        let g = (lum * (0.45 + 0.55 * n.dot(light).abs())).clamp(0.05, 1.0);
+        let g = g * sharp + 0.3 * (1.0 - sharp);
+        let cc = Color::new(g, g, g * 1.02, 0.35 + 0.65 * sharp);
+        let s2: Vec<Vec2> = q.iter().map(|v| proj(*v)).collect();
+        draw_triangle(s2[0], s2[1], s2[2], cc);
+        draw_triangle(s2[0], s2[2], s2[3], cc);
+    }
+    // Réticule et annotations
+    let rc = Color::new(0.9, 0.95, 0.9, 0.8);
+    for (dx, dy) in [(-1.0f32, 0.0f32), (1.0, 0.0), (0.0, -1.0), (0.0, 1.0)] {
+        draw_line(c.x + dx * r.w * 0.38, c.y + dy * r.h * 0.38, c.x + dx * r.w * 0.46, c.y + dy * r.h * 0.46, 1.2, rc);
+    }
+    draw_rectangle_lines(r.x, r.y, r.w, r.h, 1.2, Color::new(0.5, 0.55, 0.5, 1.0));
+    txt(title, r.x + 6.0, r.y + 13.0, 10.0, rc);
+    txt(sub, r.x + 6.0, r.y + r.h - 6.0, 10.0, rc);
 }

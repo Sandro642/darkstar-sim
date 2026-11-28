@@ -371,6 +371,7 @@ fn sections(tab: usize, ac: &Aircraft, cx: &Ctx) -> Vec<(&'static str, Vec<Card>
                     c("VERROUILLER", cx.lock.clone().unwrap_or_default(), "Cible suivante devant l'avion (F2)", cx.lock.is_some().then_some(AMBER), None, cmd("LOCK")),
                     c("DEVERROUILLER", "", "Libere la cible (F3)", None, None, cmd("UNLOCK")),
                     c("IFF", "", "Interroge les pistes radar (F4)", None, None, cmd("IFF")),
+                    c("PHOTO EO/IR", "", "Photo de la cible : identification du type (F6)", None, None, cmd("PHOTO")),
                     c("FORMATION", cx.form.unwrap_or("OFF"), "Ailier de la cible verrouillee (police)", on(cx.form.is_some()), Some(cx.form.is_some()), cmd(if cx.form.is_some() { "FORMATION OFF" } else { "FORMATION POLICE" })),
                     c("POSTE", cx.form.unwrap_or("--"), "POLICE / GAUCHE / DROITE / TRAIL", None, None, cmd(match cx.form { Some("POLICE") => "FORMATION GAUCHE", Some("GAUCHE") => "FORMATION DROITE", Some("DROITE") => "FORMATION TRAIL", _ => "FORMATION POLICE" })),
                     c("SIGNAL", "", "Balancement des ailes : suivez-moi", None, None, cmd("SIGNAL")),

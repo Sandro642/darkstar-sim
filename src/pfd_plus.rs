@@ -737,7 +737,7 @@ pub fn threats(ac: &Aircraft, v: &View, cues: &[ThreatCue], time: f64) {
         let (cx, y) = (s.x + s.w / 2.0, s.y + s.h * 0.43);
         let msg = match t.missile {
             Some((_, _, _, tti)) => format!("MISSILE LAUNCH  {}  IMPACT {:.0}s", t.name, tti),
-            None => format!("SAM LOCK  {}", t.name),
+            None => format!("{} LOCK  {}", if t.sam { "SAM" } else { "AIR" }, t.name),
         };
         let w = txt_w(&msg, 18.0) + 24.0;
         if t.state == 3 || blink {
