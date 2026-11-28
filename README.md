@@ -1038,3 +1038,9 @@ Le SR-72 est un avion de reconnaissance : sa charge utile est simulée.
   limite à 90-95 % (jusqu'à 7,2-7,6 g léger). Horizon : tendance de vitesse en flèche épaisse avec
   la valeur prévue à +10 s, ambre en surrégime ENG OVRD (la poussée sature à ~131 % au-delà de
   ~160 % de manette : la tendance croît de 12 à 50 % selon le régime).
+- v1.81.0 : version dev — préréglages de poste DEPART (panneau droit APU / INS pleine hauteur,
+  batterie, moteurs, radio ; écran : horizon + COMMANDES MOTEURS, ND, train, carburant), VOL (moteurs,
+  élec, scram, pannes ; écran : horizon, synoptique systèmes, ND, carburant) et ARRIVEE (ND en
+  fenêtre, radio, manette / train, pannes ; écran : horizon, HSI, COMMANDES PILOTE AUTO, train,
+  carburant). Menu DISPOSITION > PRESET… ou instruction PRESET DEPART / VOL / ARRIVEE ; PRESET AUTO :
+  changement automatique selon la phase de vol (sol / montée initiale, croisière, approche).

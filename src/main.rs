@@ -1342,6 +1342,24 @@ impl Game {
                 _ => {}
             }
         }
+        // Version dev, PRESET AUTO : préréglage de poste selon la phase (départ / vol / arrivée)
+        if let Some(d) = self.dev.as_mut().filter(|d| d.preset_auto) {
+            let ac = &self.ac;
+            let dest = &AIRPORTS[self.dest];
+            let d_dest = dist_brg(ac.lat, ac.lon, dest.lat, dest.lon).0;
+            let phase = if ac.autoland.is_some() || ac.approach.is_some() && ac.d.vs < 0.0 || (!ac.on_ground && d_dest < 60.0 * NM && ac.alt / FT < 25_000.0) {
+                dev::Preset::Arrivee
+            } else if ac.on_ground || (ac.d.agl / FT < 10_000.0 && ac.d.vs > 0.0) {
+                dev::Preset::Depart
+            } else {
+                dev::Preset::Vol
+            };
+            if d.preset != Some(phase) {
+                d.apply_preset(phase);
+                d.preset_auto = true;
+                self.push(Level::Info, format!("POSTE : PRESET {} (AUTO)", phase.name()));
+            }
+        }
         // Vol d'essai : plan ESSAI actif ou provisoire
         self.ac.test_mode = self.fms.plan().is_some_and(|p| p.source == "ESSAI");
         if !self.ac.test_mode {
@@ -2045,6 +2063,30 @@ impl Game {
                     pfd::hide_menu(true);
                     connect::save_mode(true);
                     reply = Ok("VERSION DEVELOPPEUR — FENETRES DEPLACABLES, CONSOLE DANS LA BARRE (MENU CONSOLE)".into());
+                }
+            }
+            // Préréglages de poste (version dev) : PRESET DEPART / VOL / ARRIVEE / AUTO [ON|OFF]
+            "PRESET" => {
+                let p = match arg(1) {
+                    "DEPART" | "DEP" => Some(dev::Preset::Depart),
+                    "VOL" | "CROISIERE" | "CRZ" => Some(dev::Preset::Vol),
+                    "ARRIVEE" | "ARR" | "APPROCHE" => Some(dev::Preset::Arrivee),
+                    _ => None,
+                };
+                match (self.dev.as_mut(), p, arg(1)) {
+                    (None, _, _) => reply = Err("PRESET : VERSION DEV UNIQUEMENT (instruction DEV)".into()),
+                    (Some(d), Some(p), _) => {
+                        d.preset_auto = false;
+                        d.apply_preset(p);
+                        reply = Ok(format!("POSTE : PRESET {} (AUTO OFF)", p.name()));
+                    }
+                    (Some(d), None, "AUTO") => {
+                        d.preset_auto = arg(2) != "OFF";
+                        d.preset = None;
+                        d.save();
+                        reply = Ok(format!("POSTE : PRESET AUTO SELON LA PHASE {}", if d.preset_auto { "ON" } else { "OFF" }));
+                    }
+                    _ => reply = Err("PRESET DEPART / VOL / ARRIVEE / AUTO [OFF]".into()),
                 }
             }
             // Bandes de l'horizon : ECHELLE VITESSE 150|300|600 (ou 1..3), ECHELLE ALT 1000|2000|5000|10000,

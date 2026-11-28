@@ -179,6 +179,111 @@ pub struct DevUi {
     work: Rect,
     /// Version normale : l'écran principal affiche la page 1 composée
     pub main_screen: bool,
+    /// Préréglage suivant automatiquement la phase de vol, et préréglage appliqué
+    pub preset_auto: bool,
+    pub preset: Option<Preset>,
+}
+
+/// Préréglages de poste (fenêtres + page 1) par phase de vol.
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub enum Preset {
+    Depart,
+    Vol,
+    Arrivee,
+}
+
+impl Preset {
+    pub fn name(self) -> &'static str {
+        match self {
+            Preset::Depart => "DEPART",
+            Preset::Vol => "VOL",
+            Preset::Arrivee => "ARRIVEE",
+        }
+    }
+}
+
+/// Fenêtres d'un préréglage : DEPART (mise en route, roulage, décollage : panneau droit APU / INS,
+/// batterie, moteurs), VOL (croisière : moteurs, élec, scram, pannes), ARRIVEE (approche : ND,
+/// manette / train, radio).
+fn preset_wins(p: Preset) -> Vec<Win> {
+    let w = |kind, x, y, ww, h, open| Win { kind, r: [x, y, ww, h], open };
+    match p {
+        Preset::Depart => vec![
+            w(WinKind::Elec, 0.785, 0.18, 0.215, 0.36, false),
+            w(WinKind::Pannes, 0.575, 0.77, 0.205, 0.23, false),
+            w(WinKind::Nd, 0.70, 0.0, 0.30, 0.17, false),
+            w(WinKind::Train, 0.0, 0.0, 0.10, 0.17, false),
+            w(WinKind::Commandes, 0.36, 0.06, 0.37, 0.90, false),
+            w(WinKind::Radio, 0.32, 0.0, 0.36, 0.17, true),
+            w(WinKind::Master, 0.685, 0.0, 0.095, 0.17, true),
+            w(WinKind::Moteurs, 0.0, 0.18, 0.215, 0.47, true),
+            w(WinKind::Ecran, 0.22, 0.18, 0.56, 0.58, true),
+            w(WinKind::Manette, 0.0, 0.66, 0.215, 0.34, true),
+            w(WinKind::Messages, 0.22, 0.77, 0.27, 0.23, true),
+            w(WinKind::Batterie, 0.495, 0.77, 0.14, 0.23, true),
+            w(WinKind::Scram, 0.64, 0.77, 0.14, 0.23, true),
+            w(WinKind::PanneauDroit, 0.785, 0.0, 0.215, 1.0, true),
+        ],
+        Preset::Vol => vec![
+            w(WinKind::PanneauDroit, 0.785, 0.55, 0.215, 0.45, false),
+            w(WinKind::Batterie, 0.425, 0.77, 0.073, 0.23, false),
+            w(WinKind::Train, 0.0, 0.0, 0.10, 0.17, false),
+            w(WinKind::Nd, 0.70, 0.0, 0.30, 0.17, false),
+            w(WinKind::Commandes, 0.36, 0.06, 0.37, 0.90, false),
+            w(WinKind::Radio, 0.32, 0.0, 0.36, 0.17, true),
+            w(WinKind::Master, 0.685, 0.0, 0.095, 0.17, true),
+            w(WinKind::Moteurs, 0.0, 0.18, 0.215, 0.47, true),
+            w(WinKind::Ecran, 0.22, 0.18, 0.56, 0.58, true),
+            w(WinKind::Elec, 0.785, 0.18, 0.215, 0.47, true),
+            w(WinKind::Manette, 0.0, 0.66, 0.215, 0.34, true),
+            w(WinKind::Messages, 0.22, 0.77, 0.24, 0.23, true),
+            w(WinKind::Scram, 0.465, 0.77, 0.105, 0.23, true),
+            w(WinKind::Pannes, 0.575, 0.77, 0.205, 0.23, true),
+        ],
+        Preset::Arrivee => vec![
+            w(WinKind::PanneauDroit, 0.785, 0.55, 0.215, 0.45, false),
+            w(WinKind::Batterie, 0.425, 0.77, 0.073, 0.23, false),
+            w(WinKind::Scram, 0.502, 0.77, 0.073, 0.23, false),
+            w(WinKind::Elec, 0.785, 0.18, 0.215, 0.36, false),
+            w(WinKind::Commandes, 0.36, 0.06, 0.37, 0.90, false),
+            w(WinKind::Train, 0.0, 0.0, 0.10, 0.17, false),
+            w(WinKind::Radio, 0.22, 0.0, 0.36, 0.17, true),
+            w(WinKind::Master, 0.585, 0.0, 0.095, 0.17, true),
+            w(WinKind::Moteurs, 0.0, 0.18, 0.215, 0.47, true),
+            w(WinKind::Ecran, 0.22, 0.18, 0.56, 0.58, true),
+            w(WinKind::Nd, 0.785, 0.0, 0.215, 0.6, true),
+            w(WinKind::Manette, 0.0, 0.66, 0.215, 0.34, true),
+            w(WinKind::Messages, 0.22, 0.77, 0.35, 0.23, true),
+            w(WinKind::Pannes, 0.575, 0.77, 0.205, 0.23, true),
+        ],
+    }
+}
+
+/// Page 1 (écran) d'un préréglage.
+fn preset_widgets(p: Preset) -> Vec<Widget> {
+    let w = |elem, x, y, ww, h| Widget { elem, r: [x, y, ww, h] };
+    match p {
+        Preset::Depart => vec![
+            w(Elem::Horizon, 0.0, 0.0, 0.62, 0.71),
+            w(Elem::CmdMoteurs, 0.62, 0.0, 0.38, 0.71),
+            w(Elem::Nd, 0.0, 0.71, 0.4, 0.29),
+            w(Elem::Train, 0.4, 0.71, 0.2, 0.29),
+            w(Elem::Carburant, 0.6, 0.71, 0.4, 0.29),
+        ],
+        Preset::Vol => vec![
+            w(Elem::Horizon, 0.0, 0.0, 1.0, 0.68),
+            w(Elem::Systemes, 0.0, 0.68, 0.34, 0.32),
+            w(Elem::Nd, 0.34, 0.68, 0.33, 0.32),
+            w(Elem::Carburant, 0.67, 0.68, 0.33, 0.32),
+        ],
+        Preset::Arrivee => vec![
+            w(Elem::Horizon, 0.0, 0.0, 0.64, 0.7),
+            w(Elem::Hsi, 0.64, 0.0, 0.36, 0.7),
+            w(Elem::CmdPilote, 0.0, 0.7, 0.42, 0.3),
+            w(Elem::Train, 0.42, 0.7, 0.2, 0.3),
+            w(Elem::Carburant, 0.62, 0.7, 0.38, 0.3),
+        ],
+    }
 }
 
 pub const BAR_H: f32 = 30.0;
@@ -230,13 +335,13 @@ fn elem_of(name: &str) -> Option<Elem> {
 
 impl Default for DevUi {
     fn default() -> Self {
-        DevUi { wins: default_wins(), widgets: default_widgets(), page: Page::Horizon, menu: None, drag: None, work: Rect::new(0.0, BAR_H, 1.0, 1.0), main_screen: true }
+        DevUi { wins: default_wins(), widgets: default_widgets(), page: Page::Horizon, menu: None, drag: None, work: Rect::new(0.0, BAR_H, 1.0, 1.0), main_screen: true, preset_auto: false, preset: None }
     }
 }
 
 impl DevUi {
     pub fn new() -> DevUi {
-        let mut d = DevUi { wins: default_wins(), widgets: default_widgets(), page: Page::Horizon, menu: None, drag: None, work: Rect::new(0.0, BAR_H, 1.0, 1.0), main_screen: false };
+        let mut d = DevUi { wins: default_wins(), widgets: default_widgets(), page: Page::Horizon, menu: None, drag: None, work: Rect::new(0.0, BAR_H, 1.0, 1.0), main_screen: false, preset_auto: false, preset: None };
         d.load();
         d
     }
@@ -255,6 +360,7 @@ impl DevUi {
                     }
                 }
                 Some(&"M") => self.main_screen = f.get(1) == Some(&"1"),
+                Some(&"A") => self.preset_auto = f.get(1) == Some(&"1"),
                 Some(&"E") => {
                     if let (Some(e), Some(x), Some(y), Some(w), Some(h)) = (f.get(1).and_then(|n| elem_of(n)), num(2), num(3), num(4), num(5)) {
                         wids.push(Widget { elem: e, r: [x, y, w, h] });
@@ -275,12 +381,43 @@ impl DevUi {
         self.widgets = wids;
     }
 
+    /// Applique un préréglage (fenêtres, page 1, écran sur la page 1).
+    pub fn apply_preset(&mut self, p: Preset) {
+        let mut wins = preset_wins(p);
+        // Une seule entrée par fenêtre (la dernière l'emporte), fenêtres inconnues conservées
+        let mut seen = Vec::new();
+        wins.reverse();
+        wins.retain(|w| {
+            let k = w.kind;
+            if seen.contains(&k) {
+                false
+            } else {
+                seen.push(k);
+                true
+            }
+        });
+        wins.reverse();
+        for d in default_wins() {
+            if !wins.iter().any(|w| w.kind == d.kind) {
+                wins.insert(0, Win { open: false, ..d });
+            }
+        }
+        // Fenêtres ouvertes au premier plan (fin de liste)
+        wins.sort_by_key(|w| w.open);
+        self.wins = wins;
+        self.widgets = preset_widgets(p);
+        self.page = Page::Horizon;
+        self.preset = Some(p);
+        self.save();
+    }
+
     pub fn save(&self) {
         let mut s = String::from("V 5\n");
         for w in &self.wins {
             s.push_str(&format!("W {} {:.4} {:.4} {:.4} {:.4} {}\n", win_name(w.kind).replace(' ', "_"), w.r[0], w.r[1], w.r[2], w.r[3], w.open as u8));
         }
         s.push_str(&format!("M {}\n", self.main_screen as u8));
+        s.push_str(&format!("A {}\n", self.preset_auto as u8));
         for e in &self.widgets {
             s.push_str(&format!("E {} {:.4} {:.4} {:.4} {:.4}\n", elem_name(e.elem).replace(' ', "_"), e.r[0], e.r[1], e.r[2], e.r[3]));
         }
@@ -590,7 +727,15 @@ impl DevUi {
             let b = rects[k];
             let items: Vec<(String, bool)> = match k {
                 0 => self.wins.iter().map(|w| (win_name(w.kind).to_string(), w.open)).collect(),
-                2 => vec![("ENREGISTRER LA DISPOSITION".into(), false), ("DISPOSITION PAR DEFAUT".into(), false), ("PAGE 1 PAR DEFAUT".into(), false)],
+                2 => vec![
+                    ("ENREGISTRER LA DISPOSITION".into(), false),
+                    ("DISPOSITION PAR DEFAUT".into(), false),
+                    ("PAGE 1 PAR DEFAUT".into(), false),
+                    (format!("PRESET DEPART{}", if self.preset == Some(Preset::Depart) { "  *" } else { "" }), false),
+                    (format!("PRESET VOL{}", if self.preset == Some(Preset::Vol) { "  *" } else { "" }), false),
+                    (format!("PRESET ARRIVEE{}", if self.preset == Some(Preset::Arrivee) { "  *" } else { "" }), false),
+                    (format!("PRESET AUTO SELON LA PHASE : {}", if self.preset_auto { "ON" } else { "OFF" }), false),
+                ],
                 _ => vec![("QUITTER LA VERSION DEV".into(), false)],
             };
             let w = 240.0;
@@ -630,6 +775,10 @@ impl DevUi {
                         match i {
                             1 => self.wins = default_wins(),
                             2 => self.widgets = default_widgets(),
+                            3 => self.apply_preset(Preset::Depart),
+                            4 => self.apply_preset(Preset::Vol),
+                            5 => self.apply_preset(Preset::Arrivee),
+                            6 => self.preset_auto = !self.preset_auto,
                             _ => {}
                         }
                         self.save();
