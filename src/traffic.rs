@@ -9,11 +9,15 @@ use crate::geo::*;
 use crate::ui::*;
 use macroquad::prelude::*;
 
-#[derive(Clone, Copy, PartialEq, Debug)]
+#[derive(Clone, Copy, PartialEq, Debug, Default)]
 pub enum Iff {
     Ami,
     Neutre,
+    /// Interrogé sans réponse (ou piste AWACS non identifiée)
     Inconnu,
+    /// Pas encore interrogé : identité inconnue
+    #[default]
+    NonId,
 }
 
 impl Iff {
@@ -22,6 +26,7 @@ impl Iff {
             Iff::Ami => "AMI",
             Iff::Neutre => "NEUTRE",
             Iff::Inconnu => "INCONNU",
+            Iff::NonId => "NON IDENT",
         }
     }
     pub fn color(self) -> Color {
@@ -29,14 +34,16 @@ impl Iff {
             Iff::Ami => GREEN_S,
             Iff::Neutre => WHITE,
             Iff::Inconnu => AMBER,
+            Iff::NonId => Color::new(0.8, 0.78, 0.6, 1.0),
         }
     }
 }
 
 /// Comportement d'un trafic.
-#[derive(Clone, Copy, PartialEq, Debug)]
+#[derive(Clone, Copy, PartialEq, Debug, Default)]
 enum Behave {
     /// Route rectiligne (changements de cap rares)
+    #[default]
     Route,
     /// Hippodrome / orbite autour d'un point
     Orbit { lat: f64, lon: f64, radius: f64 },
@@ -44,7 +51,7 @@ enum Behave {
     Patrol,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Default)]
 pub struct Target {
     pub id: u32,
     pub call: String,
@@ -79,6 +86,128 @@ pub struct Target {
     /// Sources hors radar : ADS-B (civil à transpondeur) et Link 16 (amis, pistes AWACS)
     pub adsb: bool,
     pub dl: bool,
+    /// Hostile (brouilleur, paillettes, manœuvre d'esquive sous STT)
+    pub hostile: bool,
+    /// Équipements : ADS-B out (civil), terminal Link 16 (militaire ami)
+    pub adsb_out: bool,
+    pub l16: bool,
+    /// Identification connue de l'avion : IFF affiché, indicatif, type, code transpondeur
+    pub ident: Iff,
+    pub ident_call: bool,
+    pub type_known: bool,
+    pub squawk_known: bool,
+    /// Interrogation IFF en cours (s restantes, <= 0 : aucune)
+    pub iff_t: f64,
+    /// Piste estimée (position, cap, vitesse, vario) ; vitesse de piste établie
+    pub tr_lat: f64,
+    pub tr_lon: f64,
+    pub tr_alt: f64,
+    pub tr_hdg: f64,
+    pub tr_tas: f64,
+    pub tr_vs: f64,
+    pub vel_ok: bool,
+    /// Détections successives (TWS / STT), vitesse de rapprochement mesurée (Doppler, kt)
+    pub hits: u32,
+    pub vc_meas: f64,
+    /// SER vue sous l'aspect actuel (m²)
+    pub rcs_eff: f64,
+    /// Masquage (horizon radar / relief), recalculé toutes les 0.5 s
+    pub masked: Option<&'static str>,
+    mask_t: f64,
+    /// Brouillage actif ; strobe (angle seul, avant burn-through) et son relèvement
+    pub jam: bool,
+    pub strobe: bool,
+    pub strobe_brg: f64,
+    evade_t: f64,
+    chaff_t: f64,
+    adsb_t: f64,
+    dl_t: f64,
+}
+
+/// Modes du radar : RWS (recherche large, détections brutes) et TWS (volume réduit, pistes avec
+/// vitesse, cible non alertée).
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub enum RadarMode {
+    Rws,
+    Tws,
+}
+
+impl RadarMode {
+    /// (demi-volume en azimut (deg), durée du cadre de balayage (s))
+    pub fn volume(self) -> (f64, f64) {
+        match self {
+            RadarMode::Rws => (AZ_LIM, SCAN_S),
+            RadarMode::Tws => (30.0, 1.0),
+        }
+    }
+    pub fn label(self) -> &'static str {
+        match self {
+            RadarMode::Rws => "RWS",
+            RadarMode::Tws => "TWS",
+        }
+    }
+}
+
+/// Pistes TWS maximales, durée d'une interrogation IFF (s), portée IFF (NM)
+pub const TWS_MAX: usize = 10;
+pub const IFF_S: f64 = 1.5;
+pub const IFF_NM: f64 = 100.0;
+/// Rayon terrestre équivalent (réfraction standard 4/3)
+const RE_EFF: f64 = 6_371_000.0 * 4.0 / 3.0;
+const JAM_WHY: &str = "BROUILLAGE (AVANT BURN-THROUGH)";
+
+/// Facteur de SER selon l'aspect (0 = nez vers le radar) : flanc et arrière plus réfléchissants ;
+/// furtifs : faible de face, pics étroits de flanc et arrière (tuyères).
+pub fn aspect_factor(icao: &str, aspect_deg: f64) -> f64 {
+    let a = aspect_deg.to_radians();
+    let (sn, c) = (a.sin().abs(), a.cos());
+    let tail = (-c).max(0.0);
+    match icao {
+        "F22" | "F35" => 1.0 + 30.0 * sn.powi(8) + 10.0 * tail.powi(4),
+        _ => 1.0 + 4.0 * sn * sn + tail * tail,
+    }
+}
+
+/// Portée de burn-through face à un brouilleur d'autoprotection (signal = bruit) : J/S ∝ R²/SER.
+pub fn burn_through(rcs: f64) -> f64 {
+    25.0 * NM * (rcs / 5.0).sqrt()
+}
+
+/// Masquage de la ligne de visée : horizon radar (terre 4/3) puis relief (tuiles d'altitude).
+pub fn los_mask(ac: &Aircraft, t: &Target) -> Option<&'static str> {
+    let (d, _) = dist_brg(ac.lat, ac.lon, t.lat, t.lon);
+    let (h1, h2) = (ac.alt.max(1.0), t.alt.max(1.0));
+    if d > (2.0 * RE_EFF * h1).sqrt() + (2.0 * RE_EFF * h2).sqrt() {
+        return Some("SOUS L'HORIZON RADAR");
+    }
+    // Relief : rien à craindre au-dessus de 9000 m de part et d'autre
+    if h1.min(h2) > 9_000.0 {
+        return None;
+    }
+    for k in 1..24 {
+        let f = k as f64 / 24.0;
+        let x = f * d;
+        let hl = h1 + (h2 - h1) * f - x * (d - x) / (2.0 * RE_EFF);
+        let (la, lo) = (ac.lat + (t.lat - ac.lat) * f, ac.lon + (t.lon - ac.lon) * f);
+        if crate::tiles::elevation(la, lo).is_some_and(|z| z > hl) {
+            return Some("MASQUE PAR LE RELIEF");
+        }
+    }
+    None
+}
+
+/// Indicatif affiché : réel si identifié (ADS-B, Mode S, Link 16), sinon numéro de piste.
+pub fn disp_call(t: &Target) -> String {
+    if t.ident_call { t.call.clone() } else { format!("TRK {:02}", t.id % 100) }
+}
+
+/// Situation radar d'une cible.
+pub struct RState {
+    pub in_vol: bool,
+    pub notch: bool,
+    pub vr: f64,
+    pub rcs_eff: f64,
+    pub why: Option<&'static str>,
 }
 
 // ---------- Modèle radar (impulsions Doppler, balayage RWS, poursuite STT) ----------
@@ -122,10 +251,11 @@ pub fn det_range(rcs: f64) -> f64 {
     (R0_NM * (rcs / 5.0).powf(0.25)).min(R_MAX_NM) * NM
 }
 
-/// Situation radar d'une cible : (dans le volume, creux Doppler, détectable, raison si non).
-pub fn radar_state(ac: &Aircraft, t: &Target, stt: bool) -> (bool, bool, f64, Option<&'static str>) {
+/// Situation radar d'une cible (volume, SER sous l'aspect, creux Doppler, masquage, brouillage).
+pub fn radar_state(ac: &Aircraft, t: &Target, stt: bool, az_lim: f64) -> RState {
     let r = Traffic::rel(ac, t);
-    let lim = if stt { GIMBAL } else { AZ_LIM };
+    let lim = if stt { GIMBAL } else { az_lim };
+    let rcs_eff = t.rcs * aspect_factor(t.icao, r.aspect);
     let in_vol = r.az.abs() < lim && r.el.abs() < EL_LIM;
     // Vitesse radiale de la cible (sol) le long de la visée ; visée basse = fouillis de sol derrière
     let b = r.brg.to_radians();
@@ -135,14 +265,18 @@ pub fn radar_state(ac: &Aircraft, t: &Target, stt: bool) -> (bool, bool, f64, Op
     let notch = look_down && vr.abs() < NOTCH_KT;
     let why = if !in_vol {
         Some("HORS LIMITES D'ANTENNE")
-    } else if r.range > det_range(t.rcs) {
+    } else if let Some(m) = t.masked {
+        Some(m)
+    } else if t.jam && r.range > burn_through(rcs_eff) {
+        Some(JAM_WHY)
+    } else if r.range > det_range(rcs_eff) {
         Some("HORS PORTEE (SER)")
     } else if notch {
         Some("CREUX DOPPLER (NOTCH)")
     } else {
         None
     };
-    (in_vol, notch, vr, why)
+    RState { in_vol, notch, vr, rcs_eff, why }
 }
 
 /// Données relatives à l'avion.
@@ -197,6 +331,9 @@ pub struct Traffic {
     lock_loss_t: f64,
     /// Messages à afficher (rupture de verrouillage…)
     pub events: Vec<String>,
+    pub mode: RadarMode,
+    /// Renouvellement automatique de la population (désactivé dans les essais)
+    pub auto_spawn: bool,
 }
 
 impl Default for Traffic {
@@ -214,7 +351,7 @@ thread_local! {
 
 impl Traffic {
     pub fn new() -> Self {
-        Traffic { list: Vec::new(), lock: None, aa: false, rng: 0x9E37_79B9_7F4A_7C15, next_id: 1, scan_t: 0.0, lock_loss_t: 0.0, events: Vec::new() }
+        Traffic { list: Vec::new(), lock: None, aa: false, rng: 0x9E37_79B9_7F4A_7C15, next_id: 1, scan_t: 0.0, lock_loss_t: 0.0, events: Vec::new(), mode: RadarMode::Rws, auto_spawn: true }
     }
 
     fn rand(&mut self) -> f64 {
@@ -261,6 +398,7 @@ impl Traffic {
         let (org, dest) = if is_mil { (String::new(), String::new()) } else { (pick(self.rand()), pick(self.rand())) };
         let tas = mach * a * (0.95 + self.rand() * 0.1);
         let turn_t = 20.0 + self.rand() * 60.0;
+        let adsb_r = self.rand();
         self.list.push(Target {
             id,
             call,
@@ -285,11 +423,16 @@ impl Traffic {
             dest,
             rcs: rcs_of(icao),
             radar_age: 1e9,
-            notch: false,
-            in_vol: false,
-            vr_kt: 0.0,
-            adsb: false,
-            dl: false,
+            hostile: icao == "SU27",
+            adsb_out: !is_mil && adsb_r < 0.85,
+            l16: iff == Iff::Ami && matches!(icao, "F16" | "F35" | "F22" | "FA18" | "E3TF" | "K35R"),
+            tr_lat: lat,
+            tr_lon: lon,
+            tr_alt: alt,
+            tr_hdg: hdg,
+            tr_tas: tas,
+            iff_t: -1.0,
+            ..Default::default()
         });
     }
 
@@ -302,10 +445,10 @@ impl Traffic {
         self.list.retain(|t| dist_brg(ac.lat, ac.lon, t.lat, t.lon).0 < 95.0 * NM);
         let civ = self.list.iter().filter(|t| !t.mil).count();
         let mil = self.list.iter().filter(|t| t.mil).count();
-        if civ < 10 {
+        if civ < 10 && self.auto_spawn {
             self.spawn(ac, false);
         }
-        if mil < 4 {
+        if mil < 4 && self.auto_spawn {
             self.spawn(ac, true);
         }
         if self.lock.is_some_and(|id| !self.list.iter().any(|t| t.id == id)) {
@@ -314,6 +457,10 @@ impl Traffic {
         let r = self.rand();
         for t in self.list.iter_mut() {
             t.turn_t -= dt;
+            t.evade_t -= dt;
+            // Esquive en cours (hostile sous STT) : cap et altitude imposés par la manœuvre
+            if t.evade_t > 0.0 {
+            } else {
             match t.behave {
                 Behave::Route => {
                     if t.turn_t < 0.0 {
@@ -337,58 +484,176 @@ impl Traffic {
                     t.hdg_tgt = wrap360(b - 90.0 + corr);
                 }
             }
+            }
             let dh = wrap180(t.hdg_tgt - t.hdg);
-            let rate = if t.mil && matches!(t.behave, Behave::Patrol) { 6.0 } else { 2.5 };
+            let rate = if t.mil && (matches!(t.behave, Behave::Patrol) || t.evade_t > 0.0) { 6.0 } else { 2.5 };
             t.hdg = wrap360(t.hdg + dh.clamp(-rate * dt, rate * dt));
             let dz = t.alt_tgt - t.alt;
-            t.vs = dz.clamp(-12.0, 12.0) * 0.3;
+            t.vs = if t.evade_t > 0.0 { (dz * 0.3).clamp(-60.0, 40.0) } else { dz.clamp(-12.0, 12.0) * 0.3 };
             t.alt += t.vs * dt;
             let (la, lo) = destination(t.lat, t.lon, t.hdg, t.tas * dt);
             t.lat = la;
             t.lon = lo;
         }
-        // ---- Radar, ADS-B, Link 16 ----
+        // ---- Capteurs : radar, IFF, ADS-B, Link 16 ; fusion en pistes ----
+        let mode = self.mode;
+        let (az_lim, frame_s) = mode.volume();
         self.scan_t += dt;
-        let frame = self.scan_t >= SCAN_S;
+        let frame = self.scan_t >= frame_s;
         if frame {
-            self.scan_t -= SCAN_S;
+            self.scan_t -= frame_s;
         }
         let awacs: Vec<(f64, f64)> = self.list.iter().filter(|t| t.icao == "E3TF").map(|t| (t.lat, t.lon)).collect();
         let lock = self.lock;
         let mut lock_why = None;
-        let mut pds = Vec::with_capacity(self.list.len());
-        for _ in 0..self.list.len() {
-            pds.push(self.rand());
-        }
+        let mut chaff_break = None;
+        let mut msgs = Vec::new();
+        // Fichiers de piste TWS : les plus proches parmi les pistes vivantes
+        let tws: Vec<u32> = if mode == RadarMode::Tws {
+            let mut v: Vec<(f64, u32)> = self.list.iter().filter(|t| t.radar_age < MEM_S).map(|t| (dist_brg(ac.lat, ac.lon, t.lat, t.lon).0, t.id)).collect();
+            v.sort_by(|a, b| a.0.total_cmp(&b.0));
+            v.into_iter().take(TWS_MAX).map(|x| x.1).collect()
+        } else {
+            Vec::new()
+        };
+        let rnd: Vec<[f64; 8]> = (0..self.list.len()).map(|_| std::array::from_fn(|_| self.rand())).collect();
         for (k, t) in self.list.iter_mut().enumerate() {
+            let rn = rnd[k];
+            let gauss = |i: usize| (-2.0 * rn[i].max(1e-9).ln()).sqrt() * (std::f64::consts::TAU * rn[i + 1]).cos();
             let stt = Some(t.id) == lock;
-            let (in_vol, notch, vr, why) = radar_state(ac, t, stt);
-            t.in_vol = in_vol;
-            t.notch = notch;
-            t.vr_kt = vr;
+            t.mask_t -= dt;
+            if t.mask_t <= 0.0 {
+                t.masked = los_mask(ac, t);
+                t.mask_t = 0.5;
+            }
+            let rel = Traffic::rel(ac, t);
+            // Brouilleur d'autoprotection quand la cible est illuminée par notre radar
+            t.jam = t.hostile && t.in_vol && t.masked.is_none() && rel.range < 90.0 * NM;
+            let st = radar_state(ac, t, stt, az_lim);
+            t.in_vol = st.in_vol;
+            t.notch = st.notch;
+            t.vr_kt = st.vr;
+            t.rcs_eff = st.rcs_eff;
+            t.strobe = st.why == Some(JAM_WHY);
+            t.strobe_brg = rel.brg + gauss(2) * 1.0;
             t.radar_age += dt;
-            let range = Traffic::rel(ac, t).range;
+            let mut hit = false;
             if stt {
-                // Poursuite continue : la piste est rafraîchie tant que la cible reste détectable
-                if why.is_none() {
-                    t.radar_age = 0.0;
+                // Poursuite continue tant que la cible reste détectable
+                if st.why.is_none() {
+                    hit = true;
                 } else {
-                    lock_why = why;
+                    lock_why = st.why;
                 }
-            } else if frame && why.is_none() {
+            } else if frame && st.why.is_none() {
                 // Probabilité de détection : forte à courte portée, décroissante vers la limite
-                let x = range / det_range(t.rcs);
+                let x = rel.range / det_range(st.rcs_eff);
                 let pd = if x < 0.7 { 0.95 } else { 0.95 - (x - 0.7) / 0.3 * 0.65 };
-                if pds[k] < pd {
-                    t.radar_age = 0.0;
+                hit = rn[6] < pd;
+            }
+            // Hostile sous STT (alerte RWR) : mise en travers, descente (visée basse = creux
+            // Doppler), paillettes toutes les 2.5 s
+            if t.hostile && stt {
+                t.evade_t = 15.0;
+                let to_own = wrap360(rel.brg + 180.0);
+                let (b1, b2) = (wrap360(to_own + 90.0), wrap360(to_own - 90.0));
+                t.hdg_tgt = if wrap180(b1 - t.hdg).abs() < wrap180(b2 - t.hdg).abs() { b1 } else { b2 };
+                if ac.alt > 3_000.0 {
+                    t.alt_tgt = t.alt_tgt.min(1_500.0);
+                }
+                t.chaff_t -= dt;
+                if t.chaff_t <= 0.0 {
+                    t.chaff_t = 2.5;
+                    // Paillettes efficaces quand la cible est proche du travers (même Doppler)
+                    if st.vr.abs() < 150.0 && rn[7] < 0.4 {
+                        chaff_break = Some(disp_call(t));
+                    }
                 }
             }
-            t.adsb = !t.mil && t.squawk > 0 && range < 150.0 * NM;
+            // ADS-B (1 Hz, position exacte), Link 16 (amis équipés, pistes AWACS)
+            t.adsb = t.adsb_out && t.squawk > 0 && rel.range < 150.0 * NM;
             let seen_by_awacs = awacs.iter().any(|&(la, lo)| dist_brg(la, lo, t.lat, t.lon).0 < 250.0 * NM);
-            t.dl = (t.mil && t.iff == Iff::Ami) || seen_by_awacs;
+            t.dl = t.l16 || seen_by_awacs;
+            if t.dl {
+                t.ident = if t.hostile { Iff::Inconnu } else { t.iff };
+                if !t.hostile {
+                    t.ident_call = true;
+                    t.type_known = true;
+                }
+            }
+            if t.adsb {
+                t.ident = Iff::Neutre;
+                t.ident_call = true;
+                t.type_known = true;
+                t.squawk_known = true;
+            }
+            // Réponse IFF
+            if t.iff_t > 0.0 {
+                t.iff_t -= dt;
+                if t.iff_t <= 0.0 {
+                    let r = if t.hostile {
+                        t.ident = Iff::Inconnu;
+                        "SANS REPONSE - INCONNU"
+                    } else if t.mil {
+                        t.ident = Iff::Ami;
+                        t.squawk_known = true;
+                        "MODE 5 VALIDE - AMI"
+                    } else {
+                        t.ident = Iff::Neutre;
+                        t.squawk_known = true;
+                        t.ident_call = true;
+                        t.type_known = true;
+                        "MODE 3/C/S - NEUTRE"
+                    };
+                    msgs.push(format!("IFF {} : {r}", disp_call(t)));
+                }
+            }
+            if hit {
+                t.radar_age = 0.0;
+                t.hits = if stt || tws.contains(&t.id) { t.hits + 1 } else { 0 };
+                t.vc_meas = rel.closure_kt;
+            }
+            // Mise à jour de la piste : ADS-B > radar > Link 16 > extrapolation
+            t.adsb_t += dt;
+            t.dl_t += dt;
+            if t.adsb && t.adsb_t >= 1.0 {
+                t.adsb_t = 0.0;
+                (t.tr_lat, t.tr_lon, t.tr_alt, t.tr_hdg, t.tr_tas, t.tr_vs) = (t.lat, t.lon, t.alt, t.hdg, t.tas, t.vs);
+            } else if hit && !t.adsb {
+                let (sr, sa) = if stt { (15.0 + 0.0005 * rel.range, 0.1) } else { (30.0 + 0.002 * rel.range, 0.5) };
+                let (d, b) = dist_brg(ac.lat, ac.lon, t.lat, t.lon);
+                let (la, lo) = destination(ac.lat, ac.lon, b + gauss(2) * sa, (d + gauss(0) * sr).max(0.0));
+                t.tr_lat = la;
+                t.tr_lon = lo;
+                // Altitude : Mode C si connu (au 100 ft), sinon site radar (erreur ∝ distance)
+                t.tr_alt = if t.squawk_known { (t.alt / FT / 100.0).round() * 100.0 * FT } else { t.alt + gauss(4) * rel.range * sa.to_radians() };
+                if t.hits >= 2 {
+                    let (sh, sv) = if stt { (1.0, 0.01) } else { (4.0, 0.04) };
+                    t.tr_hdg = wrap360(t.hdg + (rn[1] - 0.5) * 2.0 * sh);
+                    t.tr_tas = t.tas * (1.0 + (rn[3] - 0.5) * 2.0 * sv);
+                    t.tr_vs = t.vs;
+                }
+            } else if t.dl && !t.adsb && t.dl_t >= 4.0 {
+                t.dl_t = 0.0;
+                (t.tr_lat, t.tr_lon, t.tr_alt, t.tr_hdg, t.tr_tas, t.tr_vs) = (t.lat, t.lon, t.alt, t.hdg, t.tas, t.vs);
+            } else if t.vel_ok {
+                let (la, lo) = destination(t.tr_lat, t.tr_lon, t.tr_hdg, t.tr_tas * dt);
+                t.tr_lat = la;
+                t.tr_lon = lo;
+                t.tr_alt += t.tr_vs * dt;
+            }
+            t.vel_ok = t.adsb || t.dl || t.hits >= 2;
+        }
+        self.events.extend(msgs);
+        if let Some(c) = chaff_break {
+            if self.lock.is_some() {
+                self.lock = None;
+                self.lock_loss_t = 0.0;
+                self.events.push(format!("LOCK PERDU {c} — PAILLETTES"));
+            }
         }
         // Rupture de poursuite (STT) après 2 s sans détection
-        if lock.is_some() {
+        if self.lock.is_some() {
             match lock_why {
                 Some(w) => {
                     self.lock_loss_t += dt;
@@ -402,8 +667,47 @@ impl Traffic {
                 None => self.lock_loss_t = 0.0,
             }
         }
-        SNAP.with(|s| *s.borrow_mut() = (self.list.clone(), self.lock, self.aa));
+        let views: Vec<Target> = self.list.iter().map(Self::view).collect();
+        SNAP.with(|s| *s.borrow_mut() = (views, self.lock, self.aa));
+        MODE.with(|m| m.set(self.mode));
     }
+
+    /// Vue affichée d'une cible : piste estimée et identité connue (jamais la vérité).
+    pub fn view(t: &Target) -> Target {
+        let mut v = t.clone();
+        (v.lat, v.lon, v.alt, v.hdg, v.vs) = (t.tr_lat, t.tr_lon, t.tr_alt, t.tr_hdg, t.tr_vs);
+        v.tas = if t.vel_ok { t.tr_tas } else { 0.0 };
+        v.iff = t.ident;
+        v.call = disp_call(t);
+        if !t.type_known {
+            v.icao = "----";
+            v.name = if t.ident == Iff::Ami { "AMI (MODE 5), TYPE INCONNU" } else { "TYPE INCONNU" };
+            v.operator = "--";
+            v.mission = "--";
+        }
+        if !t.squawk_known {
+            v.squawk = 0;
+        }
+        if !t.ident_call || !t.type_known {
+            v.org.clear();
+            v.dest.clear();
+        }
+        v
+    }
+
+    /// Interrogation IFF des pistes radar fraîches dans le volume IFF (+/-60°, 100 NM).
+    pub fn interrogate(&mut self, ac: &Aircraft) -> Result<String, String> {
+        let mut n = 0;
+        for t in self.list.iter_mut() {
+            let r = Traffic::rel(ac, t);
+            if t.radar_age < 1.0 && r.az.abs() < AZ_LIM && r.range < IFF_NM * NM && t.iff_t <= 0.0 {
+                t.iff_t = IFF_S;
+                n += 1;
+            }
+        }
+        if n == 0 { Err("IFF : AUCUNE PISTE RADAR A INTERROGER".into()) } else { Ok(format!("IFF : {n} PISTE(S) INTERROGEE(S) — REPONSE {IFF_S:.1} S")) }
+    }
+
 
     /// Contact connu (piste radar, mémoire, ADS-B ou Link 16).
     pub fn known(t: &Target) -> bool {
@@ -463,11 +767,12 @@ impl Traffic {
             None => 0,
         };
         self.lock = Some(c[i].1);
-        self.list.iter().find(|t| t.id == c[i].1).map(|t| t.call.clone())
+        let id = c[i].1;
+        self.try_lock(id).ok()
     }
 
     pub fn lock_call(&mut self, call: &str) -> Result<String, String> {
-        let t = self.list.iter().find(|t| t.call.replace(' ', "") == call.replace(' ', "")).ok_or("CIBLE INCONNUE")?;
+        let t = self.list.iter().find(|t| disp_call(t).replace(' ', "") == call.replace(' ', "")).ok_or("CIBLE INCONNUE")?;
         self.try_lock(t.id)
     }
 
@@ -475,11 +780,19 @@ impl Traffic {
     pub fn try_lock(&mut self, id: u32) -> Result<String, String> {
         let t = self.list.iter().find(|t| t.id == id).ok_or("CIBLE INCONNUE")?;
         if t.radar_age >= 1.0 {
-            return Err(format!("{} : PAS DE PISTE RADAR ({}) — VERROUILLAGE IMPOSSIBLE", t.call, Self::source(t)));
+            let why = if t.strobe { "BROUILLAGE, ANGLE SEUL" } else { Self::source(t) };
+            return Err(format!("{} : PAS DE PISTE RADAR ({why}) — VERROUILLAGE IMPOSSIBLE", disp_call(t)));
         }
+        let call = disp_call(t);
         self.lock = Some(id);
         self.lock_loss_t = 0.0;
-        Ok(t.call.clone())
+        // Interrogation IFF automatique de la cible désignée
+        if let Some(t) = self.list.iter_mut().find(|t| t.id == id) {
+            if t.ident == Iff::NonId && t.iff_t <= 0.0 {
+                t.iff_t = IFF_S;
+            }
+        }
+        Ok(call)
     }
 
     pub fn locked(&self) -> Option<&Target> {
@@ -488,7 +801,7 @@ impl Traffic {
 
     /// Indicatif de la cible verrouillée.
     pub fn locked_call(&self) -> Option<String> {
-        self.locked().map(|t| t.call.clone())
+        self.locked().map(disp_call)
     }
 
     /// Clic sur un symbole de l'horizon (demande à traiter).
@@ -499,7 +812,7 @@ impl Traffic {
 
     /// Trafic pour le ND : (lat, lon, alt m, indicatif, militaire, verrouillé, IFF, vs m/s)
     pub fn nd_items(&self) -> Vec<(f64, f64, f64, String, bool, bool, Iff, f64)> {
-        self.list.iter().filter(|t| Self::known(t)).map(|t| (t.lat, t.lon, t.alt, t.call.clone(), t.mil, Some(t.id) == self.lock, t.iff, t.vs)).collect()
+        self.list.iter().filter(|t| Self::known(t)).map(Self::view).map(|t| (t.lat, t.lon, t.alt, t.call.clone(), t.mil && t.type_known, Some(t.id) == self.lock, t.iff, t.vs)).collect()
     }
 }
 
@@ -594,23 +907,31 @@ pub fn target_lines(ac: &Aircraft, t: &Target) -> Vec<(String, String, Color)> {
     let mut lines: Vec<(String, String, Color)> = vec![
         ("CIBLE".into(), t.call.clone(), AMBER),
         ("TYPE".into(), format!("{}  {}", t.icao, t.name), WHITE),
-        ("IFF".into(), format!("{}  {}", t.iff.label(), if t.squawk > 0 { format!("XPDR {:04}", t.squawk) } else { "SANS XPDR".into() }), t.iff.color()),
+        ("IFF".into(), format!("{}  {}", t.iff.label(), if t.iff_t > 0.0 { "INTERROGATION...".into() } else if t.squawk > 0 { format!("XPDR {:04}", t.squawk) } else { match t.iff { Iff::NonId => "NON INTERROGE".to_string(), Iff::Inconnu => "SANS REPONSE".into(), _ => "MODE 5".into() } }), t.iff.color()),
         ("EXPL.".into(), format!("{} - {}", t.operator, t.mission), WHITE),
-        ("ALT".into(), format!("FL{:03.0}  {:+.0} FPM", t.alt / FT / 100.0, t.vs / FT * 60.0), WHITE),
-        ("VITESSE".into(), format!("{:.0} KT  M{mach:.2}  CAP {:03.0}", t.tas / KT, t.hdg), WHITE),
+        ("ALT".into(), if t.squawk_known { format!("FL{:03.0}  MODE C  {:+.0} FPM", t.alt / FT / 100.0, t.vs / FT * 60.0) } else { format!("FL{:03.0}  SITE RADAR +/-{:.0} FT", t.alt / FT / 100.0, r.range * 0.5f64.to_radians() / FT) }, WHITE),
+        ("VITESSE".into(), if t.vel_ok { format!("{:.0} KT  M{mach:.2}  CAP {:03.0}", t.tas / KT, t.hdg) } else { "-- (PISTE SANS VITESSE)".into() }, if t.vel_ok { WHITE } else { DIM }),
         ("DIST".into(), format!("{:.1} NM  REL {:03.0}  {:+.0} FT", r.range / NM, r.brg, r.dalt_ft), WHITE),
-        ("RAPPR.".into(), format!("{:+.0} KT  ASPECT {:.0}{side} {asp_l}", r.closure_kt, asp), if r.closure_kt > 0.0 { AMBER } else { WHITE }),
     ];
+    // Rapprochement : Doppler mesuré (radar) ou dérivé de la piste ; aspect si la piste a un cap
+    let vc = if t.radar_age < MEM_S { Some(t.vc_meas) } else if t.vel_ok { Some(r.closure_kt) } else { None };
+    let vc_s = vc.map_or("--".to_string(), |v| format!("{v:+.0} KT"));
+    let asp_s = if t.vel_ok { format!("ASPECT {asp:.0}{side} {asp_l}") } else { "ASPECT --".into() };
+    lines.push(("RAPPR.".into(), format!("{vc_s}  {asp_s}"), if vc.is_some_and(|v| v > 0.0) { AMBER } else { WHITE }));
     if !t.org.is_empty() {
         lines.push(("ROUTE".into(), format!("{} > {}", t.org, t.dest), WHITE));
     }
     let age = if t.radar_age < 1e8 { format!(" ({:.0} s)", t.radar_age) } else { String::new() };
-    lines.push(("PISTE".into(), format!("{}{age}  SER {} m2", Traffic::source(t), if t.rcs < 0.1 { format!("{:.3}", t.rcs) } else { format!("{:.0}", t.rcs) }), if t.radar_age < 1.0 { GREEN_S } else { DIM }));
-    lines.push(("DOPPLER".into(), format!("VR {:+.0} KT{}", t.vr_kt, if t.notch { "  NOTCH" } else { "" }), if t.notch { AMBER } else { WHITE }));
+    let ser = if t.radar_age < MEM_S { if t.rcs_eff < 0.1 { format!("  SER EST {:.3} m2", t.rcs_eff) } else { format!("  SER EST {:.0} m2", t.rcs_eff) } } else { String::new() };
+    lines.push(("PISTE".into(), format!("{}{age}{ser}", Traffic::source(t)), if t.radar_age < 1.0 { GREEN_S } else { DIM }));
+    let etat = if let Some(m) = t.masked { m.to_string() } else if t.strobe { "BROUILLAGE - ANGLE SEUL".into() } else if t.jam { "BROUILLEUR ACTIF (BURN-THROUGH)".into() } else if t.radar_age < 1.0 { format!("VR {:+.0} KT{}", t.vr_kt, if t.notch { "  NOTCH" } else { "" }) } else { "--".into() };
+    lines.push(("RADAR".into(), etat, if t.masked.is_some() || t.strobe || t.jam || t.notch { AMBER } else { WHITE }));
     lines
 }
 
 thread_local! {
+    /// Mode radar courant (affichage)
+    static MODE: std::cell::Cell<RadarMode> = const { std::cell::Cell::new(RadarMode::Rws) };
     /// Portée de la page LOCK (NM)
     static TSD_RANGE: std::cell::Cell<usize> = const { std::cell::Cell::new(2) };
 }
@@ -657,22 +978,38 @@ pub fn draw_tsd(ac: &Aircraft, r: Rect, time: f64) {
         txt(&format!("{:.0}", rng * k as f64 / 4.0), own.x + 4.0, own.y - rr + 12.0, 9.0, ring);
     }
     draw_line(own.x, own.y, own.x, sc.y, 1.0, Color::new(0.2, 0.55, 0.65, 0.2));
-    // Volume de balayage radar (+/-60°) et faisceau RWS (aller-retour en 2 x 2 s)
+    // Volume de balayage radar et faisceau (aller-retour en 2 cadres)
+    let mode = MODE.with(|m| m.get());
+    let (azl, fs) = mode.volume();
     let edge = ppn * rng as f32;
-    for a in [-AZ_LIM as f32, AZ_LIM as f32] {
+    for a in [-azl as f32, azl as f32] {
         let ar = a.to_radians();
         let q = own + vec2(ar.sin(), -ar.cos()) * edge;
         draw_line(own.x, own.y, q.x, q.y, 1.0, Color::new(0.3, 1.0, 0.4, 0.3));
     }
-    let ph = ((time / SCAN_S) % 2.0) as f32;
-    let az = if ph < 1.0 { -60.0 + 120.0 * ph } else { 60.0 - 120.0 * (ph - 1.0) };
+    let ph = ((time / fs) % 2.0) as f32;
+    let w = azl as f32;
+    let az = if ph < 1.0 { -w + 2.0 * w * ph } else { w - 2.0 * w * (ph - 1.0) };
     if lock.is_none() {
         let ar = az.to_radians();
         let q = own + vec2(ar.sin(), -ar.cos()) * edge;
         draw_line(own.x, own.y, q.x, q.y, 2.0, Color::new(0.3, 1.0, 0.4, 0.55));
     }
-    txt(&format!("RADAR {}  +/-60  SER 5m2 {:.0} NM", if lock.is_some() { "STT" } else { "RWS" }, R0_NM), sc.x + 6.0, sc.y + 14.0, 10.0, GREEN_S);
-    txt("PLEIN : RADAR   PALE : MEMOIRE / LINK16 / ADS-B   NTCH : CREUX DOPPLER", sc.x + 6.0, sc.y + sc.h - 6.0, 9.0, DIM);
+    txt(&format!("RADAR {}{}  +/-{azl:.0}  CADRE {fs:.0} S  SER 5m2 {:.0} NM", mode.label(), if lock.is_some() { " + STT" } else { "" }, R0_NM), sc.x + 6.0, sc.y + 14.0, 10.0, GREEN_S);
+    txt("PLEIN : RADAR   PALE : MEMOIRE / LINK16 / ADS-B   NTCH : CREUX DOPPLER   J : BROUILLEUR", sc.x + 6.0, sc.y + sc.h - 6.0, 9.0, DIM);
+    // Strobes de brouillage : relèvement seul (pas de distance avant burn-through)
+    for t in list.iter().filter(|t| t.strobe) {
+        let a = (t.strobe_brg - hdg).to_radians() as f32;
+        let d = vec2(a.sin(), -a.cos());
+        let mut x = 20.0;
+        while x < edge {
+            let (p, q) = (own + d * x, own + d * (x + 8.0).min(edge));
+            draw_line(p.x, p.y, q.x, q.y, 1.5, AMBER);
+            x += 14.0;
+        }
+        let q = own + d * (edge * 0.9);
+        txt_c("J", q.x + 8.0, q.y, 12.0, AMBER);
+    }
     // Avion
     draw_triangle(own + vec2(0.0, -9.0), own + vec2(-6.0, 7.0), own + vec2(6.0, 7.0), WHITE);
     txt_c(&format!("FL{:03.0}", ac.alt / FT / 100.0), own.x, own.y + 20.0, 10.0, WHITE);
@@ -695,8 +1032,9 @@ pub fn draw_tsd(ac: &Aircraft, r: Rect, time: f64) {
             Iff::Ami => draw_circle_lines(p.x, p.y, 6.0, 1.6, c),
             Iff::Neutre => draw_rectangle_lines(p.x - 5.5, p.y - 5.5, 11.0, 11.0, 1.6, c),
             Iff::Inconnu => draw_poly_lines(p.x, p.y, 4, 7.0, 45.0, 1.6, c),
+            Iff::NonId => draw_poly_lines(p.x, p.y, 3, 7.0, -90.0, 1.6, c),
         }
-        if t.mil {
+        if t.mil && t.type_known {
             draw_circle(p.x, p.y, 2.0, c);
         }
         txt(&t.call, p.x + 9.0, p.y - 2.0, 10.0, c);
@@ -719,7 +1057,7 @@ pub fn draw_tsd(ac: &Aircraft, r: Rect, time: f64) {
     let mut rows: Vec<(&Target, Rel)> = list.iter().filter(|t| Traffic::known(t)).map(|t| (t, Traffic::rel(ac, t))).collect();
     rows.sort_by(|a, b| a.1.range.total_cmp(&b.1.range));
     let lock_t = lock.and_then(|id| list.iter().find(|t| t.id == id));
-    let card_h = if lock_t.is_some() { 170.0 } else { 0.0 };
+    let card_h = lock_t.map_or(0.0, |t| 14.0 + target_lines(ac, t).len() as f32 * 15.5);
     let list_h = r.y + r.h - 10.0 - card_h - (sc.y);
     let rh = 22.0;
     txt("CONTACTS", lx, sc.y + 12.0, 10.0, DIM);
@@ -775,10 +1113,22 @@ mod tests {
     fn tgt(ac: &Aircraft, icao: &'static str, dist_nm: f64, rel_brg: f64, alt_ft: f64, hdg: f64) -> Target {
         let (lat, lon) = destination(ac.lat, ac.lon, wrap360(ac.hdg_deg() + rel_brg), dist_nm * NM);
         Target {
-            id: 1, call: "TEST1".into(), icao, name: "", operator: "", mission: "", mil: true, iff: Iff::Inconnu, squawk: 0,
-            lat, lon, alt: alt_ft * FT, tas: 230.0, hdg, vs: 0.0, alt_tgt: alt_ft * FT, hdg_tgt: hdg, behave: Behave::Route, turn_t: 1e9,
-            org: String::new(), dest: String::new(), rcs: rcs_of(icao), radar_age: 1e9, notch: false, in_vol: false, vr_kt: 0.0, adsb: false, dl: false,
+            id: 1, call: "TEST1".into(), icao, mil: true, iff: Iff::Inconnu, lat, lon, alt: alt_ft * FT, tas: 230.0, hdg,
+            alt_tgt: alt_ft * FT, hdg_tgt: hdg, turn_t: 1e9, rcs: rcs_of(icao), radar_age: 1e9, iff_t: -1.0,
+            tr_lat: lat, tr_lon: lon, tr_alt: alt_ft * FT, tr_hdg: hdg, tr_tas: 230.0,
+            ..Default::default()
         }
+    }
+
+    /// Fait tourner le trafic sans apparition de nouveaux avions.
+    fn run(tr: &mut Traffic, ac: &Aircraft, secs: f64, mut stop: impl FnMut(&Traffic) -> bool) -> f64 {
+        let mut tt = 0.0;
+        tr.auto_spawn = false;
+        while tt < secs && !stop(tr) {
+            tr.update(ac, 0.1);
+            tt += 0.1;
+        }
+        tt
     }
 
     /// Équation radar : un furtif n'est vu qu'à courte portée, un gros porteur de très loin.
@@ -787,13 +1137,13 @@ mod tests {
         let ac = own();
         println!("portees : F-22 {:.1} NM, F-35 {:.1} NM, F-16 {:.0} NM, 777 {:.0} NM", det_range(rcs_of("F22")) / NM, det_range(rcs_of("F35")) / NM, det_range(rcs_of("F16")) / NM, det_range(rcs_of("B77W")) / NM);
         let far_stealth = tgt(&ac, "F22", 20.0, 0.0, 30_000.0, ac.hdg_deg() + 180.0);
-        assert!(radar_state(&ac, &far_stealth, false).3.is_some(), "F-22 a 20 NM ne doit pas etre vu");
+        assert!(radar_state(&ac, &far_stealth, false, AZ_LIM).why.is_some(), "F-22 a 20 NM ne doit pas etre vu");
         let near_stealth = tgt(&ac, "F22", 6.0, 0.0, 30_000.0, ac.hdg_deg() + 180.0);
-        assert!(radar_state(&ac, &near_stealth, false).3.is_none(), "F-22 a 6 NM vu");
+        assert!(radar_state(&ac, &near_stealth, false, AZ_LIM).why.is_none(), "F-22 a 6 NM vu");
         let liner = tgt(&ac, "B77W", 120.0, 10.0, 35_000.0, ac.hdg_deg() + 180.0);
-        assert!(radar_state(&ac, &liner, false).3.is_none(), "777 a 120 NM vu");
+        assert!(radar_state(&ac, &liner, false, AZ_LIM).why.is_none(), "777 a 120 NM vu");
         let behind = tgt(&ac, "B77W", 20.0, 150.0, 30_000.0, 0.0);
-        assert_eq!(radar_state(&ac, &behind, false).3, Some("HORS LIMITES D'ANTENNE"));
+        assert_eq!(radar_state(&ac, &behind, false, AZ_LIM).why, Some("HORS LIMITES D'ANTENNE"));
     }
 
     /// Creux Doppler : cible en dessous, en travers (vitesse radiale sol ~ 0) -> perdue dans le
@@ -803,14 +1153,15 @@ mod tests {
         let ac = own();
         let brg = ac.hdg_deg();
         let beam = tgt(&ac, "F16", 20.0, 0.0, 5_000.0, wrap360(brg + 90.0));
-        let (_, notch, vr, why) = radar_state(&ac, &beam, false);
+        let st = radar_state(&ac, &beam, false, AZ_LIM);
+        let (notch, vr, why) = (st.notch, st.vr, st.why);
         println!("travers vue basse : VR {vr:+.0} kt, notch {notch}, {why:?}");
         assert!(notch && why == Some("CREUX DOPPLER (NOTCH)"));
         let hot = tgt(&ac, "F16", 20.0, 0.0, 5_000.0, wrap360(brg + 180.0));
-        assert!(!radar_state(&ac, &hot, false).1);
+        assert!(!radar_state(&ac, &hot, false, AZ_LIM).notch);
         // Visée haute : pas de fouillis, pas de creux
         let above = tgt(&ac, "F16", 20.0, 0.0, 45_000.0, wrap360(brg + 90.0));
-        assert!(!radar_state(&ac, &above, false).1);
+        assert!(!radar_state(&ac, &above, false, AZ_LIM).notch);
     }
 
     /// Verrouillage : piste radar requise ; la cible qui se met en travers casse le STT en ~2 s.
@@ -827,17 +1178,102 @@ mod tests {
         // La cible vire en travers
         tr.list[0].hdg = wrap360(ac.hdg_deg() + 90.0);
         tr.list[0].hdg_tgt = tr.list[0].hdg;
-        let mut tt = 0.0;
-        while tr.lock.is_some() && tt < 5.0 {
-            // Population figée : on évite l'apparition de nouveaux trafics
-            let keep = tr.list.clone();
-            tr.update(&ac, 0.1);
-            tr.list.retain(|x| keep.iter().any(|k| k.id == x.id));
-            tt += 0.1;
-        }
+        let tt = run(&mut tr, &ac, 5.0, |t| t.lock.is_none());
         println!("STT rompu apres {tt:.1} s : {:?}", tr.events);
         assert!(tr.lock.is_none() && tt > 1.9 && tr.events.iter().any(|e| e.contains("NOTCH")));
         // Piste perdue en mémoire puis plus verrouillable
         assert!(tr.try_lock(1).is_err());
+    }
+
+    /// SER selon l'aspect : un chasseur vu de flanc renvoie bien plus que de face ; un furtif a
+    /// des pics de flanc et d'arrière.
+    #[test]
+    fn rcs_by_aspect() {
+        for k in ["F16", "F22"] {
+            let (n, b, t) = (aspect_factor(k, 0.0), aspect_factor(k, 90.0), aspect_factor(k, 180.0));
+            println!("{k} : face x{n:.1}, flanc x{b:.1}, arriere x{t:.1} -> portee flanc {:.0} NM", det_range(rcs_of(k) * b) / NM);
+            assert!(b > 4.0 * n && t > n);
+        }
+    }
+
+    /// Horizon radar : deux avions à 500 ft se perdent sous l'horizon vers 55 NM ; à haute
+    /// altitude, pas de masquage.
+    #[test]
+    fn radar_horizon() {
+        let mut ac = own();
+        ac.alt = 500.0 * FT;
+        let far = tgt(&ac, "B77W", 70.0, 0.0, 500.0, 0.0);
+        let near = tgt(&ac, "B77W", 40.0, 0.0, 500.0, 0.0);
+        assert_eq!(los_mask(&ac, &far), Some("SOUS L'HORIZON RADAR"));
+        assert_eq!(los_mask(&ac, &near), None);
+        ac.alt = 30_000.0 * FT;
+        assert_eq!(los_mask(&ac, &tgt(&ac, "B77W", 150.0, 0.0, 35_000.0, 0.0)), None);
+    }
+
+    /// IFF : identité inconnue tant que non interrogé ; réponse après 1.5 s ; hostile sans réponse.
+    #[test]
+    fn iff_interrogation() {
+        let ac = own();
+        let mut tr = Traffic::new();
+        tr.next_id = 100;
+        let mut civ = tgt(&ac, "A320", 30.0, 5.0, 33_000.0, wrap360(ac.hdg_deg() + 180.0));
+        (civ.mil, civ.iff, civ.squawk, civ.radar_age, civ.call) = (false, Iff::Neutre, 4521, 0.0, "AFR123".into());
+        let mut bog = tgt(&ac, "SU27", 30.0, -5.0, 30_000.0, wrap360(ac.hdg_deg() + 180.0));
+        (bog.id, bog.hostile, bog.radar_age) = (2, true, 0.0);
+        tr.list.push(civ);
+        tr.list.push(bog);
+        assert_eq!(Traffic::view(&tr.list[0]).call, "TRK 01");
+        assert_eq!(Traffic::view(&tr.list[0]).iff, Iff::NonId);
+        assert!(tr.interrogate(&ac).is_ok());
+        run(&mut tr, &ac, 1.0, |_| false);
+        assert_eq!(tr.list[0].ident, Iff::NonId, "pas de reponse avant 1.5 s");
+        run(&mut tr, &ac, 1.0, |_| false);
+        println!("{:?}", tr.events);
+        let v = Traffic::view(&tr.list[0]);
+        assert!(v.iff == Iff::Neutre && v.call == "AFR123" && v.squawk == 4521);
+        assert_eq!(tr.list[1].ident, Iff::Inconnu);
+        assert!(Traffic::view(&tr.list[1]).call.starts_with("TRK"));
+    }
+
+    /// Pistes : en RWS pas de vitesse (détections brutes), en TWS la piste a cap et vitesse après
+    /// 2 détections ; l'erreur de position reste dans le bruit de mesure.
+    #[test]
+    fn tws_builds_tracks() {
+        let ac = own();
+        let mut tr = Traffic::new();
+        tr.next_id = 100;
+        let mut t = tgt(&ac, "F16", 30.0, 10.0, 28_000.0, wrap360(ac.hdg_deg() + 170.0));
+        (t.tr_lat, t.tr_lon) = (0.0, 0.0);
+        tr.list.push(t);
+        run(&mut tr, &ac, 8.0, |_| false);
+        assert!(!tr.list[0].vel_ok, "RWS : pas de vitesse de piste");
+        tr.mode = RadarMode::Tws;
+        run(&mut tr, &ac, 6.0, |_| false);
+        let t = &tr.list[0];
+        let err = dist_brg(t.lat, t.lon, t.tr_lat, t.tr_lon).0;
+        println!("TWS : {} detections, erreur position {err:.0} m, cap estime {:.0} (vrai {:.0})", t.hits, t.tr_hdg, t.hdg);
+        assert!(t.vel_ok && t.hits >= 2 && err < 1_500.0);
+    }
+
+    /// Hostile verrouillé en STT : se met en travers et descend, puis le lock casse (creux Doppler
+    /// ou paillettes) ; brouilleur : angle seul au-delà du burn-through.
+    #[test]
+    fn hostile_evades_and_jams() {
+        let ac = own();
+        let mut tr = Traffic::new();
+        tr.next_id = 100;
+        let mut t = tgt(&ac, "SU27", 25.0, 0.0, 25_000.0, wrap360(ac.hdg_deg() + 180.0));
+        (t.hostile, t.radar_age) = (true, 0.0);
+        tr.list.push(t);
+        assert!(tr.try_lock(1).is_ok());
+        let tt = run(&mut tr, &ac, 60.0, |t| t.lock.is_none());
+        println!("hostile : lock perdu apres {tt:.1} s : {:?}", tr.events);
+        assert!(tr.lock.is_none() && tr.events.iter().any(|e| e.contains("PAILLETTES") || e.contains("NOTCH")));
+        // Brouilleur à 60 NM, de face : SER 15 m2 -> burn-through ~43 NM, angle seul
+        let mut far = tgt(&ac, "SU27", 60.0, 0.0, 30_000.0, wrap360(ac.hdg_deg() + 180.0));
+        (far.hostile, far.jam) = (true, true);
+        let st = radar_state(&ac, &far, false, AZ_LIM);
+        println!("burn-through {:.0} NM : {:?}", burn_through(st.rcs_eff) / NM, st.why);
+        assert_eq!(st.why, Some(JAM_WHY));
     }
 }

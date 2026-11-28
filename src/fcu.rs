@@ -35,6 +35,7 @@ pub struct Ctx<'a> {
     /// Mode air-air et cible verrouillée
     pub aa: bool,
     pub lock: Option<String>,
+    pub tws: bool,
 }
 
 thread_local! {
@@ -367,6 +368,8 @@ fn sections(tab: usize, ac: &Aircraft, cx: &Ctx) -> Vec<(&'static str, Vec<Card>
                     c("MODE A/A", if cx.aa { "ON" } else { "OFF" }, "Trafic et cibles sur l'horizon (F1)", on(cx.aa), Some(cx.aa), cmd("AA")),
                     c("VERROUILLER", cx.lock.clone().unwrap_or_default(), "Cible suivante devant l'avion (F2)", cx.lock.is_some().then_some(AMBER), None, cmd("LOCK")),
                     c("DEVERROUILLER", "", "Libere la cible (F3)", None, None, cmd("UNLOCK")),
+                    c("IFF", "", "Interroge les pistes radar (F4)", None, None, cmd("IFF")),
+                    c("RADAR", if cx.tws { "TWS" } else { "RWS" }, "RWS large / TWS pistes avec vitesse", None, Some(cx.tws), cmd(if cx.tws { "RWS" } else { "TWS" })),
                 ]),
             ]
         }

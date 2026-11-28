@@ -1067,6 +1067,9 @@ impl Game {
             if is_key_pressed(KeyCode::F3) {
                 self.exec_command("UNLOCK");
             }
+            if is_key_pressed(KeyCode::F4) {
+                self.exec_command("IFF");
+            }
         }
         let ac = &mut self.ac;
 
@@ -2123,6 +2126,16 @@ impl Game {
             "LOCK" | "VERROUILLER" => {
                 let r = if w.len() > 1 { self.traffic.lock_call(&w[1..].join("")) } else { self.traffic.lock_next(&self.ac).ok_or_else(|| "AUCUNE PISTE RADAR DANS LE VOLUME DE BALAYAGE".to_string()) };
                 reply = r.map(|c| format!("CIBLE VERROUILLEE {c} (STT)"));
+            }
+            "IFF" | "INTERROGER" => {
+                reply = self.traffic.interrogate(&self.ac);
+            }
+            "RWS" | "TWS" => {
+                self.traffic.mode = if w[0] == "TWS" { traffic::RadarMode::Tws } else { traffic::RadarMode::Rws };
+                reply = Ok(match self.traffic.mode {
+                    traffic::RadarMode::Tws => "RADAR TWS — +/-30, CADRE 1 S, PISTES AVEC VITESSE, CIBLE NON ALERTEE".into(),
+                    traffic::RadarMode::Rws => "RADAR RWS — +/-60, CADRE 2 S, DETECTIONS BRUTES".into(),
+                });
             }
             "UNLOCK" | "DEVERROUILLER" => {
                 self.traffic.lock = None;
@@ -3853,6 +3866,7 @@ fn draw_commandes_only(g: &mut Game, cr: Rect, only: Option<usize>) {
         link_ok: g.link.full(),
         aa: g.traffic.aa,
         lock: g.traffic.locked_call(),
+        tws: g.traffic.mode == traffic::RadarMode::Tws,
     };
     match fcu::draw(&g.ac, &cx, cr, only) {
         Some(fcu::Act::Key(k)) => {

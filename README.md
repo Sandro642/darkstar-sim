@@ -1078,3 +1078,13 @@ Le SR-72 est un avion de reconnaissance : sa charge utile est simulée.
   < 60 kt), mémoire de piste 8 s, STT (verrouillage) seulement sur piste radar, rupture après 2 s
   hors antenne (+/-70°), hors portée ou en creux Doppler (« LOCK PERDU — NOTCH ») ; contacts ADS-B
   (civils) et Link 16 (amis, pistes AWACS) affichés pâles, non verrouillables.
+- v1.85.0 : radar et capteurs réalistes, suite. SER selon l'aspect (chasseur x5 de flanc, furtif à
+  pics de flanc x31 et d'arrière x11) ; horizon radar (terre 4/3) et masquage par le relief (tuiles
+  d'altitude) ; brouilleur d'autoprotection des hostiles (strobe « J » angle seul sur la page LOCK
+  jusqu'au burn-through, J/S ∝ R²/SER) ; hostile verrouillé en STT : alerte, mise en travers,
+  descente, paillettes (rupture du lock) ; IFF (F4 / instruction IFF / auto au verrouillage) :
+  réponse en 1.5 s, MODE 5 ami, MODE 3/C/S civil (code, indicatif), sans réponse = INCONNU ; avant
+  identification la piste est « TRK nn », type inconnu. Pistes estimées (jamais la vérité) : bruit de
+  mesure distance / angle, altitude par site radar ou Mode C, extrapolation, fusion ADS-B (1 Hz),
+  radar, Link 16 (4 s). Modes RWS (+/-60°, 2 s, détections brutes sans vitesse) et TWS (+/-30°,
+  1 s, 10 pistes avec cap et vitesse, cible non alertée).
