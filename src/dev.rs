@@ -206,60 +206,47 @@ impl Preset {
 /// batterie, moteurs), VOL (croisière : moteurs, élec, scram, pannes), ARRIVEE (approche : ND,
 /// manette / train, radio).
 fn preset_wins(p: Preset) -> Vec<Win> {
-    // Horizon prioritaire (écran 14 pouces) : ECRAN au centre, grand ; colonnes latérales et
-    // bandeau bas sans recouvrement
+    // Horizon avant tout : ECRAN au centre sur ~66 % x 85 %, colonnes fines, bandeau bas étroit
     let w = |kind, x, y, ww, h, open| Win { kind, r: [x, y, ww, h], open };
-    let (cx, cw, ch) = (0.2, 0.6, 0.78);
-    let mut v = vec![w(WinKind::Ecran, cx, 0.0, cw, ch, true)];
+    let (sx, cw, ch) = (0.165, 0.67, 0.85);
+    let rx = sx + cw + 0.005;
+    let rw = 1.0 - rx;
     let by = ch + 0.005;
     let bh = 1.0 - by;
+    let mut v = vec![w(WinKind::Ecran, sx, 0.0, cw, ch, true)];
     match p {
-        Preset::Depart => {
-            v.extend([
-                w(WinKind::Moteurs, 0.0, 0.0, 0.195, 0.5, true),
-                w(WinKind::Manette, 0.0, 0.505, 0.195, 0.495, true),
-                w(WinKind::PanneauDroit, 0.805, 0.0, 0.195, 1.0, true),
-                w(WinKind::Messages, cx, by, 0.3, bh, true),
-                w(WinKind::Batterie, cx + 0.305, by, 0.09, bh, true),
-                w(WinKind::Scram, cx + 0.4, by, 0.09, bh, true),
-                w(WinKind::Master, cx + 0.495, by, 0.105, bh, true),
-            ]);
-        }
-        Preset::Vol => {
-            v.extend([
-                w(WinKind::Moteurs, 0.0, 0.0, 0.195, 0.5, true),
-                w(WinKind::Manette, 0.0, 0.505, 0.195, 0.495, true),
-                w(WinKind::Elec, 0.805, 0.0, 0.195, 0.5, true),
-                w(WinKind::Pannes, 0.805, 0.505, 0.195, 0.495, true),
-                w(WinKind::Messages, cx, by, 0.39, bh, true),
-                w(WinKind::Scram, cx + 0.395, by, 0.1, bh, true),
-                w(WinKind::Master, cx + 0.5, by, 0.1, bh, true),
-            ]);
-        }
-        Preset::Arrivee => {
-            v.extend([
-                w(WinKind::Manette, 0.0, 0.0, 0.195, 0.5, true),
-                w(WinKind::Moteurs, 0.0, 0.505, 0.195, 0.495, true),
-                w(WinKind::Nd, 0.805, 0.0, 0.195, 0.6, true),
-                w(WinKind::Pannes, 0.805, 0.605, 0.195, 0.395, true),
-                w(WinKind::Radio, cx, by, 0.34, bh, true),
-                w(WinKind::Messages, cx + 0.345, by, 0.15, bh, true),
-                w(WinKind::Master, cx + 0.5, by, 0.1, bh, true),
-            ]);
-        }
+        Preset::Depart => v.extend([
+            w(WinKind::Moteurs, 0.0, 0.0, sx - 0.005, 0.5, true),
+            w(WinKind::Manette, 0.0, 0.505, sx - 0.005, 0.495, true),
+            w(WinKind::PanneauDroit, rx, 0.0, rw, 1.0, true),
+            w(WinKind::Messages, sx, by, 0.4, bh, true),
+            w(WinKind::Batterie, sx + 0.405, by, 0.08, bh, true),
+            w(WinKind::Master, sx + 0.49, by, cw - 0.49, bh, true),
+        ]),
+        Preset::Vol => v.extend([
+            w(WinKind::Moteurs, 0.0, 0.0, sx - 0.005, 0.5, true),
+            w(WinKind::Manette, 0.0, 0.505, sx - 0.005, 0.495, true),
+            w(WinKind::Elec, rx, 0.0, rw, 0.5, true),
+            w(WinKind::Pannes, rx, 0.505, rw, 0.495, true),
+            w(WinKind::Messages, sx, by, 0.4, bh, true),
+            w(WinKind::Scram, sx + 0.405, by, 0.08, bh, true),
+            w(WinKind::Master, sx + 0.49, by, cw - 0.49, bh, true),
+        ]),
+        Preset::Arrivee => v.extend([
+            w(WinKind::Manette, 0.0, 0.0, sx - 0.005, 0.5, true),
+            w(WinKind::Moteurs, 0.0, 0.505, sx - 0.005, 0.495, true),
+            w(WinKind::Nd, rx, 0.0, rw, 0.6, true),
+            w(WinKind::Pannes, rx, 0.605, rw, 0.395, true),
+            w(WinKind::Messages, sx, by, 0.48, bh, true),
+            w(WinKind::Master, sx + 0.49, by, cw - 0.49, bh, true),
+        ]),
     }
     v
 }
 
-/// Page 1 (écran) d'un préréglage : horizon sur les trois quarts, trois cases utiles en bas.
-fn preset_widgets(p: Preset) -> Vec<Widget> {
-    let w = |elem, x, y, ww, h| Widget { elem, r: [x, y, ww, h] };
-    let (a, b, c) = match p {
-        Preset::Depart => (Elem::CmdMoteurs, Elem::Nd, Elem::Carburant),
-        Preset::Vol => (Elem::Systemes, Elem::Nd, Elem::Carburant),
-        Preset::Arrivee => (Elem::Hsi, Elem::CmdPilote, Elem::Train),
-    };
-    vec![w(Elem::Horizon, 0.0, 0.0, 1.0, 0.74), w(a, 0.0, 0.74, 0.36, 0.26), w(b, 0.36, 0.74, 0.34, 0.26), w(c, 0.70, 0.74, 0.30, 0.26)]
+/// Page 1 (écran) d'un préréglage : horizon sur tout l'écran.
+fn preset_widgets(_p: Preset) -> Vec<Widget> {
+    vec![Widget { elem: Elem::Horizon, r: [0.0, 0.0, 1.0, 1.0] }]
 }
 
 pub const BAR_H: f32 = 30.0;

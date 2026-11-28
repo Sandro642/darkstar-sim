@@ -1048,3 +1048,9 @@ Le SR-72 est un avion de reconnaissance : sa charge utile est simulée.
   centre (60 % x 78 %), horizon sur les trois quarts de l'écran, trois cases utiles en dessous ;
   colonnes latérales (moteurs, manette, panneau droit / élec / pannes / ND) et bandeau bas
   (messages, batterie, scram, radio, MASTER) sans recouvrement.
+- v1.82.0 : mécanique de vol — looping et passage par la verticale possibles (plus de blocage de
+  la pente à +/-86° : au-delà de 90° la trajectoire continue sur le dos, cap retourné, incidence
+  conservée) ; assiette du fuselage cohérente avec la trajectoire en 3D (incidence dans le plan de
+  portance incliné : sur le dos le nez est à l'intérieur de la boucle) pour l'horizon, l'échelle
+  d'assiette et la vision synthétique. Test : looping complet en 27 s, retour au cap initial.
+  Préréglages dev : horizon sur tout l'écran central (~66 % x 85 %), colonnes fines, bandeau bas.

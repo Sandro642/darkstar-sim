@@ -929,6 +929,13 @@ impl Aircraft {
         self.fcs_lost = Some(why);
     }
 
+    /// Assiette réelle (tangage du fuselage par rapport à l'horizon, rad) : l'incidence s'applique
+    /// dans le plan de portance incliné (sur le dos, le nez est sous la trajectoire).
+    pub fn pitch_att(&self) -> f64 {
+        let a = self.theta - self.gamma;
+        (self.gamma.sin() * a.cos() + self.gamma.cos() * a.sin() * self.phi.cos()).clamp(-1.0, 1.0).asin()
+    }
+
     /// Facteur de charge visé par les récupérations automatiques : 90 % de la rupture calculée.
     pub fn n_recovery(&self) -> f64 {
         (self.n_break().0 * RECOVERY_MARGIN).max(2.0)
@@ -1871,8 +1878,17 @@ impl Aircraft {
             }
             let v = self.tas;
             self.gamma += (vert_force * self.phi.cos() / (mass * v) - (g / v - v / r) * self.gamma.cos()) * dt;
-            self.gamma = self.gamma.clamp(-1.5, 1.5);
-            self.psi += vert_force * self.phi.sin() / (mass * v * self.gamma.cos().max(0.05)) * dt;
+            self.psi += vert_force * self.phi.sin() / (mass * v * self.gamma.cos().abs().max(0.05)) * dt;
+            // Passage par la verticale (looping, renversement) : la trajectoire continue sur le dos
+            // — pente réfléchie, cap retourné, inclinaison +180° ; l'incidence est conservée
+            use std::f64::consts::{FRAC_PI_2, PI};
+            if self.gamma > FRAC_PI_2 || self.gamma < -FRAC_PI_2 {
+                let a = self.theta - self.gamma;
+                self.gamma = if self.gamma > 0.0 { PI - self.gamma } else { -PI - self.gamma };
+                self.psi += PI;
+                self.phi = wrap_pi(self.phi + PI);
+                self.theta = self.gamma + a;
+            }
         }
         self.psi = self.psi.rem_euclid(std::f64::consts::TAU);
 
@@ -2962,6 +2978,52 @@ mod tests {
             println!("M{mach} : {}", out.join(" | "));
             assert!(acc[2] > acc[1] + 0.2 && acc[3] > acc[2], "M{mach} : surrégime sans gain {acc:?}");
         }
+    }
+
+    /// Looping complet en vol d'essai LOW SPEED : passage par la verticale et sur le dos sans
+    /// blocage à +/-90°, retour au cap initial ; assiette cohérente (nez à l'intérieur de la boucle).
+    #[test]
+    fn full_loop() {
+        let mut ac = Aircraft::new_on_runway(0);
+        let elev = ground_elev(ac.lat, ac.lon);
+        ac.fuel = 8_000.0;
+        ac.h2 = 0.0;
+        ac.on_ground = false;
+        ac.gear_down = false;
+        ac.gear_pos = 0.0;
+        ac.brakes = false;
+        ac.alt = elev + 15_000.0 * FT;
+        ac.tas = 480.0 * KT / (isa(ac.alt).rho / RHO0).sqrt();
+        ac.theta = 2f64.to_radians();
+        ac.set_turbines(TurbState::Running, 1.0);
+        ac.throttle = 1.0;
+        ac.gcas_on = false;
+        ac.test_mode = true;
+        ac.test_low_speed = true;
+        let hdg0 = ac.hdg_deg();
+        let (mut gmax, mut inverted, mut tmax) = (-10.0f64, false, 0.0);
+        let mut t = 0.0;
+        let mut done = false;
+        while t < 60.0 && ac.crashed.is_none() {
+            ac.step(1.0 / 120.0, 0.8, 0.0);
+            t += 1.0 / 120.0;
+            gmax = gmax.max(ac.gamma.to_degrees());
+            if ac.phi.abs() > 2.5 {
+                inverted = true;
+                // Sur le dos en haut de boucle : le nez (assiette) est sous la trajectoire
+                if ac.gamma.abs() < 0.3 {
+                    assert!(ac.pitch_att() < ac.gamma + 0.01, "assiette incoherente sur le dos");
+                }
+            }
+            tmax = t;
+            if inverted && ac.phi.abs() < 0.5 && ac.gamma > -0.05 && ac.gamma < 0.3 && t > 5.0 {
+                done = true;
+                break;
+            }
+        }
+        println!("looping : boucle bouclee {done} en {tmax:.1} s, passage sur le dos {inverted}, cap {:.0} -> {:.0}, crash {:?}", hdg0, ac.hdg_deg(), ac.crashed);
+        assert!(done && inverted && ac.crashed.is_none());
+        assert!(crate::geo::wrap180(ac.hdg_deg() - hdg0).abs() < 20.0, "cap final");
     }
 
     /// Pilote qui se dégage lui-même d'un piqué (ailes à plat, ressource franche) : l'Auto-GCAS ne

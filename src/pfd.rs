@@ -440,7 +440,7 @@ fn draw_svs_overlay(ac: &Aircraft, v: &View, s: Rect, info: &PfdInfo) {
             continue;
         }
         let pr = (p as f64).to_radians();
-        if (pr - ac.theta).abs() > 0.4 {
+        if (pr - ac.pitch_att()).abs() > 0.4 {
             continue;
         }
         let c = dir(ac.psi, pr) * big;
@@ -485,7 +485,7 @@ fn draw_svs_overlay(ac: &Aircraft, v: &View, s: Rect, info: &PfdInfo) {
 
     // Marqueur de trajectoire : cercle, ailes et dérive
     // Vecteur vitesse sur la route sol : la dérive due au vent le décale latéralement
-    let fpv = if !ac.on_ground && ac.tas > 20.0 { v.project_dir(dir(ac.track_deg().to_radians(), ac.gamma)) } else { v.project_dir(dir(ac.psi, ac.theta)) };
+    let fpv = if !ac.on_ground && ac.tas > 20.0 { v.project_dir(dir(ac.track_deg().to_radians(), ac.gamma)) } else { v.project_dir(dir(ac.psi, ac.pitch_att())) };
     // Butée : le vecteur reste dans l'horizon (marge pour les ailes), affiché en pointillé ambre
     // quand il est bloqué au bord (« caged / limited », comme sur un HUD réel)
     let fpv = fpv.map(|f| {

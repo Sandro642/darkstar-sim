@@ -64,12 +64,18 @@ pub fn dir(hdg: f64, pitch: f64) -> Vec3 {
     vec3((hdg.sin() * pitch.cos()) as f32, pitch.sin() as f32, (-hdg.cos() * pitch.cos()) as f32)
 }
 
+/// Repère du fuselage : construit à partir de la trajectoire (cap, pente), de l'inclinaison autour
+/// du vecteur vitesse et de l'incidence dans le plan de portance — cohérent sur le dos et en
+/// looping (pas de singularité à la verticale).
 pub fn basis(ac: &Aircraft) -> (Vec3, Vec3, Vec3) {
-    let fwd = dir(ac.psi, ac.theta);
+    let vel = dir(ac.psi, ac.gamma);
     let r0 = vec3(ac.psi.cos() as f32, 0.0, ac.psi.sin() as f32);
-    let up0 = r0.cross(fwd).normalize();
+    let up0 = r0.cross(vel).normalize();
     let (s, c) = (ac.phi.sin() as f32, ac.phi.cos() as f32);
-    let up = up0 * c + r0 * s;
+    let up_w = (up0 * c + r0 * s).normalize();
+    let a = (ac.theta - ac.gamma) as f32;
+    let fwd = (vel * a.cos() + up_w * a.sin()).normalize();
+    let up = (up_w * a.cos() - vel * a.sin()).normalize();
     let right = fwd.cross(up).normalize();
     (fwd, up, right)
 }
