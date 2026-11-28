@@ -1059,3 +1059,13 @@ Le SR-72 est un avion de reconnaissance : sa charge utile est simulée.
   l'écran) ; une colonne à droite et un bandeau bas avec seulement l'utile : DEPART (panneau droit,
   batterie, manette, messages, MASTER), VOL (pannes, manette, scram, MASTER, messages), ARRIVEE
   (ND, manette, MASTER, radio, messages).
+- v1.83.0 : trafic aérien civil (A320, 737, 777, A350, 787, E175, 747F, Citation ; indicatifs de
+  compagnies, origine / destination) et militaire (F-16, F-35, F-22, F/A-18, KC-135 et E-3 en
+  hippodrome, C-17, U-2, RQ-4, appareil non identifié) dans 80 NM, sur le ND (losanges, couleur IFF,
+  altitude relative, tendance). Mode A/A (F1 / instruction AA / COMMANDES > NAVIGATION) : trafic
+  sur l'horizon, clic sur un symbole pour verrouiller ; LOCK (F2, cible suivante devant l'avion ou
+  LOCK <INDICATIF>), UNLOCK (F3) : cadre de désignation, repère de direction hors champ, fiche de la
+  cible (type, IFF, transpondeur, exploitant et mission, FL et vario, vitesse / Mach / cap,
+  distance, relèvement, altitude relative, rapprochement, aspect HOT / FLANC / COLD, route).
+  Commandes de vol : en loi normale, manche au neutre, la pente de trajectoire est tenue
+  (compensation de la gravité et de la charge en virage).

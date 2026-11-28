@@ -22,13 +22,16 @@ pub struct MapView {
     pub nd_range: f64,
     /// Trafic affiché sur le ND (escorte) : (lat, lon, altitude m)
     pub traffic: Vec<(f64, f64, f64)>,
+    /// Trafic aérien (lat, lon, alt m, indicatif, militaire, verrouillé, IFF, vs m/s)
+    pub ai: Vec<(f64, f64, f64, String, bool, bool, crate::traffic::Iff, f64)>,
     trail_t: f64,
     drag: Option<Vec2>,
 }
 
 impl MapView {
     pub fn new() -> Self {
-        MapView { zoom: 60.0, follow: true, center: (0.0, 0.0), trail: Vec::new(), sat: false, nd: true, nd_arc: true, nd_range: 40.0, traffic: Vec::new(), trail_t: 0.0, drag: None }
+        MapView { zoom: 60.0, follow: true, center: (0.0, 0.0), trail: Vec::new(), sat: false, nd: true, nd_arc: true, nd_range: 40.0, traffic: Vec::new(),
+            ai: Vec::new(), trail_t: 0.0, drag: None }
     }
 
     pub fn record(&mut self, ac: &Aircraft, dt: f64) {
@@ -549,6 +552,31 @@ impl MapView {
                 draw_poly(p.x, p.y, 4, 5.0, 0.0, white);
                 let dh = ((alt - ac.alt) / FT / 100.0).round() as i32;
                 txt_c(&format!("{dh:+03}"), p.x, p.y - 9.0, 10.0, white);
+            }
+        }
+        // Trafic aérien : civil losange creux blanc, militaire plein (couleur IFF), cible verrouillée
+        // en ambre avec indicatif ; altitude relative en centaines de pieds, flèche de tendance
+        for (la, lo, alt, call, mil, locked, iff, vs) in &self.ai {
+            let (p, _) = to_s(*la, *lo);
+            if !inside(p) {
+                continue;
+            }
+            let c = if *locked { Color::new(1.0, 0.72, 0.0, 1.0) } else { iff.color() };
+            if *mil {
+                draw_poly(p.x, p.y, 4, 5.0, 0.0, c);
+            } else {
+                draw_poly_lines(p.x, p.y, 4, 5.0, 0.0, 1.5, c);
+            }
+            let dh = ((alt - ac.alt) / FT / 100.0).round() as i32;
+            let lab = if dh.abs() > 999 { format!("{:+}K", dh / 10) } else { format!("{dh:+03}") };
+            txt_c(&lab, p.x, p.y - 9.0, 9.0, c);
+            if vs.abs() > 2.0 {
+                let d = if *vs > 0.0 { -1.0 } else { 1.0 };
+                draw_line(p.x + 9.0, p.y + 4.0, p.x + 9.0, p.y + 4.0 + d * 8.0, 1.5, c);
+            }
+            if *locked {
+                draw_rectangle_lines(p.x - 9.0, p.y - 9.0, 18.0, 18.0, 1.5, c);
+                txt(call, p.x + 12.0, p.y + 4.0, 10.0, c);
             }
         }
         // Ligne de foi (jaune) et losange de route (vert)

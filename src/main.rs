@@ -24,6 +24,7 @@ mod appr;
 mod mishap;
 mod syspage;
 mod tbcc;
+mod traffic;
 mod feel;
 mod audio;
 mod combat;
@@ -141,6 +142,8 @@ struct Game {
     refuel: refuel::Refuel,
     /// Escorte de chasse au départ et à l'arrivée
     escort: escort::Escort,
+    /// Trafic aérien civil et militaire (verrouillage, mode A/A)
+    traffic: traffic::Traffic,
     /// Version développeur (instruction DEV)
     dev: Option<dev::DevUi>,
     /// MCDU affiché à l'image précédente (le clavier ne lui est envoyé que s'il est visible)
@@ -333,6 +336,7 @@ impl Game {
             wx: weather::Weather::new(),
             refuel: refuel::Refuel::new(),
             escort: escort::Escort::new(),
+            traffic: traffic::Traffic::new(),
             dev: None,
             mcdu_seen: false,
             vkeys: Vec::new(),
@@ -1052,6 +1056,18 @@ impl Game {
         let vk = std::mem::take(&mut self.vkeys);
         let kp = |k: KeyCode| is_key_pressed(k) || vk.contains(&k);
         let shift = is_key_down(KeyCode::LeftShift) || is_key_down(KeyCode::RightShift);
+        // Air-air : F1 mode A/A, F2 verrouiller la cible suivante, F3 déverrouiller
+        if !self.typing {
+            if is_key_pressed(KeyCode::F1) {
+                self.exec_command("AA");
+            }
+            if is_key_pressed(KeyCode::F2) {
+                self.exec_command("LOCK");
+            }
+            if is_key_pressed(KeyCode::F3) {
+                self.exec_command("UNLOCK");
+            }
+        }
         let ac = &mut self.ac;
 
         // Manche (clavier lissé) : flèches, ou Z/S tangage et Q/D roulis (disposition AZERTY ;
@@ -1433,6 +1449,11 @@ impl Game {
         }
         escort::set_render(&self.escort.wings);
         self.map.traffic = self.escort.traffic();
+        self.traffic.update(&self.ac, sim_dt);
+        if let Some(c) = self.traffic.take_click() {
+            self.push(Level::Info, format!("A/A : CIBLE VERROUILLEE {c}"));
+        }
+        self.map.ai = self.traffic.nd_items();
         // Procédure d'urgence : décisions et instructions automatiques
         self.emerg.update(sim_dt, &mut self.ac, &self.refuel);
         for c in std::mem::take(&mut self.emerg.cmds) {
@@ -2088,6 +2109,22 @@ impl Game {
                     }
                     _ => reply = Err("PRESET DEPART / VOL / ARRIVEE / AUTO [OFF]".into()),
                 }
+            }
+            // Mode air-air et trafic : AA (bascule), LOCK [INDICATIF], UNLOCK
+            "AA" | "A/A" | "AIRAIR" => {
+                self.traffic.aa = !self.traffic.aa;
+                reply = Ok(format!("MODE A/A {}", if self.traffic.aa { "ON — TRAFIC SUR L'HORIZON, LOCK POUR VERROUILLER" } else { "OFF" }));
+            }
+            "LOCK" | "VERROUILLER" => {
+                let r = if w.len() > 1 { self.traffic.lock_call(&w[1..].join("")) } else { self.traffic.lock_next(&self.ac) };
+                reply = match r {
+                    Some(c) => Ok(format!("CIBLE VERROUILLEE {c}")),
+                    None => Err("AUCUNE CIBLE".into()),
+                };
+            }
+            "UNLOCK" | "DEVERROUILLER" => {
+                self.traffic.lock = None;
+                reply = Ok("CIBLE DEVERROUILLEE".into());
             }
             // Bandes de l'horizon : ECHELLE VITESSE 150|300|600 (ou 1..3), ECHELLE ALT 1000|2000|5000|10000,
             // VITESSE KT|MACH
@@ -3809,6 +3846,8 @@ fn draw_commandes_only(g: &mut Game, cr: Rect, only: Option<usize>) {
         da_ft: g.da_ft,
         origin: &origin,
         link_ok: g.link.full(),
+        aa: g.traffic.aa,
+        lock: g.traffic.locked_call(),
     };
     match fcu::draw(&g.ac, &cx, cr, only) {
         Some(fcu::Act::Key(k)) => {

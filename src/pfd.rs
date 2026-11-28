@@ -711,6 +711,8 @@ fn draw_svs_overlay(ac: &Aircraft, v: &View, s: Rect, info: &PfdInfo) {
     if !ac.landing_config() && !ac.gcas_active && !(ac.gcas_on && ac.gcas_t < 8.0) {
         crate::pfd_plus::terrain_warning(clr, s, info.time);
     }
+    // Trafic : mode A/A (symboles, cadre de désignation) et fiche de la cible verrouillée
+    crate::traffic::draw_hud(ac, v, s, info.time);
     scissor(None);
 }
 

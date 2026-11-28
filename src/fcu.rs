@@ -32,6 +32,9 @@ pub struct Ctx<'a> {
     pub origin: &'a str,
     /// Liaison complète établie (les relais ne servent qu'en cas de perte)
     pub link_ok: bool,
+    /// Mode air-air et cible verrouillée
+    pub aa: bool,
+    pub lock: Option<String>,
 }
 
 thread_local! {
@@ -359,6 +362,11 @@ fn sections(tab: usize, ac: &Aircraft, cx: &Ctx) -> Vec<(&'static str, Vec<Card>
                     c("ANNULER RECON", "", "Revient au plan de vol", None, None, cmd("PLAN OFF")),
                     c("ESCORTE", if cx.escort { "EN PLACE" } else { "" }, "Deux chasseurs (sous Mach 1,5)", on(cx.escort), Some(cx.escort), cmd(if cx.escort { "ESCORTE OFF" } else { "ESCORTE" })),
                     c("RAVITAILLEMENT", "", "Appelle un ravitailleur", None, None, cmd("TANKER")),
+                ]),
+                ("TRAFIC / AIR-AIR", vec![
+                    c("MODE A/A", if cx.aa { "ON" } else { "OFF" }, "Trafic et cibles sur l'horizon (F1)", on(cx.aa), Some(cx.aa), cmd("AA")),
+                    c("VERROUILLER", cx.lock.clone().unwrap_or_default(), "Cible suivante devant l'avion (F2)", cx.lock.is_some().then_some(AMBER), None, cmd("LOCK")),
+                    c("DEVERROUILLER", "", "Libere la cible (F3)", None, None, cmd("UNLOCK")),
                 ]),
             ]
         }

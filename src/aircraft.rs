@@ -246,6 +246,8 @@ pub struct Aircraft {
     /// Rupture structurale / des gouvernes : commandes de vol perdues (cause). La liaison et la
     /// télémesure restent ; l'avion part en vrille jusqu'à l'impact (éjection possible).
     pub fcs_lost: Option<String>,
+    /// Pente tenue par la loi normale manche au neutre
+    gamma_hold: Option<f64>,
     /// Protection de dernière limite (vol d'essai LOW SPEED) : seuil en part de la rupture
     /// (> 1 : désactivée), prise du manche en cours, temps de stabilisation, g précédent
     pub guard_pct: f64,
@@ -474,6 +476,7 @@ impl Aircraft {
             gcas_active: false,
             gcas_sb: false,
             fcs_lost: None,
+            gamma_hold: None,
             guard_pct: 0.95,
             guard_active: false,
             guard_clear_t: 0.0,
@@ -1352,6 +1355,15 @@ impl Aircraft {
             let qmax_m = q_auth.to_radians() / (1.0 + mach / 3.0) * hyd;
             let pmax_m = (55.0f64).to_radians() / (1.0 + mach / 4.0) * hyd;
             pitch_rate = pitch_in * qmax_m;
+            // Loi normale, manche au neutre : tenue de la pente de trajectoire (compense la gravité
+            // et la charge en virage) ; pente mémorisée au relâché du manche
+            let neutral = pitch_in.abs() < 0.02 && !prot_off && self.fcs_lost.is_none() && self.phi.abs() < 75f64.to_radians() && self.gamma.abs() < 60f64.to_radians();
+            if neutral {
+                let gref = *self.gamma_hold.get_or_insert(self.gamma);
+                pitch_rate = (1.2 * (gref - self.gamma) - 0.9 * self.d.gamma_dot).clamp(-qmax_m, qmax_m);
+            } else {
+                self.gamma_hold = None;
+            }
             // Protection de dernière limite (LOW SPEED, protections de rupture coupées) : au dernier
             // moment — le pilote va librement jusqu'au seuil ; dès qu'il le dépasse en tirant, le FCS
             // reprend le manche, tient l'avion au seuil et rend la main dès que c'est stable.
@@ -3024,6 +3036,30 @@ mod tests {
         println!("looping : boucle bouclee {done} en {tmax:.1} s, passage sur le dos {inverted}, cap {:.0} -> {:.0}, crash {:?}", hdg0, ac.hdg_deg(), ac.crashed);
         assert!(done && inverted && ac.crashed.is_none());
         assert!(crate::geo::wrap180(ac.hdg_deg() - hdg0).abs() < 20.0, "cap final");
+    }
+
+    /// Loi normale : manche relâché en virage incliné à 45°, la pente est tenue (pas de piqué).
+    #[test]
+    fn neutral_stick_holds_path() {
+        let mut ac = Aircraft::new_on_runway(0);
+        ac.on_ground = false;
+        ac.gear_down = false;
+        ac.gear_pos = 0.0;
+        ac.brakes = false;
+        ac.alt = 15_000.0 * FT;
+        ac.tas = 350.0 * KT / (isa(ac.alt).rho / RHO0).sqrt();
+        ac.theta = 3f64.to_radians();
+        ac.phi = 45f64.to_radians();
+        ac.set_turbines(TurbState::Running, 1.0);
+        ac.throttle = 0.9;
+        ac.gcas_on = false;
+        let alt0 = ac.alt;
+        for _ in 0..(30 * 120) {
+            ac.step(1.0 / 120.0, 0.0, 0.0);
+        }
+        let dz = (ac.alt - alt0) / FT;
+        println!("virage 45 deg manche neutre 30 s : variation d'altitude {dz:+.0} ft, pente {:+.1} deg", ac.gamma.to_degrees());
+        assert!(dz.abs() < 1_500.0 && ac.gamma.to_degrees().abs() < 3.0);
     }
 
     /// Pilote qui se dégage lui-même d'un piqué (ailes à plat, ressource franche) : l'Auto-GCAS ne
