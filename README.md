@@ -1102,3 +1102,9 @@ Le SR-72 est un avion de reconnaissance : sa charge utile est simulée.
   (« ZIGZAG +/-45 POUR TMA ») ; après un zigzag, distance et piste estimées (essai : 71.5 +/-4.2 NM
   pour 68.6 NM réels). Page LOCK : segment +/-1 sigma et losange sur le strobe (vert quand
   l'incertitude < 25 %), fiche « DIST xx NM +/-yy TMA ».
+- v1.87.1 : correctif tangage (impossible de baisser le nez vers Mach 1-2). Limiteur de piqué
+  calculé (ressource à n disponible, q qui doit rester < 90 % de la limite en descendant) au lieu
+  d'une butée fixe selon le Mach (-10 à -13° vers Mach 1-2) ; incidence négative limitée par -2 g
+  (au plus -12°, -4° statoréacteur allumé) au lieu de -5° ; tenue de trajectoire manche au neutre :
+  la consigne intègre l'ordre du manche (impulsions clavier efficaces) et n'est plus mémorisée
+  pendant une récupération Auto-GCAS ni sous AP.

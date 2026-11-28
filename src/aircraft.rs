@@ -1312,6 +1312,7 @@ impl Aircraft {
                 pr = 0.0;
             }
             pitch_rate = pr;
+            self.gamma_hold = None;
 
             let hdg_cmd = match self.ap.lat {
                 LatMode::Hdg | LatMode::Nav => self.ap.hdg_tgt,
@@ -1357,10 +1358,24 @@ impl Aircraft {
             pitch_rate = pitch_in * qmax_m;
             // Loi normale, manche au neutre : tenue de la pente de trajectoire (compense la gravité
             // et la charge en virage) ; pente mémorisée au relâché du manche
-            let neutral = pitch_in.abs() < 0.02 && !prot_off && self.fcs_lost.is_none() && self.phi.abs() < 75f64.to_radians() && self.gamma.abs() < 60f64.to_radians();
+            // (pente mémorisée seulement quand le pilote a la main : jamais pendant une récupération
+            // automatique, sinon la loi ramènerait l'avion vers la pente du piqué)
+            if self.gcas_active || self.on_ground {
+                self.gamma_hold = None;
+            }
+            let neutral = pitch_in.abs() < 0.02 && !prot_off && self.fcs_lost.is_none() && !self.gcas_active && !self.on_ground && self.phi.abs() < 75f64.to_radians() && self.gamma.abs() < 60f64.to_radians();
+            let hold_ok = !prot_off && self.fcs_lost.is_none() && !self.gcas_active && !self.on_ground && self.phi.abs() < 75f64.to_radians() && self.gamma.abs() < 60f64.to_radians();
             if neutral {
                 let gref = *self.gamma_hold.get_or_insert(self.gamma);
                 pitch_rate = (1.2 * (gref - self.gamma) - 0.9 * self.d.gamma_dot).clamp(-qmax_m, qmax_m);
+            } else if hold_ok {
+                // Manche actionné (commande de vitesse de tangage, tenue de trajectoire) : la consigne
+                // de pente intègre l'ordre du manche ; au relâché l'avion rejoint la pente demandée
+                // au lieu de revenir à la précédente (impulsions clavier efficaces). Consigne
+                // gardée à moins de 10° de la pente réelle.
+                let g0 = self.gamma_hold.unwrap_or(self.gamma) + pitch_in * qmax_m * dt;
+                let w = 10f64.to_radians();
+                self.gamma_hold = Some(g0.clamp(self.gamma - w, self.gamma + w).clamp(-60f64.to_radians(), 60f64.to_radians()));
             } else {
                 self.gamma_hold = None;
             }
@@ -1589,10 +1604,15 @@ impl Aircraft {
                 pitch_rate = pitch_rate.max(over.min(1.0) * 4f64.to_radians());
                 fcs.hs_active = true;
             }
-            // Pente de descente maximale : la ressource en hypersonique est très lente (~0.4°/s à 2 g),
-            // la loi limite donc l'angle de piqué selon le Mach, et davantage quand q approche la limite
-            let margin = ((0.90 * Q_LIMIT - q_pred.max(q)) / (0.40 * Q_LIMIT)).clamp(0.05, 1.0);
-            let gamma_min = -(35f64.to_radians() / (1.0 + mach * 1.2)) * margin;
+            // Pente de descente maximale, calculée : la ressource depuis la pente gamma à n_pull
+            // (rayon V²/(g(n-1))) fait perdre R(1-cos gamma) ; la densité croît en descendant
+            // (hauteur d'échelle 7 km) et q doit rester sous 90 % de la limite. Large en
+            // subsonique / bas supersonique (ressource rapide), étroite en hypersonique.
+            let q_now = q_pred.max(q);
+            let n_pull = (1.0 + 0.6 * (self.n_recovery() - 1.0)).min(q * S_WING * cla * 15f64.to_radians() / (mass * g)).max(1.3);
+            let dh_max = 7_000.0 * (0.90 * Q_LIMIT / q_now.max(1.0)).ln().max(0.0);
+            let radius = v * v / (g * (n_pull - 1.0));
+            let gamma_min = -(1.0 - (dh_max / radius).min(1.0)).acos().min(60f64.to_radians());
             fcs.gamma_min = gamma_min.to_degrees();
             if self.gamma < gamma_min + 0.5f64.to_radians() {
                 let push_up = ((gamma_min + 0.5f64.to_radians() - self.gamma) * 1.5).min(4f64.to_radians());
@@ -1762,7 +1782,16 @@ impl Aircraft {
                 let lim: f64 = if self.ap.on && !perf { 6.5 } else { 9.0 };
                 amax = amax.min(lim.to_radians());
             }
-            let amin = if prot_off { -10f64.to_radians() } else { -5f64.to_radians() };
+            // Incidence négative : facteur de charge limite -2 g (au plus -12°) ; entrée d'air du
+            // statoréacteur allumé : -4° (désamorçage)
+            let a_neg = (2.0 * mass * g / (q.max(1.0) * S_WING * cla)).min(12f64.to_radians());
+            let amin = if prot_off {
+                -15f64.to_radians()
+            } else if self.eng.scram == ScramState::Lit {
+                -(4f64.to_radians()).min(a_neg)
+            } else {
+                -a_neg
+            };
             let unclamped = self.theta;
             self.theta = self.theta.clamp(self.gamma + amin, self.gamma + amax);
             fcs.alpha_limit_active = (unclamped - self.theta).abs() > 1e-6 && !prot_off;
@@ -3036,6 +3065,79 @@ mod tests {
         println!("looping : boucle bouclee {done} en {tmax:.1} s, passage sur le dos {inverted}, cap {:.0} -> {:.0}, crash {:?}", hdg0, ac.hdg_deg(), ac.crashed);
         assert!(done && inverted && ac.crashed.is_none());
         assert!(crate::geo::wrap180(ac.hdg_deg() - hdg0).abs() < 20.0, "cap final");
+    }
+
+    /// Manche en avant à vitesse moyenne et supersonique : le nez descend franchement (6 s
+    /// manche plein avant), dans la limite de -2 g.
+    #[test]
+    fn push_over_all_speeds() {
+        for (mach, alt_ft) in [(0.5, 15_000.0), (0.9, 30_000.0), (1.0, 35_000.0), (1.5, 40_000.0), (2.0, 45_000.0), (3.0, 60_000.0)] {
+            let mut ac = Aircraft::new_on_runway(0);
+            ac.on_ground = false;
+            ac.gear_down = false;
+            ac.gear_pos = 0.0;
+            ac.brakes = false;
+            ac.alt = alt_ft * FT;
+            ac.tas = mach * isa(ac.alt).a;
+            ac.theta = 2f64.to_radians();
+            ac.set_turbines(TurbState::Running, 1.0);
+            ac.throttle = 0.8;
+            ac.gcas_on = false;
+            for _ in 0..240 {
+                ac.step(1.0 / 120.0, 0.0, 0.0);
+            }
+            let g0 = ac.gamma.to_degrees();
+            let mut nz_min: f64 = 9.0;
+            for _ in 0..720 {
+                ac.step(1.0 / 120.0, -1.0, 0.0);
+                if ac.crashed.is_some() {
+                    break;
+                }
+                nz_min = nz_min.min(ac.d.nz);
+            }
+            println!("M{mach} FL{:.0} : pente {g0:+.1} -> {:+.1} deg en 6 s, nz min {nz_min:+.2}, alpha {:+.1}", alt_ft / 100.0, ac.gamma.to_degrees(), (ac.theta - ac.gamma).to_degrees());
+            // Au-delà de l'ancienne butée de piqué (-10 à -13° vers Mach 1-2)
+            let want = if mach >= 3.0 { -5.0 } else if mach >= 2.0 { -12.0 } else { -15.0 };
+            assert!(ac.gamma.to_degrees() < want, "M{mach} : le nez ne descend pas");
+        }
+    }
+
+    /// Impulsions clavier (tapes de 0.3 s manche avant) en supersonique : chaque tape abaisse
+    /// réellement la trajectoire, la loi ne la ramène pas à la pente d'avant.
+    #[test]
+    fn keyboard_taps_lower_nose() {
+        let mut ac = Aircraft::new_on_runway(0);
+        ac.on_ground = false;
+        ac.gear_down = false;
+        ac.gear_pos = 0.0;
+        ac.brakes = false;
+        ac.alt = 20_000.0 * FT;
+        ac.tas = 1.2 * isa(ac.alt).a;
+        ac.gamma = 7f64.to_radians();
+        ac.theta = ac.gamma + 1f64.to_radians();
+        ac.set_turbines(TurbState::Running, 1.0);
+        ac.throttle = 1.0;
+        ac.gcas_on = false;
+        let dt = 1.0 / 120.0;
+        for _ in 0..240 {
+            ac.step(dt, 0.0, 0.0);
+        }
+        let g0 = ac.gamma.to_degrees();
+        // Manche clavier : rampe 3/s vers -1 pendant 0.3 s, retour 6/s, puis 1.2 s relâché
+        let mut stick: f64 = 0.0;
+        for _ in 0..5 {
+            for k in 0..180 {
+                let tgt = if k < 36 { -1.0 } else { 0.0 };
+                let rate = if tgt == 0.0 { 6.0 } else { 3.0 };
+                stick += (tgt - stick).clamp(-rate * dt, rate * dt);
+                ac.step(dt, stick, 0.0);
+            }
+        }
+        for _ in 0..360 {
+            ac.step(dt, 0.0, 0.0);
+        }
+        println!("5 tapes manche avant M1.2 : pente {g0:+.1} -> {:+.1} deg", ac.gamma.to_degrees());
+        assert!(ac.gamma.to_degrees() < g0 - 6.0);
     }
 
     /// Loi normale : manche relâché en virage incliné à 45°, la pente est tenue (pas de piqué).

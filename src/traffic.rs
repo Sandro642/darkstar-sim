@@ -1647,7 +1647,7 @@ mod tests {
         tr.update(&ac, 0.1);
         assert!(tr.try_lock(1).is_ok() && tr.list[0].hoj);
         let gs = 250.0;
-        let mut step = |ac: &mut Aircraft, tr: &mut Traffic, secs: f64, rate_deg: f64| {
+        let step = |ac: &mut Aircraft, tr: &mut Traffic, secs: f64, rate_deg: f64| {
             let mut tt = 0.0;
             while tt < secs {
                 ac.psi = (ac.hdg_deg() + rate_deg * 0.1).to_radians();
